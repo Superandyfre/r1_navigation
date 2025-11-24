@@ -1,0 +1,13 @@
+gyro_var: 0.00001  #陀螺仪测量标准差
+acc_var: 0.01 #加速度计测量标准差
+
+bias_gyro_var: 0.000001 #陀螺仪零偏游走标准差     
+bias_acc_var: 0.0001 #加速度计零偏游走标准差   
+    
+obv_pos_noise: 0.02 #观测位置噪声    
+obv_ang_noise: 0.2 #观测旋转噪声    
+    
+update_bias_gyro: true  #是否更新陀螺仪bias
+update_bias_acc: true   #是否更新加速度计bias
+
+#pub_status: true #是否发布状态用于测试
