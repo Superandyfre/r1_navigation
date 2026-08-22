@@ -1,0 +1,79 @@
+###############cloud preprocess############
+lidar_type: "livox"        #雷达类型: "livox" 或 "rs16"
+filter_leaf_size: 0.8      #输入定位系统的点云体素滤波体素大小
+min_range: 0.6             #建图盲区blind用的就是0.6，相当于球面过滤的半径0.6米
+max_range: 30.0
+N_SCANS: 4
+
+lidar_z_min: -0.2          #Z轴最小高度过滤，单位：m
+lidar_z_max: 5.0           #Z轴最大高度过滤，单位：m
+
+
+limit_angle_min: -180.0
+limit_angle_max: 180.0
+
+#surf_threshold: 0.1
+
+lidar_topic: "/lidar/pointcloud"                   #激光雷达话题
+
+pub_cloud_topic: "/deskew_cloud"              #去畸变点云话题
+
+
+
+###############cloud preprocess############
+
+###################location################
+
+use_imu: true                                 #是否使用IMU
+use_reloc: true                               #是否使用重定位
+imu_scale: 9.81                               #IMU加速度计比例因子
+reloc_threshold: 0.6                          #重定位阈值
+map_filtr_leaf_size: 0.3                      #定位线程使用的全局地图滤波体素大小，使用配p2picp算法不能太大，不然拟合平面内找不到邻域点（p2picp 0.3,ndt 0.5）
+
+map_frame    : "map"                          #发布定位系统tf发布所需的坐标系
+base_frame   : "base_link"                    #由base_link修改为odom
+
+lidar2base_x: 0.25503
+lidar2base_y: 0.18478
+lidar2base_z: 0.2635
+lidar2base_roll: -0.006
+lidar2base_pitch: -0.012
+lidar2base_yaw: 0.0
+
+imu2base_x: 0.26603
+imu2base_y: 0.20807
+imu2base_z: 0.21938
+imu2base_roll: -0.006
+imu2base_pitch: -0.012
+imu2base_yaw: 0.0
+
+
+init_x: 0.0                                   #定位系统输入的初始化位姿
+init_y: 0.0
+init_z: 0.0
+init_roll: 0.0
+init_pitch: 0.0
+init_yaw: 0.0
+
+map_filename: "/home/rpp/rpp_data/map_high_sampling/filtered/map.pcd"  #高采样过滤后的点云地图
+map_pub_topic: "/pcd_map"                      #发布全局pcd点云地图话题数据
+
+imu_topic: "/imu/imu_data"                        #IMU话题
+deskew_lidar_topic: "/deskew_cloud"            #去畸变点云话题
+cmd_topic: "/loc_cmd"                          #定位指令话题
+#init_pose_topic: "/initialpose"
+
+#pub_odom_topic: "/agv_odom"                   #里程计话题
+pose_pub_topic: "/agv_pose"                    #发布定位位姿话题数据,这里的位姿是基于base_link的位姿（注意不是基于laser_link的位姿）
+
+
+#p2pl_icp location
+plane_threshold: 0.3     #0.4 构建的平面点与当前位姿邻域点的阈值，说白了就是判断当前点是否在平面内
+opt_correspondences_threshold_normal: 0.3 #0.4
+opt_correspondences_threshold_relocation: 2.0
+opt_max_iteration: 3 #匹配迭代次数
+thread_num: 4  #13代英特尔酷睿i7-13650HX处理器共有 14核20线程，用的时候尽量用物理性能核，这里就设置成2,程序里大概有五个地方使用了并行计算
+#具体配置如下：性能核（P核）：6个，支持超线程（每个核心2线程），共12线程。能效核（E核）：8个，不支持超线程（每个核心1线程），共8线程。
+
+
+###################location################
