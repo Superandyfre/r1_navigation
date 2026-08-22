@@ -23,6 +23,7 @@ pub_cloud_topic: "/deskew_cloud"              #去畸变点云话题
 ###############cloud preprocess############
 
 ###################location################
+
 use_imu: true                                 #是否使用IMU
 use_reloc: true                               #是否使用重定位
 imu_scale: 9.81                               #IMU加速度计比例因子
@@ -54,7 +55,7 @@ init_roll: 0.0
 init_pitch: 0.0
 init_yaw: 0.0
 
-map_filename: "/home/rpp/rpp_data/map/map.pcd"           #点云地图名称
+map_filename: "/home/rpp/rpp_data/map/filtered/map.pcd"  #过滤后的点云地图
 map_pub_topic: "/pcd_map"                      #发布全局pcd点云地图话题数据
 
 imu_topic: "/imu/imu_data"                        #IMU话题
@@ -76,8 +77,6 @@ thread_num: 4  #13代英特尔酷睿i7-13650HX处理器共有 14核20线程，�
 
 
 ###################location################
-
-
 
 
 

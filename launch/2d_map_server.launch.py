@@ -10,7 +10,7 @@ def generate_launch_description():
                 package="nav2_map_server",
                 executable="map_server",
                 parameters=[
-                    {"yaml_filename": "/home/rpp/rpp_data/map/map.yaml"},
+                    {"yaml_filename": "/home/rpp/rpp_data/map/filtered/map.yaml"},
                     {"topic_name": "map"},
                     {"frame_id": "map"},
                 ],
