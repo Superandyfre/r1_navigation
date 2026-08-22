@@ -15,23 +15,13 @@ def generate_launch_description():
     return LaunchDescription(
         [
             IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    [
-                        PathJoinSubstitution(
-                            [
-                                FindPackageShare("robot_bringup"),
-                                "launch",
-                                "robot_driver.launch.py",
-                            ]
-                        )
-                    ]
-                ),
-            ),
-            IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([PathJoinSubstitution([FindPackageShare("navigation_2d"), "launch", "2d_map_server.launch.py"])])
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([PathJoinSubstitution([FindPackageShare("navigation_2d"), "launch", "livox_undistortion.launch.py"])])
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource([PathJoinSubstitution([FindPackageShare("navigation_2d"), "launch", "laser_undistortion.launch.py"])])
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource([PathJoinSubstitution([FindPackageShare("navigation_2d"), "launch", "localization.launch.py"])])

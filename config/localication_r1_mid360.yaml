@@ -5,6 +5,10 @@ min_range: 0.6             #建图盲区blind用的就是0.6，相当于球面�
 max_range: 30.0
 N_SCANS: 4
 
+lidar_z_min: -0.2          #Z轴最小高度过滤，单位：m
+lidar_z_max: 5.0           #Z轴最大高度过滤，单位：m
+
+
 limit_angle_min: -180.0
 limit_angle_max: 180.0
 
@@ -26,21 +30,22 @@ reloc_threshold: 0.6                          #重定位阈值
 map_filtr_leaf_size: 0.3                      #定位线程使用的全局地图滤波体素大小，使用配p2picp算法不能太大，不然拟合平面内找不到邻域点（p2picp 0.3,ndt 0.5）
 
 map_frame    : "map"                          #发布定位系统tf发布所需的坐标系
-base_frame   : "base_link"
+base_frame   : "base_link"                    #由base_link修改为odom
 
-lidar2base_x: 0.00018392                             #lidar2base transform
-lidar2base_y: -0.00010397
-lidar2base_z: 1.533
-lidar2base_roll: 0.00741764                           #单位弧度
-lidar2base_pitch: -0.00724311
+lidar2base_x: 0.25503
+lidar2base_y: 0.18478
+lidar2base_z: 0.2635
+lidar2base_roll: -0.006   
+lidar2base_pitch: -0.012
 lidar2base_yaw: 0.0
 
-imu2base_x: 0.00018392                           #imu2base transform,单位米
-imu2base_y: -0.00010397
-imu2base_z: 1.533
-imu2base_roll: 0.00741764                             #单位弧度
-imu2base_pitch: -0.00724311
-imu2base_yaw: 0.0
+imu2base_x: 0.26603
+imu2base_y: 0.20807
+imu2base_z: 0.21938
+imu2base_roll: -0.006
+imu2base_pitch: -0.012
+imu2base_yaw: 0.0 
+
 
 init_x: 0.0                                   #定位系统输入的初始化位姿
 init_y: 0.0
