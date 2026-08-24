@@ -25,14 +25,14 @@ map_frame: "map"
 base_frame: "base_link"
 
 lidar2base_x: 0.25503
-lidar2base_y: 0.18478
+lidar2base_y: -0.18478
 lidar2base_z: 0.2635
 lidar2base_roll: -0.006
 lidar2base_pitch: -0.012
 lidar2base_yaw: 0.0
 
 imu2base_x: 0.26603
-imu2base_y: 0.20807
+imu2base_y: -0.16149
 imu2base_z: 0.21938
 imu2base_roll: -0.006
 imu2base_pitch: -0.012

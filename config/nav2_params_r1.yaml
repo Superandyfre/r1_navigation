@@ -210,7 +210,7 @@ local_costmap:
           max_obstacle_height: 1.8
           min_obstacle_height: 0.15
         pointcloud:
-          topic: /lidar/pointcloud_undistort
+          topic: /navigation/pointcloud_filtered
           data_type: "PointCloud2"
           clearing: True
           marking: True
@@ -262,7 +262,7 @@ global_costmap:
           max_obstacle_height: 1.8
           min_obstacle_height: 0.15
         pointcloud:
-          topic: /lidar/pointcloud_undistort
+          topic: /navigation/pointcloud_filtered
           data_type: "PointCloud2"
           clearing: True
           marking: True
