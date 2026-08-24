@@ -1,0 +1,61 @@
+###############cloud preprocess############
+lidar_type: "livox"
+filter_leaf_size: 0.25
+min_range: 0.6
+max_range: 30.0
+N_SCANS: 4
+
+lidar_z_min: -0.2
+lidar_z_max: 5.0
+
+limit_angle_min: -180.0
+limit_angle_max: 180.0
+
+lidar_topic: "/lidar/pointcloud"
+pub_cloud_topic: "/deskew_cloud"
+
+###################location################
+use_imu: true
+use_reloc: true
+imu_scale: 9.81
+reloc_threshold: 0.6
+map_filtr_leaf_size: 0.25
+
+map_frame: "map"
+base_frame: "base_link"
+
+lidar2base_x: 0.25503
+lidar2base_y: 0.18478
+lidar2base_z: 0.2635
+lidar2base_roll: -0.006
+lidar2base_pitch: -0.012
+lidar2base_yaw: 0.0
+
+imu2base_x: 0.26603
+imu2base_y: 0.20807
+imu2base_z: 0.21938
+imu2base_roll: -0.006
+imu2base_pitch: -0.012
+imu2base_yaw: 0.0
+
+init_x: 0.0
+init_y: 0.0
+init_z: 0.0
+init_roll: 0.0
+init_pitch: 0.0
+init_yaw: 0.0
+
+map_filename: "/home/rpp/rpp_data/map_high_sampling/localization/map.pcd"
+map_pub_topic: "/pcd_map"
+
+imu_topic: "/imu/imu_data"
+deskew_lidar_topic: "/deskew_cloud"
+cmd_topic: "/loc_cmd"
+pose_pub_topic: "/agv_pose"
+
+###################p2pl_icp###################
+plane_threshold: 0.3
+opt_correspondences_threshold_normal: 0.3
+opt_correspondences_threshold_relocation: 2.0
+opt_max_iteration: 3
+thread_num: 4
