@@ -7,9 +7,26 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+find_package(dwb_core REQUIRED)
+find_package(nav2_costmap_2d REQUIRED)
+find_package(nav2_util REQUIRED)
+find_package(pluginlib REQUIRED)
+find_package(rclcpp REQUIRED)
+
+add_library(navigation_2d_clearance_critic SHARED
+  src/clearance_critic.cpp
+)
+target_include_directories(navigation_2d_clearance_critic PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(navigation_2d_clearance_critic
+  dwb_core
+  nav2_costmap_2d
+  nav2_util
+  pluginlib
+  rclcpp
+)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -22,9 +39,18 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
+install(DIRECTORY include/
+  DESTINATION include
+)
 install(DIRECTORY
   launch
   config
   rviz
   DESTINATION share/${PROJECT_NAME})
+install(TARGETS navigation_2d_clearance_critic
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+pluginlib_export_plugin_description_file(dwb_core clearance_critic.xml)
 ament_package()

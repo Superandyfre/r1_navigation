@@ -1,0 +1,9 @@
+<class_libraries>
+  <library path="navigation_2d_clearance_critic">
+    <class type="navigation_2d::ClearanceCritic" base_class_type="dwb_core::TrajectoryCritic">
+      <description>
+        Softly penalizes trajectories that do not maintain the configured clearance outside the robot footprint.
+      </description>
+    </class>
+  </library>
+</class_libraries>
