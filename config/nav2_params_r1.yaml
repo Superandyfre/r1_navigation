@@ -189,7 +189,9 @@ local_costmap:
       height: 5
       resolution: 0.05
       footprint: "[[-0.35, -0.35], [-0.35, 0.35], [0.35, 0.35], [0.35, -0.35]]"
-      always_send_full_costmap: false
+      # The global override layer consumes the full OccupancyGrid topic.
+      # Keep this 5 x 5 m rolling map current on every publication.
+      always_send_full_costmap: true
       plugins: ["obstacle_layer", "inflation_layer"]
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
