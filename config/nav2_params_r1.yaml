@@ -239,7 +239,7 @@ global_costmap:
       resolution: 0.05
       track_unknown_space: true
       always_send_full_costmap: false
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer", "local_costmap_override"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -277,6 +277,10 @@ global_costmap:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0
         inflation_radius: 0.25
+      local_costmap_override:
+        plugin: "navigation_2d::LocalCostmapOverrideLayer"
+        map_topic: /local_costmap/costmap
+        max_age: 1.0
 
 planner_server:
   ros__parameters:

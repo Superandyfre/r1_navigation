@@ -10,6 +10,7 @@ find_package(ament_cmake REQUIRED)
 find_package(dwb_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 
@@ -24,6 +25,20 @@ ament_target_dependencies(navigation_2d_clearance_critic
   dwb_core
   nav2_costmap_2d
   nav2_util
+  pluginlib
+  rclcpp
+)
+
+add_library(navigation_2d_local_costmap_override_layer SHARED
+  src/local_costmap_override_layer.cpp
+)
+target_include_directories(navigation_2d_local_costmap_override_layer PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+ament_target_dependencies(navigation_2d_local_costmap_override_layer
+  nav2_costmap_2d
+  nav_msgs
   pluginlib
   rclcpp
 )
@@ -47,10 +62,13 @@ install(DIRECTORY
   config
   rviz
   DESTINATION share/${PROJECT_NAME})
-install(TARGETS navigation_2d_clearance_critic
+install(TARGETS
+  navigation_2d_clearance_critic
+  navigation_2d_local_costmap_override_layer
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
 )
 pluginlib_export_plugin_description_file(dwb_core clearance_critic.xml)
+pluginlib_export_plugin_description_file(nav2_costmap_2d local_costmap_override_layer.xml)
 ament_package()
