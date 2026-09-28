@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<library path="navigation_2d_local_costmap_override_layer">
+  <class
+    type="navigation_2d::LocalCostmapOverrideLayer"
+    base_class_type="nav2_costmap_2d::Layer">
+    <description>Overwrites the global costmap window with the current local costmap.</description>
+  </class>
+</library>
