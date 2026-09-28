@@ -1,0 +1,35 @@
+{
+  "schema": "r1_hw1_calibration_record_v1",
+  "approved_for_hw1": false,
+  "footprint": {
+    "length_m": null,
+    "width_m": null,
+    "measurement_method": ""
+  },
+  "drive": {
+    "wheel_radius_m": null,
+    "wheel_track_m": null,
+    "measurement_method": ""
+  },
+  "lidar_to_base": {
+    "x_m": null,
+    "y_m": null,
+    "z_m": null,
+    "roll_rad": null,
+    "pitch_rad": null,
+    "yaw_rad": null,
+    "measurement_method": ""
+  },
+  "scan": {
+    "range_min_m": null,
+    "range_max_m": null,
+    "height_min_m": null,
+    "height_max_m": null,
+    "observed_rate_hz": null
+  },
+  "approval": {
+    "operator": "",
+    "timestamp": "",
+    "notes": ""
+  }
+}

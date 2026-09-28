@@ -1,0 +1,18 @@
+<library path="navigation_neupan_bridge">
+  <class name="navigation_neupan_bridge/NeuPANController"
+         type="navigation_neupan_bridge::NeuPANController"
+         base_class_type="nav2_core::Controller">
+    <description>
+      Publishes the current Nav2 global path in odom for NeuPAN and accepts only a
+      fresh, version-matched NeuPAN command envelope.
+    </description>
+  </class>
+  <class name="navigation_neupan_bridge/GuardAwareProgressChecker"
+         type="navigation_neupan_bridge::GuardAwareProgressChecker"
+         base_class_type="nav2_core::ProgressChecker">
+    <description>
+      Pauses Nav2 progress timing only while the final collision guard confirms
+      a fresh dynamic-obstacle braking stop.
+    </description>
+  </class>
+</library>

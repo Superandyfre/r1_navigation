@@ -1,0 +1,27 @@
+schema: r1_navigation_dependencies_v1
+external_runtime_dependencies:
+  robot_bringup:
+    source_path: /home/rpp/rpp_ws/src/application/robot_bringup
+    revision: 9b4252e3bb2989cd8e68bfd55c67c700480ec624
+    remote: https://git.robotplusplus.com.cn/mobile-manipulator/r1/robot_bringup.git
+  r1_description:
+    source_path: /home/rpp/rpp_ws/src/robot/r1_description
+    revision: 2d3d1f014a11a8e5f941490a71e60d15d12687a5
+    remote: local-only
+  dual_arm_feedback:
+    source_path: /home/rpp/rpp_ws/src/manipulator/rokae_dual_arm_bringup
+    revision: 64629b4392719f715de6ab76263bdca752e49d8a
+    remote: local-only
+    purpose: publishes read-only /left/joint_states and /right/joint_states
+  livox_ros_driver2:
+    source_path: /home/rpp/rpp_ws/src/drivers/livox_ros_driver2
+    revision: 631c7d2dd8966239c1facc34236ae52387ec191e
+    remote: https://git.robotplusplus.com.cn/drivers/livox-sdk/livox_ros_driver2.git
+  rpp_ros_driver:
+    source_path: /home/rpp/rpp_ws/src/drivers/rpp_ros_driver
+    revision: ac12dc64b50e594f7f38f54f3c8ecf99326d58ec
+    remote: https://git.robotplusplus.com.cn/drivers/drivers-ros2/rpp_driver/rpp_ros_driver.git
+  rear_2d_lidar:
+    source_path: /home/rpp/rpp_ws/src/drivers/bluesea_ros2
+    package: bluesea2
+    remote: local-only

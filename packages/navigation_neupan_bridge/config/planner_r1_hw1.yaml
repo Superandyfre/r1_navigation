@@ -1,0 +1,48 @@
+# HW1 profile. Its launch requires a mechanical calibration record before use.
+receding: 6
+step_time: 0.25
+ref_speed: 0.15
+device: 'cpu'
+time_print: false
+# NRMP constrains its distance slack to d_min=0.01. The collision threshold
+# must be strictly below that numerical lower bound or every finite solve is
+# falsely reported as a collision due to floating-point roundoff.
+collision_threshold: 0.005
+
+robot:
+  kinematics: 'diff'
+  max_speed: [0.15, 0.4]
+  max_acce: [0.30, 0.80]
+  length: 0.682
+  width: 0.532
+
+ipath:
+  # Preserve local path geometry for the short receding horizon.
+  interval: 0.1
+  curve_style: 'line'
+  min_radius: 0.242
+  loop: true
+  # NeuPAN must not declare arrival before Nav2's 0.10 m goal checker can
+  # complete the task.  A 0.5 m threshold caused legitimate short paths to
+  # produce a permanent zero command while Nav2 still reported progress due.
+  arrive_threshold: 0.05
+  close_threshold: 0.05
+  arrive_index_threshold: 3
+
+pan:
+  iter_num: 2
+  dune_max_num: 200
+  nrmp_max_num: 10
+  dune_checkpoint: null
+  iter_threshold: 0.1
+
+adjust:
+  # NeuPAN tracks the SMAC reference through its own state cost.  Give lateral
+  # position the strongest weight, with a deliberately lower yaw weight so
+  # local obstacle avoidance can turn continuously instead of oscillating
+  # against an external heading controller.
+  q_s: [1.5, 2.0, 0.5]
+  p_u: 0.5
+  eta: 10.0
+  d_max: 0.1
+  d_min: 0.01

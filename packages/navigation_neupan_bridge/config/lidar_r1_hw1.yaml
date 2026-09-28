@@ -1,0 +1,19 @@
+/**:
+  ros__parameters:
+    # Values observed in HW0. HW1 launch also requires an operator-provided
+    # calibration record before this profile can reach the chassis.
+    # The live Livox cloud already carries lidar_link. An empty target keeps
+    # that frame and avoids PointCloudToLaserScan's time-indexed TF filter.
+    target_frame: ''
+    transform_tolerance: 0.10
+    min_height: -0.04
+    max_height: 0.55
+    angle_min: -3.141592653589793
+    angle_max: 3.141592653589793
+    angle_increment: 0.008726646259971648
+    scan_time: 0.10
+    range_min: 0.15
+    range_max: 8.0
+    use_inf: true
+    inf_epsilon: 1.0
+    queue_size: 10

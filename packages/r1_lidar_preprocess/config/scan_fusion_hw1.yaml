@@ -1,0 +1,33 @@
+/**:
+  ros__parameters:
+    target_frame: base_link
+    livox_scan_topic: /scan_livox
+    rear_scan_topic: /scan
+    output_scan_topic: /scan_neupan
+    status_topic: /scan_neupan_fusion/status
+
+    angle_min: -3.141592653589793
+    angle_max: 3.141592653589793
+    angle_increment: 0.008726646259971648
+    range_min: 0.15
+    range_max: 8.0
+    scan_time: 0.10
+
+    # Both scanners are mandatory when this profile is active. The output is
+    # withheld on a stale or unsynchronised source, which triggers the existing
+    # collision guard scan timeout.
+    max_scan_age_sec: 0.20
+    max_pair_delta_sec: 0.05
+    # A Livox callback can arrive shortly before its closest BlueSea scan.
+    # Wait for that scan, but retain the 50 ms timestamp-pairing requirement.
+    pair_wait_sec: 0.08
+    livox_history_size: 16
+    rear_history_size: 16
+
+    # Current approved R1 chassis and rear bracket outline in base_link. Removing
+    # these points is required because the rear-mounted 2D scanner sees the
+    # chassis directly.
+    self_filter_polygon_xy: [-0.371, -0.296, 0.150, -0.296, 0.150, -0.340,
+                             0.450, -0.360, 0.450, -0.296, 0.371, -0.296,
+                             0.371, 0.296, -0.371, 0.296]
+    self_filter_margin_m: 0.02

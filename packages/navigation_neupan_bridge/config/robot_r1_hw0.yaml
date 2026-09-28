@@ -1,0 +1,35 @@
+# This must match the explicit Node(name=...) in r1_neupan_hw0_shadow.launch.py.
+# ROS 2 otherwise silently leaves this whole parameter block unapplied.
+n1_16_production_bridge:
+  ros__parameters:
+    use_sim_time: false
+    robot_type: 'r1_hw0_candidate'
+    robot_description: 'HW0-only candidate geometry; validate measured R1 footprint and LiDAR extrinsics before HW1.'
+    planner_config_file: 'planner_r1_hw0.yaml'
+    dune_checkpoint_file: 'models/dune_model_5000.pth'
+    map_frame: 'map'
+    base_frame: 'base_link'
+    lidar_frame: 'base_link'
+    scan_topic: '/scan_neupan'
+    plan_input_topic: '/neupan_path'
+    goal_topic: '/neupan_goal'
+    cmd_vel_topic: '/neupan_cmd_vel'
+    plan_output_topic: '/neupan_plan'
+    ref_state_topic: '/neupan_ref_state'
+    timing_topic: '/neupan_timing'
+    scan_range_min: 0.15
+    scan_range_max: 8.0
+    scan_downsample: 1
+    self_filter_enabled: true
+    self_filter_front_m: 0.341
+    self_filter_rear_m: 0.341
+    self_filter_left_m: 0.266
+    self_filter_right_m: 0.266
+    include_initial_path_direction: true
+    refresh_initial_path: true
+    control_frequency: 10.0
+    latest_scan_only: true
+    # Default-off shadow test hook. The shadow launch alone supplies the
+    # immutable allow flag; non-shadow configurations cannot enable it.
+    shadow_tf_fault_injection_allowed: false
+    shadow_force_robot_tf_failure: false

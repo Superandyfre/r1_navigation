@@ -11,6 +11,7 @@ find_package(dwb_core REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(lifecycle_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 
@@ -31,6 +32,14 @@ ament_target_dependencies(navigation_2d_clearance_critic
 
 add_library(navigation_2d_local_costmap_override_layer SHARED
   src/local_costmap_override_layer.cpp
+)
+
+add_executable(map_server_lifecycle_ensure
+  src/map_server_lifecycle_ensure.cpp
+)
+ament_target_dependencies(map_server_lifecycle_ensure
+  lifecycle_msgs
+  rclcpp
 )
 target_include_directories(navigation_2d_local_costmap_override_layer PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -68,6 +77,9 @@ install(TARGETS
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin
+)
+install(TARGETS map_server_lifecycle_ensure
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 pluginlib_export_plugin_description_file(dwb_core clearance_critic.xml)
 pluginlib_export_plugin_description_file(nav2_costmap_2d local_costmap_override_layer.xml)

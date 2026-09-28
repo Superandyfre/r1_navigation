@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<library path="navigation_neupan_bridge">
+  <class
+    type="navigation_neupan_bridge::CurrentFootprintClearLayer"
+    base_class_type="nav2_costmap_2d::Layer">
+    <description>
+      Clears only the current padded R1 footprint after static-map inflation.
+    </description>
+  </class>
+</library>

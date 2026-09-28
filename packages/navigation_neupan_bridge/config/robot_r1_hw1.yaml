@@ -1,0 +1,61 @@
+# This must match the explicit Node(name=...) in r1_neupan_hw1_motion.launch.py.
+# ROS 2 otherwise silently leaves this whole parameter block unapplied.
+n1_16_production_bridge:
+  ros__parameters:
+    use_sim_time: false
+    robot_type: 'r1_hw1_measured_profile_required'
+    robot_description: 'HW1 profile sourced from the recorded R1 calibration supplied at launch.'
+    planner_config_file: 'planner_r1_hw1.yaml'
+    dune_checkpoint_file: 'models/dune_model_5000.pth'
+    map_frame: 'map'
+    base_frame: 'base_link'
+    lidar_frame: 'base_link'
+    scan_topic: '/scan_neupan'
+    plan_input_topic: '/neupan_path'
+    goal_topic: '/neupan_goal'
+    cmd_vel_topic: '/neupan_cmd_vel'
+    plan_output_topic: '/neupan_plan'
+    ref_state_topic: '/neupan_ref_state'
+    timing_topic: '/neupan_timing'
+    scan_range_min: 0.15
+    scan_range_max: 8.0
+    scan_downsample: 1
+    # The Livox projection is already in base_link. Remove only chassis
+    # self-returns before NeuPAN consumes the scan.
+    self_filter_enabled: true
+    # Rectangle fallback for earlier profiles. HW1 uses the measured polygon
+    # below because the forward-right chassis and bracket are not rectangular.
+    self_filter_front_m: 0.371
+    self_filter_rear_m: 0.371
+    self_filter_left_m: 0.296
+    self_filter_right_m: 0.296
+    # Surveyed base_link chassis/bracket exclusion outline. It covers the
+    # repeated empty-scene self returns around (+0.22, -0.30) m without
+    # enlarging the complete right-side rectangle. Review it against the
+    # 1,000-frame stationary capture before each mechanical alteration.
+    self_filter_polygon_xy: [-0.371, -0.296, 0.150, -0.296, 0.150, -0.340,
+                             0.450, -0.360, 0.450, -0.296, 0.371, -0.296,
+                             0.371, 0.296, -0.371, 0.296]
+    self_filter_polygon_margin_m: 0.0
+    include_initial_path_direction: true
+    # SMAC replans every second and advances only the path prefix as the R1
+    # moves. Keep the current NeuPAN context until its terminal goal changes;
+    # otherwise the single asynchronous worker can never return a matching
+    # result before the next SMAC tick.
+    refresh_initial_path: false
+    control_frequency: 10.0
+    latest_scan_only: true
+    # One representative startup solve initializes the isolated worker before
+    # its first live envelope. Repeating 30 warmups delayed the first command
+    # beyond the controller's bounded startup window on this CPU profile.
+    n115_warmup_count: 1
+    # NeuPAN owns path tracking and obstacle avoidance, including short reverse
+    # maneuvers. The collision guard remains the final signed-trajectory gate.
+    forward_only_enabled: false
+    allow_reverse: true
+    # Used only for read-only path-yaw diagnostics if forward_only is enabled.
+    forward_only_lookahead_m: 0.35
+    forward_only_max_forward_speed_mps: 0.15
+    # HW1 never authorizes the shadow-only TF fault hook.
+    shadow_tf_fault_injection_allowed: false
+    shadow_force_robot_tf_failure: false

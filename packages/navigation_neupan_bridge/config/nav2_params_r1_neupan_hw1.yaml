@@ -1,0 +1,223 @@
+bt_navigator:
+  ros__parameters:
+    use_sim_time: True
+    global_frame: map
+    robot_base_frame: base_link
+    odom_topic: /odom
+    bt_loop_duration: 10
+    # FollowPath can take longer than the Nav2 default to accept a request
+    # while the NeuPAN controller publishes its initial path context.
+    default_server_timeout: 1000
+    wait_for_service_timeout: 1000
+    default_nav_to_pose_bt_xml: "$(find-pkg-share navigation_neupan_bridge)/config/navigate_w_replanning_neupan.xml"
+    default_nav_through_poses_bt_xml: "$(find-pkg-share navigation_neupan_bridge)/config/navigate_through_poses_neupan.xml"
+    plugin_lib_names:
+      - nav2_compute_path_to_pose_action_bt_node
+      - nav2_compute_path_through_poses_action_bt_node
+      - nav2_follow_path_action_bt_node
+      - nav2_rate_controller_bt_node
+      - nav2_pipeline_sequence_bt_node
+
+bt_navigator_navigate_through_poses_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+bt_navigator_navigate_to_pose_rclcpp_node:
+  ros__parameters:
+    use_sim_time: True
+
+
+controller_server:
+  ros__parameters:
+    use_sim_time: True
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.0
+    goal_checker_plugins: ["general_goal_checker"] # "precise_goal_checker"
+    controller_plugins: ["FollowPath"]
+    progress_checker_plugin: "progress_checker"
+
+    general_goal_checker:
+      stateful: True
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.1
+      yaw_goal_tolerance: 0.05
+
+    progress_checker:
+      plugin: "navigation_neupan_bridge/GuardAwareProgressChecker"
+      required_movement_radius: 0.01
+      required_movement_angle: 0.0175
+      guard_status_topic: /r1_collision_guard/status
+      guard_status_timeout_sec: 0.20
+      guard_block_reason: immediate_braking_trajectory_blocked
+      command_epsilon: 0.005
+      # A confirmed dynamic obstacle may wait for removal without losing the
+      # action. Faults and stale status never qualify for this exemption.
+      max_guarded_block_time_sec: 300.0
+      # The operator must be able to arm the HW1 gate after a path has been
+      # accepted. This does not alter command watchdogs or actuator limits.
+      movement_time_allowance: 60.0
+
+    FollowPath:
+      plugin: "navigation_neupan_bridge/NeuPANController"
+      navigation_frame: "map"
+      path_topic: "/neupan_path"
+      goal_topic: "/neupan_goal"
+      envelope_topic: "/neupan_planner_result"
+      gate_command_topic: "/cmd_vel"
+      gate_status_topic: "/r1_hw1_safety_gate_status"
+      guard_status_topic: "/r1_collision_guard/status"
+      localization_health_topic: "/r1_localization_health"
+      diagnostics_topic: "/neupan_controller_status"
+      # The relay and chassis-facing watchdogs remain at 0.30 s.  Give the
+      # Nav2 controller a modestly wider observation window so an executor
+      # scheduling hiccup cannot abort a live 50 Hz relay stream.
+      envelope_timeout: 1.00
+      # The worker is asynchronous. Hold zero velocity only while its first
+      # result for a newly published path arrives; then normal freshness rules apply.
+      envelope_startup_timeout: 40.0
+      max_linear: 0.15
+      max_reverse: 0.15
+      max_angular: 0.40
+      allow_reverse: true
+      shadow_mode: false
+      require_gate_match: false
+      command_match_epsilon: 0.0001
+      # Guard status is an observer signal. The guard itself enforces the
+      # short raw scan/odom/command watchdogs independently.
+      guard_status_timeout: 1.50
+      guard_startup_timeout: 2.0
+      # The guard stops the chassis while it waits for a fresh paired rear
+      # scan, localization, or an obstacle to clear. Keep this action alive
+      # for the same bounded interval as the guard-aware progress checker;
+      # the guard remains the component that authorizes every non-zero Twist.
+      guard_stop_timeout: 300.0
+      localization_health_timeout: 1.50
+      localization_startup_timeout: 10.0
+      require_localization_ready: true
+
+neupan_velocity_smoother:
+  ros__parameters:
+    use_sim_time: True
+    # /odom is 10 Hz on R1. Keep closed-loop smoothing at that rate to avoid
+    # using stale velocity feedback while still shaping NeuPAN's 10 Hz output.
+    smoothing_frequency: 10.0
+    feedback: CLOSED_LOOP
+    odom_topic: /odom
+    odom_duration: 0.1
+    velocity_timeout: 0.30
+    scale_velocities: true
+    max_velocity: [0.15, 0.0, 0.40]
+    min_velocity: [-0.15, 0.0, -0.40]
+    max_accel: [0.15, 0.0, 0.40]
+    max_decel: [-0.30, 0.0, -0.80]
+    deadband_velocity: [0.005, 0.0, 0.01]
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      transform_tolerance: 0.3
+      # ControllerServer requires a Costmap2DROS interface, but the NeuPAN
+      # controller never reads it. Humble requires at least one layer, so use
+      # only its low-rate inflation layer; no sensor input is connected here.
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      use_sim_time: True
+      rolling_window: true
+      width: 2
+      height: 2
+      resolution: 0.1
+      # r1_arm_footprint continuously replaces this base-only startup polygon
+      # with the conservative horizontal projection of both live arms.
+      footprint: "[[-0.341, -0.266], [-0.341, 0.266], [0.341, 0.266], [0.341, -0.266]]"
+      always_send_full_costmap: true
+      plugins: ["inflation_layer"]
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 2.0
+        # The published footprint already includes the base and arm projection.
+        # Inflation is only the clearance outside that physical envelope.
+        inflation_radius: 0.15
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      transform_tolerance: 0.3
+      # SMAC plans against the static high-sampling map only. Dynamic
+      # obstacles are deliberately handled by NeuPAN's /scan_neupan chain.
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_link
+      use_sim_time: True
+      # r1_arm_footprint continuously replaces this base-only startup polygon
+      # with the conservative horizontal projection of both live arms.
+      footprint: "[[-0.341, -0.266], [-0.341, 0.266], [0.341, 0.266], [0.341, -0.266]]"
+      resolution: 0.05
+      track_unknown_space: true
+      always_send_full_costmap: false
+      plugins: ["static_layer", "inflation_layer", "current_footprint_clear"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+        # A static map may retain the robot's previous occupied footprint.
+        # Clear only the current calibrated footprint; static obstacles outside
+        # it remain part of SMAC's global collision check.
+        footprint_clearing_enabled: True
+      current_footprint_clear:
+        plugin: "navigation_neupan_bridge::CurrentFootprintClearLayer"
+        # Smac's 5 cm lattice evaluates the start state at the containing
+        # cell centre. Cover exactly that quantization error, after inflation,
+        # so a valid continuous pose is not rejected by an adjacent map cell.
+        quantization_margin_m: 0.05
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 2.0
+        # The published footprint already includes the base and arm projection.
+        # Inflation is only the clearance outside that physical envelope.
+        inflation_radius: 0.15
+
+planner_server:
+  ros__parameters:
+    expected_planner_frequency: 20.0
+    use_sim_time: True
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_smac_planner/SmacPlannerLattice"
+      # The R1 base is differential drive; this 5 cm lattice matches the global costmap resolution.
+      lattice_filepath: "/home/rpp/rpp_ws/install/nav2_smac_planner/share/nav2_smac_planner/sample_primitives/5cm_resolution/0.5m_turning_radius/diff/output.json"
+      # HW1 uses short verification targets. A 0.5 m planner tolerance lets the
+      # start pose satisfy a 0.3 m target before the NeuPAN controller runs.
+      tolerance: 0.05
+      allow_unknown: false
+      # The static layer clears the current calibrated footprint. Remaining
+      # INSCRIBED costs are inflation from nearby obstacles, so validate the
+      # actual oriented footprint instead of rejecting the center cell early.
+      treat_inscribed_as_collision: false
+      downsample_costmap: false
+      downsampling_factor: 1
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 3.0
+      cost_penalty: 2.0
+      reverse_penalty: 2.0
+      change_penalty: 0.05
+      non_straight_penalty: 1.05
+      retrospective_penalty: 0.015
+      rotation_penalty: 5.0
+      # The rear 2D scan is fused into /scan_neupan and the final collision
+      # guard validates signed stopping trajectories. Permit a safe reverse
+      # primitive when a forward exit is blocked.
+      allow_reverse_expansion: true
+      cache_obstacle_heuristic: true
+      smooth_path: true
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        # Keep the smoothed route closer to the lattice planner's path.
+        w_data: 0.4
+        tolerance: 1.0e-10

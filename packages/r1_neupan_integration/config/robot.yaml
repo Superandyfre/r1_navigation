@@ -1,0 +1,38 @@
+neupan_node:
+  ros__parameters:
+    use_sim_time: true
+
+    robot_type: 'r1_n1_proxy'
+    robot_description: 'R1 Gazebo N1 interface validation; proxy DUNE geometry'
+    planner_config_file: 'planner.yaml'
+    dune_checkpoint_file: 'models/dune_model_5000.pth'
+
+    # The LaserScan has already been transformed to base_link by the
+    # r1_lidar_preprocess package, so the wrapper must use base_link here.
+    map_frame: 'odom'
+    base_frame: 'base_link'
+    lidar_frame: 'base_link'
+
+    scan_topic: '/scan_neupan'
+    plan_input_topic: '/r1_test_path'
+    cmd_vel_topic: '/neupan_cmd_vel'
+    plan_output_topic: '/neupan_plan'
+    ref_state_topic: '/neupan_ref_state'
+    initial_path_topic: '/neupan_initial_path'
+    timing_topic: '/neupan_timing'
+
+    scan_angle_min: -3.141592653589793
+    scan_angle_max: 3.141592653589793
+    scan_range_min: 0.15
+    scan_range_max: 8.0
+    scan_downsample: 1
+
+    refresh_initial_path: false
+    include_initial_path_direction: true
+    flip_angle: false
+    control_frequency: 50.0
+
+    enable_visualization: false
+    enable_dune_markers: false
+    enable_nrmp_markers: false
+    enable_robot_marker: false

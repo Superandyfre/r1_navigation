@@ -17,7 +17,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, GroupAction, OpaqueFunction, SetEnvironmentVariable, TimerAction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import LoadComposableNodes
@@ -39,6 +39,8 @@ def generate_launch_description():
     container_name_full = (namespace, "/", container_name)
     use_respawn = LaunchConfiguration("use_respawn")
     log_level = LaunchConfiguration("log_level")
+    cmd_vel_topic = LaunchConfiguration("cmd_vel_topic")
+    lifecycle_manager_start_delay = LaunchConfiguration("lifecycle_manager_start_delay")
 
     lifecycle_nodes = [
         "controller_server",
@@ -81,6 +83,33 @@ def generate_launch_description():
 
     declare_log_level_cmd = DeclareLaunchArgument("log_level", default_value="info", description="log level")
 
+    declare_cmd_vel_topic_cmd = DeclareLaunchArgument(
+        "cmd_vel_topic", default_value="cmd_vel",
+        description="Controller Server command output; the DWB default remains cmd_vel",
+    )
+    declare_lifecycle_manager_start_delay_cmd = DeclareLaunchArgument(
+        "lifecycle_manager_start_delay", default_value="0.0",
+        description="Optional delay before starting the non-composed Nav2 lifecycle manager",
+    )
+
+    def start_lifecycle_manager(context):
+        delay = float(lifecycle_manager_start_delay.perform(context))
+        manager = Node(
+            package="nav2_lifecycle_manager",
+            executable="lifecycle_manager",
+            name="lifecycle_manager_navigation",
+            output="screen",
+            arguments=["--ros-args", "--log-level", log_level],
+            parameters=[
+                {"use_sim_time": use_sim_time},
+                {"autostart": autostart},
+                {"node_names": lifecycle_nodes},
+            ],
+        )
+        if delay <= 0.0:
+            return [manager]
+        return [TimerAction(period=delay, actions=[manager])]
+
     load_nodes = GroupAction(
         condition=IfCondition(PythonExpression(["not ", use_composition])),
         actions=[
@@ -92,6 +121,7 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
+                remappings=[("cmd_vel", cmd_vel_topic)],
             ),
             Node(
                 package="nav2_planner",
@@ -113,7 +143,10 @@ def generate_launch_description():
                 respawn_delay=2.0,
                 parameters=[configured_params],
                 arguments=["--ros-args", "--log-level", log_level],
-                remappings=remappings,
+                # Recovery behaviors publish on cmd_vel independently of the
+                # controller. Keep that output in the same isolated channel
+                # when the NeuPAN shadow launch selects one.
+                remappings=remappings + [("cmd_vel", cmd_vel_topic)],
             ),
             Node(
                 package="nav2_bt_navigator",
@@ -126,14 +159,7 @@ def generate_launch_description():
                 arguments=["--ros-args", "--log-level", log_level],
                 remappings=remappings,
             ),
-            Node(
-                package="nav2_lifecycle_manager",
-                executable="lifecycle_manager",
-                name="lifecycle_manager_navigation",
-                output="screen",
-                arguments=["--ros-args", "--log-level", log_level],
-                parameters=[{"use_sim_time": use_sim_time}, {"autostart": autostart}, {"node_names": lifecycle_nodes}],
-            ),
+            OpaqueFunction(function=start_lifecycle_manager),
         ],
     )
 
@@ -146,6 +172,7 @@ def generate_launch_description():
                 plugin="nav2_controller::ControllerServer",
                 name="controller_server",
                 parameters=[configured_params],
+                remappings=[("cmd_vel", cmd_vel_topic)],
             ),
             ComposableNode(
                 package="nav2_planner",
@@ -159,7 +186,7 @@ def generate_launch_description():
                 plugin="behavior_server::BehaviorServer",
                 name="behavior_server",
                 parameters=[configured_params],
-                remappings=remappings,
+                remappings=remappings + [("cmd_vel", cmd_vel_topic)],
             ),
             ComposableNode(
                 package="nav2_bt_navigator",
@@ -192,6 +219,8 @@ def generate_launch_description():
     ld.add_action(declare_container_name_cmd)
     ld.add_action(declare_use_respawn_cmd)
     ld.add_action(declare_log_level_cmd)
+    ld.add_action(declare_cmd_vel_topic_cmd)
+    ld.add_action(declare_lifecycle_manager_start_delay_cmd)
     # Add the actions to launch all of the navigation nodes
     ld.add_action(load_nodes)
     ld.add_action(load_composable_nodes)

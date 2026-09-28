@@ -1,0 +1,11 @@
+# ROS and Python build products
+build*/
+install*/
+log*/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Per-robot overrides are never committed. The approved baseline record is tracked.
+config/calibration/*.local.json

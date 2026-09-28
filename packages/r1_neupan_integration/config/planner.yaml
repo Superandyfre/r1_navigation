@@ -1,0 +1,39 @@
+# R1 navigation contract: the physical base/caster/drive-wheel projection in
+# base_link is the base_link collision STL envelope.  The Gazebo-only wheel
+# traction spheres are physics contacts and are intentionally not used here.
+receding: 6
+step_time: 0.25
+ref_speed: 0.5
+device: 'cpu'
+time_print: false
+collision_threshold: 0.01
+
+robot:
+  kinematics: 'diff'
+  max_speed: [0.5, 2.0]
+  max_acce: [0.5, 2.0]
+  length: 0.682
+  width: 0.532
+
+ipath:
+  interval: 0.2
+  curve_style: 'line'
+  min_radius: 0.05
+  loop: true
+  arrive_threshold: 0.5
+  close_threshold: 0.05
+  arrive_index_threshold: 3
+
+pan:
+  iter_num: 2
+  dune_max_num: 200
+  nrmp_max_num: 10
+  dune_checkpoint: null
+  iter_threshold: 0.1
+
+adjust:
+  q_s: 0.1
+  p_u: 1.0
+  eta: 10.0
+  d_max: 0.1
+  d_min: 0.01
