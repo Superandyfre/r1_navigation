@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "r1_collision_guard/guard_logic.hpp"
+#include "r1_collision_guard/scan_filter.hpp"
 
 namespace r1_collision_guard
 {
@@ -66,6 +67,15 @@ TEST(GuardLogic, RearObstacleLimitsReverse)
   EXPECT_EQ(decision.state, Decision::State::SLOW);
   EXPECT_LT(decision.linear_x, 0.0);
   EXPECT_GT(decision.linear_x, -0.15);
+}
+
+TEST(ScanFilter, RemovesOnlyStrictlyInteriorSelfReturns)
+{
+  const std::vector<Point2D> footprint{
+    {0.80, 0.40}, {0.80, -0.40}, {-0.40, -0.40}, {-0.40, 0.40}};
+  EXPECT_TRUE(strictlyInsidePolygon({0.52, -0.35}, footprint));
+  EXPECT_FALSE(strictlyInsidePolygon({0.80, -0.35}, footprint));
+  EXPECT_FALSE(strictlyInsidePolygon({0.81, -0.35}, footprint));
 }
 }  // namespace
 }  // namespace r1_collision_guard

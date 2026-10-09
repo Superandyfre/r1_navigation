@@ -3,6 +3,7 @@
 
 #include "navigation_neupan_bridge/guard_aware_progress_checker.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <stdexcept>
@@ -39,15 +40,62 @@ void GuardAwareProgressChecker::initialize(
     plugin_name + ".movement_time_allowance", 60.0);
   max_guarded_block_time_sec_ = node->declare_parameter<double>(
     plugin_name + ".max_guarded_block_time_sec", 300.0);
+  const auto neupan_semantics_topic = node->declare_parameter<std::string>(
+    plugin_name + ".neupan_semantics_topic", "/neupan_semantics");
+  neupan_semantics_timeout_sec_ = node->declare_parameter<double>(
+    plugin_name + ".neupan_semantics_timeout_sec", 0.50);
+  neupan_infeasible_fail_cycles_ = node->declare_parameter<int>(
+    plugin_name + ".neupan_infeasible_fail_cycles", 100);
   if (guard_status_timeout_sec_ <= 0.0 || command_epsilon_ < 0.0 ||
     required_movement_radius_ < 0.0 || required_movement_angle_ < 0.0 ||
-    movement_time_allowance_sec_ <= 0.0 || max_guarded_block_time_sec_ < 0.0)
+    movement_time_allowance_sec_ <= 0.0 || max_guarded_block_time_sec_ < 0.0 ||
+    neupan_semantics_timeout_sec_ <= 0.0 || neupan_infeasible_fail_cycles_ < 0)
   {
     throw std::invalid_argument("invalid guard-aware progress checker configuration");
   }
   guard_status_sub_ = node->create_subscription<std_msgs::msg::String>(
     guard_status_topic, rclcpp::QoS(20),
     std::bind(&GuardAwareProgressChecker::guardStatusCallback, this, std::placeholders::_1));
+  neupan_semantics_sub_ = node->create_subscription<std_msgs::msg::String>(
+    neupan_semantics_topic, rclcpp::QoS(20),
+    std::bind(&GuardAwareProgressChecker::neupanSemanticsCallback, this, std::placeholders::_1));
+}
+
+void GuardAwareProgressChecker::neupanSemanticsCallback(
+  const std_msgs::msg::String::SharedPtr message)
+{
+  NeupanInfeasibility infeasibility;
+  try {
+    const auto payload = nlohmann::json::parse(message->data);
+    const auto info = payload.at("info");
+    const bool stop = info.at("stop").get<bool>();
+    const auto dune_min = payload.at("dune").at("min_distance_m");
+    const double dune_min_m =
+      dune_min.is_number() ? dune_min.get<double>() : 0.0;
+    // The local optimizer is persistently unable to fit its predicted
+    // trajectory into the live obstacle field. Waiting longer only produces
+    // the reverse/forward dither observed on HW1; fail the segment now and
+    // let the BT replanner reroute around the true arm envelope.
+    infeasibility.sustained_cycles = stop && dune_min_m < 0.0 ?
+      std::max(payload.value("infeasible_cycles", 0), 0) : 0;
+    infeasibility.dune_min_m = dune_min_m;
+  } catch (const std::exception &) {
+    infeasibility.sustained_cycles = 0;
+  }
+  infeasibility.received = clock_->now();
+  std::lock_guard<std::mutex> lock(mutex_);
+  neupan_infeasibility_ = infeasibility;
+}
+
+bool GuardAwareProgressChecker::isNeupanInfeasible(const rclcpp::Time & now) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (neupan_infeasibility_.received.nanoseconds() == 0 ||
+    (now - neupan_infeasibility_.received).seconds() > neupan_semantics_timeout_sec_)
+  {
+    return false;
+  }
+  return neupan_infeasibility_.sustained_cycles >= neupan_infeasible_fail_cycles_;
 }
 
 void GuardAwareProgressChecker::guardStatusCallback(const std_msgs::msg::String::SharedPtr message)
@@ -84,10 +132,10 @@ bool GuardAwareProgressChecker::isGuardBlocking(const rclcpp::Time & now) const
     return false;
   }
   return guard_status_.state == "STOP" && guard_status_.reason == guard_block_reason_ &&
-    (std::abs(guard_status_.requested_linear_x) > command_epsilon_ ||
-    std::abs(guard_status_.requested_angular_z) > command_epsilon_) &&
-    std::abs(guard_status_.output_linear_x) <= command_epsilon_ &&
-    std::abs(guard_status_.output_angular_z) <= command_epsilon_;
+         (std::abs(guard_status_.requested_linear_x) > command_epsilon_ ||
+         std::abs(guard_status_.requested_angular_z) > command_epsilon_) &&
+         std::abs(guard_status_.output_linear_x) <= command_epsilon_ &&
+         std::abs(guard_status_.output_angular_z) <= command_epsilon_;
 }
 
 geometry_msgs::msg::Pose2D GuardAwareProgressChecker::toPose2D(
@@ -97,8 +145,9 @@ geometry_msgs::msg::Pose2D GuardAwareProgressChecker::toPose2D(
   result.x = pose.pose.position.x;
   result.y = pose.pose.position.y;
   const auto & q = pose.pose.orientation;
-  result.theta = std::atan2(2.0 * (q.w * q.z + q.x * q.y),
-      1.0 - 2.0 * (q.y * q.y + q.z * q.z));
+  result.theta = std::atan2(
+    2.0 * (q.w * q.z + q.x * q.y),
+    1.0 - 2.0 * (q.y * q.y + q.z * q.z));
   return result;
 }
 
@@ -110,8 +159,8 @@ double GuardAwareProgressChecker::normalizeAngle(const double angle)
 bool GuardAwareProgressChecker::movedEnough(const geometry_msgs::msg::Pose2D & pose) const
 {
   return std::hypot(pose.x - baseline_pose_.x, pose.y - baseline_pose_.y) >
-    required_movement_radius_ || std::abs(normalizeAngle(pose.theta - baseline_pose_.theta)) >
-    required_movement_angle_;
+         required_movement_radius_ || std::abs(normalizeAngle(pose.theta - baseline_pose_.theta)) >
+         required_movement_angle_;
 }
 
 void GuardAwareProgressChecker::resetBaseline(
@@ -126,6 +175,9 @@ bool GuardAwareProgressChecker::check(geometry_msgs::msg::PoseStamped & current_
 {
   const auto now = clock_->now();
   const auto pose = toPose2D(current_pose);
+  if (isNeupanInfeasible(now)) {
+    return false;
+  }
   if (isGuardBlocking(now)) {
     if (!guard_blocked_since_set_) {
       guard_blocked_since_ = now;

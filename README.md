@@ -37,3 +37,7 @@ colcon build --base-paths /home/rpp/r1_navigation/packages \
 ```
 
 See `docs/MIGRATION.md` for the reversible workspace cutover procedure.
+
+## Latest UI 7 source snapshot
+
+See [navigation7 synchronization record](docs/NAVIGATION7_SYNC_20261009.md) for the active robot source, entry scripts, validation, and research reuse limits.

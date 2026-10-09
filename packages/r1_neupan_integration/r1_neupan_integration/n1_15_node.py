@@ -12,8 +12,8 @@ from typing import Any
 import numpy as np
 import rclpy
 import tf2_ros
-from geometry_msgs.msg import PoseStamped, Twist
-from nav_msgs.msg import Path
+from geometry_msgs.msg import PolygonStamped, PoseStamped, Twist
+from nav_msgs.msg import Odometry, Path
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.exceptions import ParameterUninitializedException
 from rclpy.executors import MultiThreadedExecutor
@@ -41,6 +41,10 @@ from r1_neupan_integration.n2_pre_semantics import (
 from r1_neupan_integration.scan_self_filter import (
     outside_polygon_footprint,
     outside_rectangular_footprint,
+    inflate_obstacles_for_dynamic_footprint,
+    inflate_obstacles_for_mesh_components,
+    mesh_component_overlap_mask,
+    mesh_components_from_flat,
     polygon_vertices_from_flat_xy,
 )
 
@@ -70,6 +74,26 @@ def _rotation(yaw: float) -> np.ndarray:
     return np.asarray([[c, -s], [s, c]], dtype=np.float64)
 
 
+def _path_tangent_in_base_frame(
+    path: np.ndarray | None, state: np.ndarray,
+) -> np.ndarray:
+    """Return the nearest global-path tangent in the robot base frame.
+
+    A scan is already in ``base_link`` when dynamic arm filtering is enabled.
+    Keeping this conversion here makes the configuration-space remap follow
+    the active path without adding another TF lookup to the scan callback.
+    """
+    if path is None or path.ndim != 2 or path.shape[0] < 3 or path.shape[1] == 0:
+        return np.asarray([1.0, 0.0], dtype=np.float64)
+    robot_xy = state[:2, 0]
+    nearest = int(np.argmin(np.sum((path[:2, :] - robot_xy[:, None]) ** 2, axis=0)))
+    path_yaw = float(path[2, nearest])
+    if not np.isfinite(path_yaw):
+        return np.asarray([1.0, 0.0], dtype=np.float64)
+    relative_yaw = path_yaw - float(state[2, 0])
+    return np.asarray([np.cos(relative_yaw), np.sin(relative_yaw)], dtype=np.float64)
+
+
 class N115Node(Node):
     """ROS subscriptions and one synchronous latest-only IPC flight."""
 
@@ -81,6 +105,7 @@ class N115Node(Node):
         self.state_lock = __import__("threading").Lock()
         self.control_group = MutuallyExclusiveCallbackGroup()
         self.callback_group = ReentrantCallbackGroup()
+        self.path_context_group = MutuallyExclusiveCallbackGroup()
 
         self.declare_parameter("robot_config_dir", "")
         self.declare_parameter("planner_config_file", "planner.yaml")
@@ -91,7 +116,9 @@ class N115Node(Node):
         self.declare_parameter("scan_topic", "/scan_neupan")
         self.declare_parameter("plan_input_topic", "/r1_test_path")
         self.declare_parameter("goal_topic", "/goal_pose")
+        self.declare_parameter("goal_from_path_only", False)
         self.declare_parameter("gear_topic", "/r1_motion_gear")
+        self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("default_gear", DEFAULT_GEAR)
         self.declare_parameter("navigation_mode", "cyclic")
         self.declare_parameter("cmd_vel_topic", "/neupan_cmd_vel")
@@ -113,6 +140,18 @@ class N115Node(Node):
             "self_filter_polygon_xy", Parameter.Type.DOUBLE_ARRAY
         )
         self.declare_parameter("self_filter_polygon_margin_m", 0.0)
+        self.declare_parameter("dynamic_footprint_enabled", False)
+        self.declare_parameter("dynamic_footprint_topic", "/r1_arm_footprint")
+        self.declare_parameter("dynamic_footprint_timeout_sec", 0.50)
+        self.declare_parameter("dynamic_mesh_components_timeout_sec", 1.50)
+        self.declare_parameter("dynamic_footprint_clearance_m", 0.15)
+        self.declare_parameter("dynamic_mesh_components_enabled", False)
+        self.declare_parameter("dynamic_mesh_components_topic", "/r1_arm_mesh_components")
+        self.declare_parameter("mesh_overlap_diagnostics_enabled", False)
+        self.declare_parameter("planner_base_front_m", 0.341)
+        self.declare_parameter("planner_base_rear_m", 0.341)
+        self.declare_parameter("planner_base_left_m", 0.266)
+        self.declare_parameter("planner_base_right_m", 0.266)
         self.declare_parameter("include_initial_path_direction", True)
         self.declare_parameter("refresh_initial_path", False)
         self.declare_parameter("allow_reverse", False)
@@ -221,6 +260,24 @@ class N115Node(Node):
         self.self_filter_polygon_margin_m = float(
             self.get_parameter("self_filter_polygon_margin_m").value
         )
+        self.dynamic_footprint_enabled = bool(
+            self.get_parameter("dynamic_footprint_enabled").value
+        )
+        self.dynamic_footprint_timeout_sec = float(
+            self.get_parameter("dynamic_footprint_timeout_sec").value
+        )
+        self.dynamic_mesh_components_timeout_sec = float(
+            self.get_parameter("dynamic_mesh_components_timeout_sec").value
+        )
+        self.dynamic_footprint_clearance_m = float(
+            self.get_parameter("dynamic_footprint_clearance_m").value
+        )
+        self.planner_base_extents = {
+            "base_front_m": float(self.get_parameter("planner_base_front_m").value),
+            "base_rear_m": float(self.get_parameter("planner_base_rear_m").value),
+            "base_left_m": float(self.get_parameter("planner_base_left_m").value),
+            "base_right_m": float(self.get_parameter("planner_base_right_m").value),
+        }
         if self.self_filter_enabled and self.lidar_frame != self.base_frame:
             raise ValueError(
                 "self_filter_enabled requires scan coordinates in base_frame"
@@ -232,7 +289,19 @@ class N115Node(Node):
                 )
             elif self.self_filter_polygon_margin_m < 0.0:
                 raise ValueError("self_filter_polygon_margin_m must be nonnegative")
+        if self.dynamic_footprint_enabled and (
+                self.lidar_frame != self.base_frame or
+                self.dynamic_footprint_timeout_sec <= 0.0 or
+                self.dynamic_mesh_components_timeout_sec <= 0.0 or
+                self.dynamic_footprint_clearance_m < 0.0 or
+                min(self.planner_base_extents.values()) <= 0.0):
+            raise ValueError("invalid dynamic footprint configuration")
+        self.dynamic_mesh_components_enabled = bool(
+            self.get_parameter("dynamic_mesh_components_enabled").value)
+        self.mesh_overlap_diagnostics_enabled = bool(
+            self.get_parameter("mesh_overlap_diagnostics_enabled").value)
         self.include_path_direction = bool(self.get_parameter("include_initial_path_direction").value)
+        self.goal_from_path_only = bool(self.get_parameter("goal_from_path_only").value)
         self.refresh_initial_path = bool(self.get_parameter("refresh_initial_path").value)
         self.allow_reverse = bool(self.get_parameter("allow_reverse").value)
         self.latest_scan_only = bool(self.get_parameter("latest_scan_only").value)
@@ -247,6 +316,13 @@ class N115Node(Node):
         self.latest_scan_meta = (0.0, 0.0, 0.0, 0.0, 0.0)
         self.latest_scan_metrics = {}
         self.latest_scan_filter = {}
+        self.dynamic_footprint = None
+        self.dynamic_footprint_received_monotonic = -1.0
+        self.dynamic_footprint_ready = not self.dynamic_footprint_enabled
+        self.dynamic_mesh_components = None
+        self.dynamic_mesh_components_received_monotonic = -1.0
+        self.observed_linear_x = 0.0
+        self.observed_odom_received_monotonic = -1.0
         self.scan_counter = 0
         self.last_processed_scan = 0
         self.scans_received = 0
@@ -262,6 +338,10 @@ class N115Node(Node):
         self._last_accepted_scan_stamp_ns = -1
         self.path_matrix = None
         self.path_version = 0
+        # Nav2 path publications define the externally visible command
+        # context. Internal path updates, such as a confirmed gear rewrite,
+        # must not invalidate that context mid-action.
+        self.nav2_path_version = 0
         self.goal = None
         self.goal_version = -1
         self.navigation_mode = validate_navigation_mode(
@@ -282,17 +362,33 @@ class N115Node(Node):
         self.timing_pub = self.create_publisher(Float64MultiArray, str(self.get_parameter("timing_topic").value), 50)
         qos = QoSProfile(depth=50, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(LaserScan, str(self.get_parameter("scan_topic").value), self.scan_callback, qos, callback_group=self.callback_group)
-        self.create_subscription(Path, str(self.get_parameter("plan_input_topic").value), self.path_callback, 10, callback_group=self.callback_group)
-        self.create_subscription(PoseStamped, str(self.get_parameter("goal_topic").value), self.goal_callback, 10, callback_group=self.callback_group)
+        # Both arm geometry streams are latest-state inputs. Queuing older
+        # meshes starves fresh scan callbacks without improving safety.
+        dynamic_qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.RELIABLE)
+        self.create_subscription(
+            PolygonStamped, str(self.get_parameter("dynamic_footprint_topic").value),
+            self.dynamic_footprint_callback, dynamic_qos, callback_group=self.callback_group)
+        self.create_subscription(
+            Float64MultiArray,
+            str(self.get_parameter("dynamic_mesh_components_topic").value),
+            self.dynamic_mesh_components_callback, dynamic_qos, callback_group=self.callback_group)
+        self.create_subscription(Path, str(self.get_parameter("plan_input_topic").value), self.path_callback, 10, callback_group=self.path_context_group)
+        self.create_subscription(PoseStamped, str(self.get_parameter("goal_topic").value), self.goal_callback, 10, callback_group=self.path_context_group)
         self.create_subscription(Int8, str(self.get_parameter("gear_topic").value), self.gear_callback, 10, callback_group=self.callback_group)
+        self.create_subscription(
+            Odometry, str(self.get_parameter("odom_topic").value), self.odom_callback,
+            20, callback_group=self.callback_group)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
         frequency = float(self.get_parameter("control_frequency").value)
-        self.create_timer(1.0 / frequency, self.run, callback_group=self.control_group)
+        self.timer = self.create_timer(1.0 / frequency, self.run, callback_group=self.control_group)
         self.get_logger().info("N1.15 ROS I/O node ready; planner exists only in the spawn worker")
 
     def declare_client_parameters(self) -> None:
         """Hook for a production bridge subclass to add client-only options."""
+
+    def _planner_input_updated(self) -> None:
+        """Hook for N1.16's scan-driven scheduler; N1.15 remains timer-driven."""
 
     def make_client(self, output_dir: str, config_path: str, checkpoint_path: str,
                     pan: dict[str, Any], receding: int | None,
@@ -325,6 +421,35 @@ class N115Node(Node):
             ], dtype=np.float64)
             self.tf_stamp_sec = float(trans.header.stamp.sec) + float(trans.header.stamp.nanosec) * 1e-9
         return True
+
+    def dynamic_footprint_callback(self, message: PolygonStamped) -> None:
+        """Store only a valid, base-frame live arm projection."""
+        if not self.dynamic_footprint_enabled or message.header.frame_id != self.base_frame:
+            return
+        try:
+            vertices = polygon_vertices_from_flat_xy(
+                [coordinate for point in message.polygon.points for coordinate in (point.x, point.y)]
+            )
+        except ValueError:
+            return
+        with self.state_lock:
+            self.dynamic_footprint = vertices
+            self.dynamic_footprint_received_monotonic = time.monotonic()
+
+    def dynamic_mesh_components_callback(self, message: Float64MultiArray) -> None:
+        """Store a fresh, validated non-convex arm mesh projection."""
+        if not self.dynamic_mesh_components_enabled:
+            return
+        if (not message.layout.dim or
+                message.layout.dim[0].label != "r1_arm_mesh_components_v1"):
+            return
+        try:
+            components = mesh_components_from_flat(message.data)
+        except ValueError:
+            return
+        with self.state_lock:
+            self.dynamic_mesh_components = components
+            self.dynamic_mesh_components_received_monotonic = time.monotonic()
 
     def scan_callback(self, message: LaserScan) -> None:
         started = time.perf_counter()
@@ -370,6 +495,29 @@ class N115Node(Node):
                 float(message.range_max),
             )
             state = None if self.robot_state is None else self.robot_state.copy()
+            path_matrix = None if self.path_matrix is None else self.path_matrix.copy()
+            dynamic_footprint = None
+            dynamic_mesh_components = None
+            footprint_ready = not self.dynamic_footprint_enabled
+            if self.dynamic_footprint_enabled:
+                footprint_ready = (
+                    self.dynamic_footprint is not None and
+                    receive - self.dynamic_footprint_received_monotonic <=
+                    self.dynamic_footprint_timeout_sec
+                )
+                if footprint_ready:
+                    dynamic_footprint = self.dynamic_footprint.copy()
+            mesh_components_ready = not self.dynamic_mesh_components_enabled
+            if self.dynamic_mesh_components_enabled:
+                mesh_components_ready = (
+                    self.dynamic_mesh_components is not None and
+                    receive - self.dynamic_mesh_components_received_monotonic <=
+                    self.dynamic_mesh_components_timeout_sec
+                )
+                if mesh_components_ready:
+                    dynamic_mesh_components = [component.copy()
+                                               for component in self.dynamic_mesh_components]
+            dynamic_ready = footprint_ready and mesh_components_ready
         if state is None:
             return
         conversion_started = time.perf_counter()
@@ -393,6 +541,13 @@ class N115Node(Node):
         retained_count = 0
         nearest_distance = None
         nearest_xy = None
+        nearest_environment_distance = None
+        nearest_environment_xy = None
+        nearest_obstacle_reason = "no_valid_points"
+        current_pose_mesh_overlap_points = 0
+        current_pose_mesh_overlap_nearest_distance = None
+        current_pose_mesh_proximity_points = 0
+        path_tangent_base = _path_tangent_in_base_frame(path_matrix, state)
         if valid_ranges.size == 0:
             points = None
             transform_ms = 0.0
@@ -441,23 +596,78 @@ class N115Node(Node):
                     local_points = local_points[:, keep]
                 else:
                     filter_shape = "disabled"
+                if local_points.shape[1]:
+                    environment_index = int(np.argmin(np.hypot(local_points[0], local_points[1])))
+                    nearest_environment = local_points[:, environment_index]
+                    nearest_environment_distance = float(np.hypot(
+                        nearest_environment[0], nearest_environment[1]))
+                    nearest_environment_xy = [
+                        float(nearest_environment[0]), float(nearest_environment[1])]
+                dynamic_displacement = np.empty(0, dtype=np.float64)
+                if dynamic_ready and self.dynamic_mesh_components_enabled:
+                    # Assess raw scan geometry first. This distinguishes a
+                    # physical overlap from a conservative planner-space
+                    # projection introduced below.
+                    # Exact mesh point-overlap statistics are observability
+                    # only. Evaluating every high-vertex arm mesh twice per
+                    # scan can exceed the control period; the actual mesh
+                    # self-filter, configuration-space projection, dynamic
+                    # footprint, and final collision guard remain active.
+                    if self.mesh_overlap_diagnostics_enabled:
+                        mesh_overlap = mesh_component_overlap_mask(
+                            local_points, dynamic_mesh_components, margin_m=0.0)
+                        mesh_proximity = mesh_component_overlap_mask(
+                            local_points, dynamic_mesh_components,
+                            margin_m=self.dynamic_footprint_clearance_m,
+                        ) & ~mesh_overlap
+                        current_pose_mesh_overlap_points = int(np.count_nonzero(mesh_overlap))
+                        current_pose_mesh_proximity_points = int(np.count_nonzero(mesh_proximity))
+                        if current_pose_mesh_overlap_points:
+                            current_pose_mesh_overlap_nearest_distance = float(np.min(
+                                np.hypot(local_points[0, mesh_overlap], local_points[1, mesh_overlap])
+                            ))
+                    local_points, dynamic_displacement = inflate_obstacles_for_mesh_components(
+                        local_points, dynamic_mesh_components,
+                        clearance_m=self.dynamic_footprint_clearance_m,
+                        path_tangent=path_tangent_base,
+                        **self.planner_base_extents,
+                    )
+                elif dynamic_ready:
+                    local_points, dynamic_displacement = inflate_obstacles_for_dynamic_footprint(
+                        local_points, dynamic_footprint,
+                        clearance_m=self.dynamic_footprint_clearance_m,
+                        **self.planner_base_extents,
+                    )
                 retained_count = int(local_points.shape[1])
                 if retained_count:
                     nearest_index = int(np.argmin(np.hypot(local_points[0], local_points[1])))
                     nearest_point = local_points[:, nearest_index]
                     nearest_distance = float(np.hypot(nearest_point[0], nearest_point[1]))
                     nearest_xy = [float(nearest_point[0]), float(nearest_point[1])]
+                    if dynamic_displacement.size:
+                        arm_extension = max(
+                            0.0,
+                            float(dynamic_displacement[nearest_index]) -
+                            self.dynamic_footprint_clearance_m,
+                        )
+                        nearest_obstacle_reason = (
+                            "mesh_arm_clearance" if arm_extension > 1.0e-6
+                            else "base_or_environment_clearance"
+                        )
+                    else:
+                        nearest_obstacle_reason = "base_or_environment_clearance"
                 else:
                     nearest_distance = None
                     nearest_xy = None
-                trans = self.tf_buffer.lookup_transform(self.map_frame, self.lidar_frame, rclpy.time.Time())
+                # ``state`` was obtained from the current map->base_link
+                # transform before this scan callback. A second lookup here
+                # can be delayed for seconds under a busy TF executor, which
+                # starves the newest-scan scheduler and makes velocity output
+                # intermittent. At 0.15 m/s the one control-cycle pose age is
+                # below 1.5 cm; the final collision guard still checks the
+                # base-frame scan independently.
                 tf_lookup_ms = (time.perf_counter() - tf_started) * 1000.0
-                yaw = quat_to_yaw(trans.transform.rotation)
-                pose = np.asarray([
-                    float(trans.transform.translation.x),
-                    float(trans.transform.translation.y), yaw,
-                ])
-                points = _rotation(float(pose[2])) @ local_points + pose[:2, None]
+                points = _rotation(float(state[2, 0])) @ local_points + state[:2, :]
             except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
                 points = None
                 tf_lookup_ms = (time.perf_counter() - tf_started) * 1000.0
@@ -480,7 +690,33 @@ class N115Node(Node):
                 "retained_points": retained_count if valid_ranges.size else 0,
                 "nearest_retained_base_link": nearest_xy if valid_ranges.size else None,
                 "nearest_retained_distance_m": nearest_distance if valid_ranges.size else None,
+                "nearest_environment_base_link": nearest_environment_xy if valid_ranges.size else None,
+                "nearest_environment_distance_m": nearest_environment_distance if valid_ranges.size else None,
+                "nearest_obstacle_reason": nearest_obstacle_reason,
+                "dynamic_footprint_ready": bool(dynamic_ready),
+                "dynamic_geometry": (
+                    "mesh_components" if self.dynamic_mesh_components_enabled else "convex_hull"),
+                "mesh_overlap_diagnostics_enabled": bool(self.mesh_overlap_diagnostics_enabled),
+                "dynamic_mesh_component_count": (
+                    len(dynamic_mesh_components) if dynamic_mesh_components is not None else 0),
+                "dynamic_obstacle_max_displacement_m": (
+                    float(np.max(dynamic_displacement)) if valid_ranges.size and dynamic_displacement.size else 0.0
+                ),
+                "dynamic_obstacle_mapping": (
+                    "path_frame_lateral_mesh" if self.dynamic_mesh_components_enabled
+                    else "radial_convex_footprint"
+                ),
+                "path_tangent_base_link": [
+                    float(path_tangent_base[0]), float(path_tangent_base[1])
+                ],
+                "current_pose_mesh_overlap_points": current_pose_mesh_overlap_points,
+                "current_pose_mesh_overlap_nearest_distance_m": (
+                    current_pose_mesh_overlap_nearest_distance
+                ),
+                "current_pose_mesh_proximity_points": current_pose_mesh_proximity_points,
             }
+            self.dynamic_footprint_ready = bool(dynamic_ready)
+        self._planner_input_updated()
 
     def path_callback(self, message: Path) -> None:
         if not message.poses:
@@ -522,11 +758,13 @@ class N115Node(Node):
             path_goal = matrix[:3, -1:].copy()
             self.path_matrix = matrix
             self.path_version += 1
+            self.nav2_path_version += 1
             # Treat the endpoint as the authoritative companion goal.  The
             # separate /neupan_goal callback sees the same pose and therefore
             # does not consume a second version.
             self.goal = path_goal
             self.goal_version += 1
+        self._planner_input_updated()
 
     def gear_callback(self, message: Int8) -> None:
         try:
@@ -540,6 +778,16 @@ class N115Node(Node):
                 self.pending_gear = requested
             else:
                 self.pending_gear = None
+        self._planner_input_updated()
+
+    def odom_callback(self, message: Odometry) -> None:
+        """Keep the latest measured base speed for zero-speed gear changes."""
+        linear_x = float(message.twist.twist.linear.x)
+        if not np.isfinite(linear_x):
+            return
+        with self.state_lock:
+            self.observed_linear_x = linear_x
+            self.observed_odom_received_monotonic = time.monotonic()
 
     def _consume_gear_transition(self) -> dict[str, Any] | None:
         """Emit one adapter zero, then make the requested gear active."""
@@ -563,11 +811,17 @@ class N115Node(Node):
             }
 
     def goal_callback(self, message: PoseStamped) -> None:
+        # Nav2 already carries the authoritative goal in every path. Its
+        # companion goal topic may arrive before the path or arrive late;
+        # consuming it separately can permanently desynchronize versions.
+        if self.goal_from_path_only:
+            return
         goal = np.asarray([
             [float(message.pose.position.x)],
             [float(message.pose.position.y)],
             [quat_to_yaw(message.pose.orientation)],
         ], dtype=np.float64)
+        changed = False
         with self.state_lock:
             # A goal derived from the just received path is the same logical
             # context and must not consume a second version.
@@ -575,6 +829,9 @@ class N115Node(Node):
                     self.goal, goal, rtol=0.0, atol=1e-4):
                 self.goal = goal
                 self.goal_version += 1
+                changed = True
+        if changed:
+            self._planner_input_updated()
 
     @staticmethod
     def _path_message(array: np.ndarray, frame: str, stamp: Any) -> Path:
@@ -603,6 +860,9 @@ class N115Node(Node):
             return
         with self.state_lock:
             if self.path_matrix is None or self.robot_state is None:
+                return
+            if self.dynamic_footprint_enabled and not self.dynamic_footprint_ready:
+                self.cmd_pub.publish(Twist())
                 return
             scan_counter = self.scan_counter
             if self.latest_scan_only and scan_counter <= self.last_processed_scan:

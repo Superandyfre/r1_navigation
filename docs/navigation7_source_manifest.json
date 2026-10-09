@@ -1,0 +1,1836 @@
+{
+  "schema": "navigation7_source_snapshot_v1",
+  "captured_at": "2026-10-09T12:23:27.371854",
+  "base_commit": "29200aa0aceacf1d722795f73b8d3577d0529fdc",
+  "button": {
+    "name": "7.双雷达NeuPAN导航",
+    "type": "QToolButton",
+    "Introduction": "启动双雷达 NeuPAN 高采样导航与 RViz；融合左前 Livox 和右后 2D 雷达。",
+    "bash_url": "~/rpp_tools/starterbutton/.bin/start_navigation_high_sampling_neupan.sh",
+    "background_url": "navigation.png",
+    "Additional_environment_variables": "RPP_NEUPAN_SCAN_SOURCE=dual RPP_NEUPAN_USE_MESH_SELF_FILTER=true",
+    "show_shell": "true"
+  },
+  "files": [
+    {
+      "repository_path": "packages/navigation_2d/CMakeLists.txt",
+      "sha256": "ea3053f421b985f3390d70d994756b880ed993e2905e8549214d1592e971124a",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/CMakeLists.txt"
+    },
+    {
+      "repository_path": "packages/navigation_2d/clearance_critic.xml",
+      "sha256": "140c2791600eb25943ba87d3d84bc376d8bb63b30144c7660f27b7cced69443b",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/clearance_critic.xml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/config/eskf_cfg.yaml",
+      "sha256": "d2e7625d00bfcacdfc501fe110f9c1908ab275f9e4b05a246a9605da00bc5067",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/config/eskf_cfg.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/config/lattice_omni.json",
+      "sha256": "f72e9d93a083a5e54fff98d36755a96cea2b645ed9ddf39485d3eb5af98697a8",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/config/lattice_omni.json"
+    },
+    {
+      "repository_path": "packages/navigation_2d/config/lattice_omni_10cm.json",
+      "sha256": "e0e74571d12d9d17966380ce68e20eeb177a91c8ce3d098fd929a3c62be3b617",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/config/lattice_omni_10cm.json"
+    },
+    {
+      "repository_path": "packages/navigation_2d/config/localication_r1_mid360.yaml",
+      "sha256": "5ec49de8de5a121f224e2026e64fc64533c30b5f6c98cf71e0ae3200ff1a42cf",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/config/localication_r1_mid360.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/config/localication_r1_mid360_high_sampling.yaml",
+      "sha256": "2e056aef5088377bc08240a841fbe4d785dab7e9e1cbada916675862e2cd8082",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/config/localication_r1_mid360_high_sampling.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/config/localication_r1_mid360_high_sampling_localization.yaml",
+      "sha256": "90df5cf4745b644be9d70a53443794748e24cda1aedac32c674655efada89719",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/config/localication_r1_mid360_high_sampling_localization.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/config/localication_r1_mid360_high_sampling_raw_test.yaml",
+      "sha256": "2c7bc12a9a6bbe2eb0e3027af0aaac1c99c033592044f0cc265fcd1bf72b44f4",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/config/localication_r1_mid360_high_sampling_raw_test.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/config/nav2_params_r1.yaml",
+      "sha256": "195df2d769043fc404b031943765b3b6aa1634c61eee5f8909b9bd8a848c5b67",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/config/nav2_params_r1.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/config/navigate_w_replanning_time_try_times.xml",
+      "sha256": "ab86aee8a1306d91c04529410895380a614692573b1c4ff09b728f8c57342b7b",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/config/navigate_w_replanning_time_try_times.xml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/include/navigation_2d/clearance_critic.hpp",
+      "sha256": "8dbdbd0e809671e637329f47df0d696515bdb759c691d05e13ef830ff07c54e2",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/include/navigation_2d/clearance_critic.hpp"
+    },
+    {
+      "repository_path": "packages/navigation_2d/include/navigation_2d/local_costmap_override_layer.hpp",
+      "sha256": "9ecab0753e43cfb1e2a0cba3c2e7e5e84f7cc84192e3b0ace9bad184e9604575",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/include/navigation_2d/local_costmap_override_layer.hpp"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/2d_map_server.launch.py",
+      "sha256": "b87e0f0856e3cfd329faefa5e857977b4b51907385b92a469c5272e703ec2b2a",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/2d_map_server.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/2d_map_server_high_sampling.launch.py",
+      "sha256": "b071959dbcacdc3434ff12f23a87f47c4622318e3e373849e9ead56090713641",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/2d_map_server_high_sampling.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/laser_undistortion.launch.py",
+      "sha256": "74e98c02cc50d7726b31867c95b89d50bc181308f78058bbc9153741c58da132",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/laser_undistortion.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/livox_undistortion.launch.py",
+      "sha256": "903f5648be46cde97ffb22a72bb4f7d1e571ea736cb78a43cab5e62eb39cad5d",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/livox_undistortion.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/local_and_nav.launch.py",
+      "sha256": "a1be76764934bc5eee38c6ede987114bd5b7c2c3025cec6c0a0ff44b66564c3f",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/local_and_nav.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/local_and_nav_high_sampling.launch.py",
+      "sha256": "2c2e2a44928f6b0f0d6fbf6174aa60f2a8006cebd70964d59b101503d839064a",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/local_and_nav_high_sampling.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/local_and_nav_high_sampling_controller.launch.py",
+      "sha256": "fdb2b75f787fa7109f0ed9875849c51e9927add2387d9c2baa423515f99041f5",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/local_and_nav_high_sampling_controller.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/local_and_nav_high_sampling_neupan.launch.py",
+      "sha256": "732b22d8840d34891aacbe224e175ec82ba4146c6c436b8993ae3b983562d447",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/local_and_nav_high_sampling_neupan.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/local_and_nav_high_sampling_neupan_shadow.launch.py",
+      "sha256": "666b852f5b1462dcde7363b22b46bb2435dc7a08f79dfd6b65997523859117ce",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/local_and_nav_high_sampling_neupan_shadow.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/local_and_nav_high_sampling_test.launch.py",
+      "sha256": "4400f6451659df25e8e161e479c9dd0d576db316fc2ecd3211f71b5c14a773bb",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/local_and_nav_high_sampling_test.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/localization.launch.py",
+      "sha256": "513f0124d5e86136cf7a482eaa1c178c27341ec653df072f3db9730c8b3c7424",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/localization.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/localization_high_sampling.launch.py",
+      "sha256": "6a69242c6b9392a010451093bdc37d6bc42f20508e0bb3c49052a620c8b5ca84",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/localization_high_sampling.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/localization_high_sampling_test.launch.py",
+      "sha256": "4667d0a5248a9ce667d74a1bf96a8cc8353ce93960de84ea88bc6f7a74b444d3",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/localization_high_sampling_test.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/launch/navigation.launch.py",
+      "sha256": "87dfa77be1614f659d50b7e0a93c850f12c379f5dc8bd8b5171d0e366d41b665",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/launch/navigation.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/local_costmap_override_layer.xml",
+      "sha256": "fc230531c6c93d30734c2ee464c98f93327e1f2a8a0605cfb8457d6e8b0fba67",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/local_costmap_override_layer.xml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/package.xml",
+      "sha256": "3c84dd85da40037ffe74d2148a1fce5c6e053301202c9a0f89e8e8414e59f6ec",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/package.xml"
+    },
+    {
+      "repository_path": "packages/navigation_2d/rviz/nav.rviz",
+      "sha256": "3a52be51bf5d3c3bde87be5a6e6d88db4f5be9e5c7257c00c5c7741ee0d80b9f",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/rviz/nav.rviz"
+    },
+    {
+      "repository_path": "packages/navigation_2d/rviz/nav_neupan.rviz",
+      "sha256": "ad0820768f4aeb0c4871de31dd8822b6030d3a57644178a6f4fb380e33480a99",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/rviz/nav_neupan.rviz"
+    },
+    {
+      "repository_path": "packages/navigation_2d/scripts/arm_state_gate.py",
+      "sha256": "3d18e38d393f9bae5294b0d40e5d840c6b7690688bbe80a2f169a45a402c12c3",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/scripts/arm_state_gate.py"
+    },
+    {
+      "repository_path": "packages/navigation_2d/src/clearance_critic.cpp",
+      "sha256": "569f4e9a9fdc9838b4694ad2822af0bcff4a2ebcd724ad8a54370593bb9986fa",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/src/clearance_critic.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_2d/src/local_costmap_override_layer.cpp",
+      "sha256": "0db0a922788cf5eb10e34fd0509fe5498e793ec1676bdcb69b59a879b8423b8e",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/src/local_costmap_override_layer.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_2d/src/map_server_lifecycle_ensure.cpp",
+      "sha256": "a3225e5edbb9c9ab003b5832b161122bfc9908f25b6756aa342962bddf4d90dd",
+      "source_path": "/home/rpp/rpp_ws/src/application/navigation_2d/src/map_server_lifecycle_ensure.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/CMakeLists.txt",
+      "sha256": "b6bf67eaac33fcf0ecd04f628cc0c2f36674ee7240b8e68034073b89fd5ba866",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/CMakeLists.txt"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/README_HW0.md",
+      "sha256": "a41627d975712bdf75111726f3b467d83284f618496998b81b517e33132639de",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/README_HW0.md"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/lidar_r1_hw0.yaml",
+      "sha256": "209a1e924a2d4cb7b460f318ba1d41a6ae7f0a092967876c421a6d1002401321",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/lidar_r1_hw0.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/lidar_r1_hw1.yaml",
+      "sha256": "5c5042ee55758b7a3e972c40bee1df28a0260b1e27dc7f8a4262f71308f5bc39",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/lidar_r1_hw1.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/nav2_params_r1_neupan_hw1.yaml",
+      "sha256": "30f4c2599c92dfe7a495fb554e6b2edb9bc23f7dc58c99dddf2eccd4e9598c66",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/nav2_params_r1_neupan_hw1.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/nav2_params_r1_neupan_shadow.yaml",
+      "sha256": "810ab39ad7c9244d6ecd1f071af86f0143f2341d9e135390a4c830ae31f95b93",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/nav2_params_r1_neupan_shadow.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/navigate_through_poses_neupan.xml",
+      "sha256": "5b3faf68910dda29fae1e864879ed7137df64bee4ddeaae3c16f7cc4fa0e0bd2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/navigate_through_poses_neupan.xml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/navigate_through_poses_neupan_shadow.xml",
+      "sha256": "5b3faf68910dda29fae1e864879ed7137df64bee4ddeaae3c16f7cc4fa0e0bd2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/navigate_through_poses_neupan_shadow.xml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/navigate_w_replanning_neupan.xml",
+      "sha256": "93188fb626663863bd83e7d5c3c8949a611644fd5b2e59b431d166a6a0effa30",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/navigate_w_replanning_neupan.xml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/navigate_w_replanning_neupan_shadow.xml",
+      "sha256": "93188fb626663863bd83e7d5c3c8949a611644fd5b2e59b431d166a6a0effa30",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/navigate_w_replanning_neupan_shadow.xml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/planner_r1_hw0.yaml",
+      "sha256": "26fafa808abad0a34f6d967c19a08978c9175b1b509790ee3ad5c9f58a8e7f06",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/planner_r1_hw0.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml",
+      "sha256": "08d3b0df4281fa8c6236f1f1f5096c69148e226e8fd07cfe784bf16f40ff674f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/planner_r1_hw1.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/r1_hw1_calibration.json.example",
+      "sha256": "adf33f990179546159e98ba37eb89838871dd15fa379c7362fa275b5bb81e2e0",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/r1_hw1_calibration.json.example"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/robot_r1_hw0.yaml",
+      "sha256": "9a59309427485b716dd7b9072f16a8f5402d4f554e41cd73c63ce7bf880d84dd",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/robot_r1_hw0.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/config/robot_r1_hw1.yaml",
+      "sha256": "5f07ce4ba039b175d6f474d7b8f541d39af0875f143b6cc5a805878188f2b054",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/config/robot_r1_hw1.yaml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/include/navigation_neupan_bridge/current_footprint_clear_layer.hpp",
+      "sha256": "cc95093142fef3aa4f38b2d91cc3b8159ca0fe60aa604c27140a087416d163d4",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/include/navigation_neupan_bridge/current_footprint_clear_layer.hpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/include/navigation_neupan_bridge/guard_aware_progress_checker.hpp",
+      "sha256": "9c3b0fd6b082e1e49b1efeb003a4a8b3720c63d34d5d05e8ec5167bf36963692",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/include/navigation_neupan_bridge/guard_aware_progress_checker.hpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/include/navigation_neupan_bridge/guard_recovery.hpp",
+      "sha256": "7aa80d183d225741522a7fba5ae9c7b82db60a02f531b3a2c574c5a248d553e6",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/include/navigation_neupan_bridge/guard_recovery.hpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/include/navigation_neupan_bridge/neupan_controller.hpp",
+      "sha256": "a41cccbb7cbd6c52e6d5d5205802de03a5c93ae58b9d694b2a805e56369caedc",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/include/navigation_neupan_bridge/neupan_controller.hpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/include/navigation_neupan_bridge/path_replan_distance.hpp",
+      "sha256": "37a99cc51058ba55dc60a7ef800001cd08474b683b7ac88b09d63457863e71c3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/include/navigation_neupan_bridge/path_replan_distance.hpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/launch/navigation_neupan.launch.py",
+      "sha256": "1aed8f3c2fd4ab2c768a50a5fc30ad20a9ce6da6d5f93e259e74da121b4af742",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/launch/navigation_neupan.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/launch/r1_neupan_hw0_shadow.launch.py",
+      "sha256": "ce3f529cf32d4c25ebda9128f9dc6d3a023471a37baaac9be28875883e9ef1bb",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/launch/r1_neupan_hw0_shadow.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/launch/r1_neupan_hw1_motion.launch.py",
+      "sha256": "7432b8e77f013401e06ccb721439280beefbb9a23cb9f32e08b9765b9ec68c1c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/launch/r1_neupan_hw1_motion.launch.py"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/navigation_neupan_bridge.xml",
+      "sha256": "25d3d81e58d087b687110ca3410c2d308334ed1927464f8a3ccd4200974f7cd5",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/navigation_neupan_bridge.xml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/navigation_neupan_costmap_plugins.xml",
+      "sha256": "634e6d4ba23af1a20c97546e44b5000cd7c0ba2031d80c53e859bb81811d5caf",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/navigation_neupan_costmap_plugins.xml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/package.xml",
+      "sha256": "0c2bbbbb19b09810b0eeb9ce6d6e820675b8a018cbae33649c67d225903bbd98",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/package.xml"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/src/current_footprint_clear_layer.cpp",
+      "sha256": "2797d3a23c73657353ea741abd0cb2512edcc4bf6075f47454c634079a23180d",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/src/current_footprint_clear_layer.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/src/guard_aware_progress_checker.cpp",
+      "sha256": "43d4a465d739bdd49ad1cd1e869a75a02281a2a832750fd25d240cb806e49b6d",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/src/guard_aware_progress_checker.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/src/nav_lifecycle_ensure.cpp",
+      "sha256": "7867f5631502fe23b9d4c22437ce3522ec7e6041a7f8983e6344de3bd0f1aaf0",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/src/nav_lifecycle_ensure.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/src/neupan_controller.cpp",
+      "sha256": "7960dc7e74e9b5592eed550d012bd84ed1df824b9f60681741e4e8dd7dd9e487",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/src/neupan_controller.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/src/r1_arm_footprint_node.cpp",
+      "sha256": "10281032eba024b1284f9b5db06e6e0ea21d9c4f03953b23bb4c3b3e7ae8e92e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/src/r1_arm_footprint_node.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/src/r1_dynamic_footprint_sync.cpp",
+      "sha256": "8b6e8f8f553bcbebbe93df1b83b4a6cf8d4a4a28f6af18cadfd636bd231b3248",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/src/r1_dynamic_footprint_sync.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/src/r1_localization_monitor.cpp",
+      "sha256": "e2342e39c0de89aa23b013e47436c63992751777df172e3a1446e317a74266d6",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/src/r1_localization_monitor.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/src/r1_passage_clearance_diagnostics.cpp",
+      "sha256": "1d9e6efe35000c82efaeff441a46f88e85f1abab562b557ce26f912c81d49765",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/src/r1_passage_clearance_diagnostics.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/test/test_guard_aware_progress_checker.cpp",
+      "sha256": "cab53ac03b0e2db7ed93be1cc5bbfc3f0a00119a9e3ad5c8a136b245aef7b64a",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/test/test_guard_aware_progress_checker.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/test/test_guard_recovery.cpp",
+      "sha256": "f4ea5fc067d236333765a96a255c27f9e7511663e30611bd18109128ffdf0a21",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/test/test_guard_recovery.cpp"
+    },
+    {
+      "repository_path": "packages/navigation_neupan_bridge/test/test_path_replan_distance.cpp",
+      "sha256": "506a19308af6baf26a08aea31040f0f7339ed283be2caddfe9c869252319d94e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/navigation_neupan_bridge/test/test_path_replan_distance.cpp"
+    },
+    {
+      "repository_path": "packages/r1_lidar_preprocess/CMakeLists.txt",
+      "sha256": "e1a7fef6a07e0ae8c3d4f3b4ea1b97780f868aef03608f7ada38e33107305929",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_lidar_preprocess/CMakeLists.txt"
+    },
+    {
+      "repository_path": "packages/r1_lidar_preprocess/README.md",
+      "sha256": "3d462a5554daca4ddccd1d1a0d8ccc540e244ecf9112b5aac7a8a366c899ea97",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_lidar_preprocess/README.md"
+    },
+    {
+      "repository_path": "packages/r1_lidar_preprocess/config/lidar_navigation.yaml",
+      "sha256": "18960b2b67e872c942f03d0301fc79c321ce517c318d260b8c8d41e483d9f46d",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_lidar_preprocess/config/lidar_navigation.yaml"
+    },
+    {
+      "repository_path": "packages/r1_lidar_preprocess/config/lidar_smoke.yaml",
+      "sha256": "0b4c4d64d6a5035ba6e942765684d0e3760949ab2a7a814e5cb59ad99cbe7c6e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_lidar_preprocess/config/lidar_smoke.yaml"
+    },
+    {
+      "repository_path": "packages/r1_lidar_preprocess/config/scan_fusion_hw1.yaml",
+      "sha256": "b81883021811d00edada685637d15b7c995e28cb23a3efd504ae60ff4e49c6a9",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_lidar_preprocess/config/scan_fusion_hw1.yaml"
+    },
+    {
+      "repository_path": "packages/r1_lidar_preprocess/launch/pointcloud_to_scan.launch.py",
+      "sha256": "c40e10f71bb876aefb4d7a6d95575875e344484660e01f1f95e1034d3825d681",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_lidar_preprocess/launch/pointcloud_to_scan.launch.py"
+    },
+    {
+      "repository_path": "packages/r1_lidar_preprocess/package.xml",
+      "sha256": "eaa8ea8b31bfeca2fcf951d2892b74db688cbc4ecbfcfe4d9987dc2e9ca09993",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_lidar_preprocess/package.xml"
+    },
+    {
+      "repository_path": "packages/r1_lidar_preprocess/src/scan_fusion_node.cpp",
+      "sha256": "8c7dd7188acfb938e10dbd5aebdcd0059dd5c402250120243aa18f09409d3af5",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_lidar_preprocess/src/scan_fusion_node.cpp"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/README.md",
+      "sha256": "064111190f1f88042bbfccf094bc2171e2f91ee667a1d6ccfec991c50314ddcc",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/README.md"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/config/models/dune_model_5000.pth",
+      "sha256": "7ca92abf1e938cdb6a21010cb19671648b2ff48f8dbb871393f716d57cb9f9e2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/config/models/dune_model_5000.pth"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/config/planner.yaml",
+      "sha256": "6ab48b34e17cb873d6d1504d19de02b4a7348c70aa1b213e8b17ad3c68cae971",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/config/planner.yaml"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/config/robot.yaml",
+      "sha256": "a0abc0cd976a41b0c9e063b301436e028a5a3ea8fb76aedfaf972e835f18e6c2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/config/robot.yaml"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/launch/n1_validation.launch.py",
+      "sha256": "fe3f8476b8de144e254ff48fe1dc294d89a882163c4a8fbff726adb9ab21f9e9",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/launch/n1_validation.launch.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/launch/n2_3_freshness.launch.py",
+      "sha256": "32a165df4dfb1dfeeb9befd4a3c187467e3c65f9423bf27dc670e05ba03e43fc",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/launch/n2_3_freshness.launch.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/launch/n2_4c_reproducibility.launch.py",
+      "sha256": "df8422b940aedb4f294d25b41d14415e9f0f9b03a8b4d459731ea0b2d37d424c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/launch/n2_4c_reproducibility.launch.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/launch/n2_4c_runtime_attribution.launch.py",
+      "sha256": "30640c45749a56f3df1fb9a499f9cffaa1d3de36cdc39e4c326e3f1f25c6a531",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/launch/n2_4c_runtime_attribution.launch.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/launch/n2_forward_only.launch.py",
+      "sha256": "13553a970c5edd3370c2b7b65a12f7cb0805cbc30ebe2337c8598851f298ded7",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/launch/n2_forward_only.launch.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/launch/n2_pre_admission.launch.py",
+      "sha256": "fd6f8a36c299e51cb375ec870b02f5657d285e761530ca57fa251ce266be6b4f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/launch/n2_pre_admission.launch.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/launch/n2_pre_no_reverse.launch.py",
+      "sha256": "d8b70613a67527637d52aedf64ffec0db36e7f02d7267dce277806ad7fb113b2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/launch/n2_pre_no_reverse.launch.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/package.xml",
+      "sha256": "1efd4fe653b32ec100dd5339444109e33c8195beb5755489407cbb4d27f461dc",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/package.xml"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/__init__.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/cleanup_n1_world.py",
+      "sha256": "e9f43668ecebbe93868052207c0b60dcc4157b3565390eda511a148cfb68ab31",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/cleanup_n1_world.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/command_stabilizer.py",
+      "sha256": "07c7997c8e10b12950e9a7df1ed1e3a968fed35ec6b42d98bb45ff08d1fde6a2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/command_stabilizer.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/fixed_path_publisher.py",
+      "sha256": "49b285dc97c9f56cfed1b37520f998cd6fcb0c9ade39d840fdc269b56d7f5165",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/fixed_path_publisher.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/forward_only.py",
+      "sha256": "1ea2b67a81164b2b007ec3539cc967ce6856110b415da1d19df04fee3be5a37d",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/forward_only.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/latest_input_scheduler.py",
+      "sha256": "773caa7678a63ad60b1cfe52c40714541416d668c83c5ea079598ef2e45b6949",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/latest_input_scheduler.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_11_diagnostics.py",
+      "sha256": "92336c0e44d4a16f6dd64f6ec52fa6b3bbba2c86d427760ff5c46f52dccc0bdb",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_11_diagnostics.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_13_online_diagnostics.py",
+      "sha256": "339b26349d26ff347e4762854c9911000bb195d9f254480bbc58f2ff7f247fb1",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_13_online_diagnostics.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_14_process_isolation.py",
+      "sha256": "235a138d08331011c0b152cae400c0baccadbf07066e0be27cca2341981ad50c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_14_process_isolation.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_15_node.py",
+      "sha256": "5b89f2b38fda78e5e12495c841b85ff52dc8385c23c6c1424223cac29fac6c58",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_15_node.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_15_whole_core.py",
+      "sha256": "d40a0e0080c02d0c0904ca3600621d1d9a2e523625381d8406e0bac2f00ec647",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_15_whole_core.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_16_bridge.py",
+      "sha256": "bd4e489cea870f7542a9b223f469008640026607a6f739eddf85842407138591",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_16_bridge.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_16_exec_probe.py",
+      "sha256": "01bc5b5ab2715cf6d4fc1b02acb18aa5d1906f468b665095043efbd5917ba2d0",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_16_exec_probe.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_16_node.py",
+      "sha256": "1e70d31cf8d67df681a30573052c11b9368b38f77ce612abbdf21c28309ef35f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_16_node.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_5_config_diff.py",
+      "sha256": "9de2f1b0d322ec860b42316fb76286464238be817f86ab72d52d78bf7b256773",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_5_config_diff.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_5_core_ab.py",
+      "sha256": "914e583b76d778156d5aaa309d9ccf153cf124cfa5e41c27f76c632ec6ea1fed",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_5_core_ab.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_7_gpu_adapter.py",
+      "sha256": "2c5b9924fe739d254cb34b6427adc38e1d6ea2bc167aa84d5c9e1bd54f70842e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_7_gpu_adapter.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n1_metrics.py",
+      "sha256": "7b24792197ef20b0df4cead22f36f90515082d931e61121055e84fc661a37932",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n1_metrics.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_3_command_relay.py",
+      "sha256": "6fc65eb29c9c81ce5c293cfac2cb23d6c4fdf339b0043c5d3ac41890547af6c5",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_3_command_relay.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_3_contract.py",
+      "sha256": "b3315f26dcf4bf2bfe5918069331562b5c1101e0d5d81603fcbe452d89422137",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_3_contract.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_4_recovery.py",
+      "sha256": "19bcdb6dca30c672b5e9699765f0a85be6062c97417c7b8613c06f9ce98ab11f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_4_recovery.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_4c_runtime_attribution.py",
+      "sha256": "9edc8d18ec956dd42884fe57e6e2a6b52ed663f88e9d100f896db0d8c58cfe20",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_4c_runtime_attribution.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_pre3_audit.py",
+      "sha256": "8b5447d44d85e0f87f51a755189e1fc5932546c9d4ba85a85f7c78079fcc0d14",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_pre3_audit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_pre3_sensor_relay.py",
+      "sha256": "40e6e81639e9bff6f11cf3992612273d44b734276e361c6a8dc9068d87014f9c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_pre3_sensor_relay.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_pre_audit.py",
+      "sha256": "8ceaa4c5d3ea11a55defef9750a2345a063332b918b3ca04d186454d6c048e68",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_pre_audit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_pre_no_reverse_probe.py",
+      "sha256": "512064a0d085eb3c4a7615be47895234b0a9e4ddfeb145b55f0d4ed927cbdcb5",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_pre_no_reverse_probe.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_pre_safety_gate.py",
+      "sha256": "fc6470a05f546ba5a3f4a3ab943624af48fa1f40794d963388d1ff303f6faa9d",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_pre_safety_gate.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_pre_scenarios.py",
+      "sha256": "ee87d4b0656799045d7b6c04408b1b24770101bf7a529955f3011eda95c36b76",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_pre_scenarios.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/n2_pre_semantics.py",
+      "sha256": "afe045e52dddb4e4d41afab711942e19168448ab2b26adeb47f1318826e5024d",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/n2_pre_semantics.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/path_validation.py",
+      "sha256": "6ba4d944ba24c79012db081fca79b89e8e461e14daa3e08583b79f7d704fe571",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/path_validation.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/scan_self_filter.py",
+      "sha256": "40c5db05d7dfc14fde7c2bd1a98c76129d487e611f20488fbfc06086bd07be05",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/scan_self_filter.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/r1_neupan_integration/torch_runtime_bootstrap.py",
+      "sha256": "991a6dcc4acb64b4b36e6ae5a0294f6a07c661a93b91c93f78c6314c886d658c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/r1_neupan_integration/torch_runtime_bootstrap.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/resource/r1_neupan_integration",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/resource/r1_neupan_integration"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/command_stabilizer_unit.py",
+      "sha256": "a6a0b5b6e93e4f795acfab157ba6f569e51e88ff00f76c3065b204c694cf6e04",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/command_stabilizer_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/forward_only_unit.py",
+      "sha256": "f06367e5f29c666dfc4b8f0616f3ed7049d250ad4c2ced6b7b4cccb834899d81",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/forward_only_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/latest_input_scheduler_unit.py",
+      "sha256": "72f55cb54094efa984e7b69b505cf4ad4a7253b0d2aecf4bda0c5f563dd1c55e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/latest_input_scheduler_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_10_contention.py",
+      "sha256": "e9fc3dcd1f197f51d19bd6655bdb1c5702bb3680477e690c404ec952d035cd00",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_10_contention.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_10_replay.py",
+      "sha256": "f6c7915ebdbb7f389c965e6b907b7122173d31b8f147632687a48d771d382985",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_10_replay.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_11_direct_ecos_replay.py",
+      "sha256": "460ced796952008660ebeea22bb1a18ac8ae0dad165d5392feaadbc755e9d41f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_11_direct_ecos_replay.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_11_high_level_replay.py",
+      "sha256": "66d88e3b0ca0e7d26e9e58d20a101471bff91f4c816be702a9b3f3e09ba2d9dc",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_11_high_level_replay.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_12_layer_attribution.py",
+      "sha256": "732bdb5e444ed40e5ef15b63c48c56606d97290496bb76bbfbcdb6e6684220cc",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_12_layer_attribution.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_5_cprofile_wrapper.py",
+      "sha256": "63d87353fcca9d511fd1b84c6356f60846e1b27619d7d799cb4bd10be27f9869",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_5_cprofile_wrapper.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_6_benchmark.py",
+      "sha256": "9c171b1bb26b9031957e2394aa0137a6943f13872c4ca41a58fc04126e541735",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_6_benchmark.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_7_core_benchmark.py",
+      "sha256": "5efd6b09990cee06608400326c5b9b4cf01c87b7a6c1f31294482647500168bd",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_7_core_benchmark.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_8_dependency_diff.py",
+      "sha256": "d40c601ba3ad0395538ba4747343ce635706c4ca285483f6dbe56922d4104860",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_8_dependency_diff.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_8_dune_attribution.py",
+      "sha256": "cfdfd0323dfecd2c90a9a9807194d357a15149bae97077db4deecf4e4b975379",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_8_dune_attribution.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_8_official_corridor.py",
+      "sha256": "7e047a4a361f6e9e5838ee684683dac270e2a38a178c71002b29ccbdfb582115",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_8_official_corridor.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_8_profile_model.py",
+      "sha256": "766f9b762ae800fb84cc77617e6d3853ec94fd00f4605dd3839c2811c8c19b24",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_8_profile_model.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_9_core_benchmark.py",
+      "sha256": "c9253a224beee58eb4b4fc067382900e238f59eaa045ba73fbd785a8d38f14b8",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_9_core_benchmark.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n1_gear_context_unit.py",
+      "sha256": "9e5a3aee973c89df99e4466cbaf69f3f363b26e7d457d0f7c8921f76bda28e99",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n1_gear_context_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_1_failure_attribution_report.py",
+      "sha256": "d7053836846aa76293e78aea4d6d4b609cb3366f1ec6be66f7e036031214f9ef",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_1_failure_attribution_report.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_1_geometry_audit.py",
+      "sha256": "b7bb9685f072185e162f5cbc57e896cce2a516f385dc92eb95b10915c73fe7e6",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_1_geometry_audit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_2_failure_attribution.py",
+      "sha256": "757f7f7f6352f5d432cbb80ad20a9077a9150d8f9217628bbf94ca2350f80708",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_2_failure_attribution.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_3_contract_unit.py",
+      "sha256": "18a2eca6271e9bfc7d08b2f870aff0a7f6269b4c4509db8901a24b828acdc91c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_3_contract_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_3_report.py",
+      "sha256": "a4f76350a618af86d3ee1090e7479c30e7d3e13a322265624be2e59b46724fc3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_3_report.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_3r1_live_fault.py",
+      "sha256": "30e63f10304e95a1b81342798e04137499c1c0ffd6d99955d7352dd168bb32bd",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_3r1_live_fault.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_3r1_report.py",
+      "sha256": "f5aac14119c452f17f1c62d91604cc9259db38107e44ce45f24b3e9afcaa223c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_3r1_report.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4_candidate_replay.py",
+      "sha256": "233c618ca8ed86ff27d8db3b9b695299f8885340d4a18af3c92d5746bb8c5ec7",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4_candidate_replay.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4_exact_replay.py",
+      "sha256": "6238861e3a601a04f6d26e80d850a107826bebd630311308b7832d9d78ae6640",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4_exact_replay.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4_recovery_unit.py",
+      "sha256": "b71f3dcc6b20ed15270b16f5812376e25ee99e90ed231212cb32627590d8d907",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4_recovery_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4_shadow.py",
+      "sha256": "f5296cf1aed248f8140257760f8c131ba7ec636989a974da074cdafde714a806",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4_shadow.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c2_matrix_report.py",
+      "sha256": "97f896a793ce71f94bafb15b83782d3ff568066c1ed6bd5732285a90b7b3fa56",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c2_matrix_report.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c3_reproducibility_attribution.py",
+      "sha256": "9890acb8ca664dd6d488c88d53d8c97466530d960158e1676ecd0a9da48421f3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c3_reproducibility_attribution.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c4_experiment_d_analysis.py",
+      "sha256": "afbdd7aea5cd3034237b6f98fc6cdc1577343a64dcd4f346c557b4d1b77ccda6",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c4_experiment_d_analysis.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c4_fixed_command_replay.py",
+      "sha256": "1768b58aa03460c32665a3fbbd4f47e83caa02a23b9aedf2702edac7b83b4ea5",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c4_fixed_command_replay.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c4_planner_stability.py",
+      "sha256": "b4c81a174f9c551171eb32adc961fb987475b935f1c82302c17b5e6d38b0e04f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c4_planner_stability.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c5_final_report.py",
+      "sha256": "b8aab9d9f27768c2400ce0b00b758534e4323bd9616b003dd684acfc2a02b9c2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c5_final_report.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c5_fixed_command_replay.py",
+      "sha256": "085d22946f9f438ba31926e1d81ab9ccb8006991bbe103c1043d956c247fe039",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c5_fixed_command_replay.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c5_physics_ab_report.py",
+      "sha256": "6799e131348dd7f453891c6fb84fdff7db8097baf22cbc4375c4e7b64eec27d0",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c5_physics_ab_report.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c5_preprocess_determinism.py",
+      "sha256": "9bd109273edaeafb2d19e4795ece8557ad2c384075e0e3127fc970a3c87e4fc2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c5_preprocess_determinism.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c8_sync_conductor.py",
+      "sha256": "4e3faa53a6173b8a921bce27e6800cab4fd24d08b6cf37395e34884fce1fbb05",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c8_sync_conductor.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c_reproducibility_report.py",
+      "sha256": "68001efb4ce9e4ad1d616bafd9e9fc6e0baceb02570108a0b58097b2b0076ddc",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c_reproducibility_report.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_4c_runtime_report.py",
+      "sha256": "4c4b37cf782ebd51f32d93dd82f4ddaec7ab08939d9b8a2d52a6c601d0b883ee",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_4c_runtime_report.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_forward_only_report.py",
+      "sha256": "71e0f34a9bf4548a11c76e9b79a0f2fa48d07277d29c626368f6efaf3d01d02e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_forward_only_report.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_pre_safety_unit.py",
+      "sha256": "83d55005ef332d3e7b20953141ddb81bffbda95e09bd6270355bb6023983de10",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_pre_safety_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_pre_semantics_unit.py",
+      "sha256": "ed11f90c5bafa136a77c8c9effb3a8491e6be5407eac143a301df101cec4bfd7",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_pre_semantics_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/n2_scan_self_filter_unit.py",
+      "sha256": "45cebce9a61bc1b3081948ba1c620d636dd85bce6658d701f798d1e3a02c2059",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/n2_scan_self_filter_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/nav2_goal_order_unit.py",
+      "sha256": "096ab12b7e92c9769fb223ac72ddca8e65966852812d8bd9b73423e571663718",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/nav2_goal_order_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/scripts/path_validation_unit.py",
+      "sha256": "7fb41125366f26484079aba654e2de609faa0f630a69b68ca1dc8bc4f5898b64",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/scripts/path_validation_unit.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/setup.cfg",
+      "sha256": "775f2ab8081d0c99e99fa2836dd3755c738da122674a62a4fe5d5d4a769742c9",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/setup.cfg"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/setup.py",
+      "sha256": "150516237b7e66f62b3f474d25b620a3f79063c64db712c0efeb7e1e45484813",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/setup.py"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/free_space.sdf",
+      "sha256": "44b6cb4e88ebc55890ce63b083685225450af29d9711685aacea7f2a10aa0565",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/free_space.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_b1_single_table.sdf",
+      "sha256": "4a083a540a996972530d1a5ccddd4a4773a382db08874702c56802b1937f2b11",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_b1_single_table.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_b2_wide_channel.sdf",
+      "sha256": "b2e8c001b09015d13ad7cdda0a833aeb81346cc579e4f944cadea3f49742250f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_b2_wide_channel.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_b3_table_legs.sdf",
+      "sha256": "1125ae7c17b4db9db60c99904ef4e1e8ff06354aa69f65a99ab8b1e04324ace2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_b3_table_legs.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_b4_center_obstacle.sdf",
+      "sha256": "b358a4a28b9751984b385b7f3ba7a1d3b1f9c4e00eb3006ace0e1a01ee4fdcf6",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_b4_center_obstacle.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_b5_one_side_open.sdf",
+      "sha256": "42565d426799a4f097cc56331314469649b600d6d21ddda48e0307c96eef4881",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_b5_one_side_open.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_c1_wide_corridor.sdf",
+      "sha256": "d5a476c3f34836db1c5d305e1fb93b1d83eb527f8708892e91ce44029dcf4eb8",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_c1_wide_corridor.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_c2_medium_corridor.sdf",
+      "sha256": "5e06add0fd1fde338f0a2f6089201d8bf83367516cf1973ba8180842f711311f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_c2_medium_corridor.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_c3_narrow_corridor.sdf",
+      "sha256": "7d852d182333b38382f017e544498941770bb82e7429fdf203346050279879e2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_c3_narrow_corridor.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_d1_corner_obstacle.sdf",
+      "sha256": "a2c6cee1ccf16aa392eb0699cb50191b397580a01a57974ca030322d83bad160",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_d1_corner_obstacle.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_d2_u_space.sdf",
+      "sha256": "f263c534e034a19c3a18dacff7396f0bcc782fd3779b0255c193ea16d8a51992",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_d2_u_space.sdf"
+    },
+    {
+      "repository_path": "packages/r1_neupan_integration/worlds/n2_d3_goal_furniture.sdf",
+      "sha256": "d47efbcf708cfda129088dac92d3bf447421a7fd75c42d1bafe96a01ac2af77d",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_neupan_integration/worlds/n2_d3_goal_furniture.sdf"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/.flake8",
+      "sha256": "f2002f03cc85018d4afb3cd0d0b52284a55dc5fcbfd9b029d7124ec901fc9179",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/.flake8"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/.pep257",
+      "sha256": "d26ff95f0113475a52d35b10f89486c2c3b9eec816e60a34c6400e23dfb2546f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/.pep257"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/.pylintrc",
+      "sha256": "badc141e0582740988df1bb54fbbf54bacd74c817c17bdfc2741d928984bc468",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/.pylintrc"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/README.md",
+      "sha256": "42295408913456f6988bfd3b144261020f655ec56d8f118c407e0a62e2b0f518",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/README.md"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/README_cn.md",
+      "sha256": "541e2f074e345674c8f593238ca46d1fe0e1f3e57ae28a6aea062bc068f03cf7",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/README_cn.md"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/dune_checkpoint/scout_model_5000.pth",
+      "sha256": "0f8e51f22240e8fb87735e1fa864bd94cb0db6d4001d4dc2bf05f5f1f13dc972",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/dune_checkpoint/scout_model_5000.pth"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/dune_checkpoint/scout_model_5000_v2.pth",
+      "sha256": "66c55fedae14bc4684f0dee9c37fe5d0e5a86abfce74ddf99af2663e85edb8de",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/dune_checkpoint/scout_model_5000_v2.pth"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/README.md",
+      "sha256": "6e3d81d151e1b69b54a090a3fbb82abfd514e64bf507bc9fc018dc9f05557cec",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/README.md"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/_template/README.md",
+      "sha256": "43c77ea4b4eb611cd2ffab129191d60321a247dff1ab09663f48c28089939307",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/_template/README.md"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/_template/models/README.md",
+      "sha256": "b715d546c3156f1a09fa7aec4fcf96695c4fa96d8475d313eacce96b9dfad0a6",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/_template/models/README.md"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/_template/planner.yaml.template",
+      "sha256": "1b7c0f6ac1a663c95061b8522835fac8622c53195125074f94c4eae8ebb59340",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/_template/planner.yaml.template"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/_template/robot.yaml.template",
+      "sha256": "09b7d1d075a4569912231a179cd8f4c6714c8ecd4da90cd4887b8ed4552c5f2e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/_template/robot.yaml.template"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/limo/models/dune_model_5000.pth",
+      "sha256": "7ca92abf1e938cdb6a21010cb19671648b2ff48f8dbb871393f716d57cb9f9e2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/limo/models/dune_model_5000.pth"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/limo/planner.yaml",
+      "sha256": "1b7c0f6ac1a663c95061b8522835fac8622c53195125074f94c4eae8ebb59340",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/limo/planner.yaml"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/limo/robot.yaml",
+      "sha256": "09b7d1d075a4569912231a179cd8f4c6714c8ecd4da90cd4887b8ed4552c5f2e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/limo/robot.yaml"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/ranger/models/dune_model_5000.pth",
+      "sha256": "36c53a311b1b9d8740c4a396146ed45085d5ea06ae669e1dc1870a5d193b97b3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/ranger/models/dune_model_5000.pth"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/ranger/planner.yaml",
+      "sha256": "54ec3525816ead506a439a6e4e097aade9c79ef019e11202712b4c2756432a2a",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/ranger/planner.yaml"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/ranger/robot.yaml",
+      "sha256": "d47d6537f75bb42a34cd86aba86c0f1e1749a95d3933298e2e3fd0e89950bc51",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/ranger/robot.yaml"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/scout/models/dune_model_5000.pth",
+      "sha256": "66c55fedae14bc4684f0dee9c37fe5d0e5a86abfce74ddf99af2663e85edb8de",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/scout/models/dune_model_5000.pth"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/scout/planner.yaml",
+      "sha256": "d63bcf225af39c75308fe7a0777c4fec3d702a124929f86883408a53c92e8729",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/scout/planner.yaml"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/scout/robot.yaml",
+      "sha256": "e65946a8da8ae59f5052c0cec2422bf09a63c670e3aeae9a03849b61287a79cd",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/scout/robot.yaml"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/simulation/models/dune_model_5000.pth",
+      "sha256": "7ca92abf1e938cdb6a21010cb19671648b2ff48f8dbb871393f716d57cb9f9e2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/simulation/models/dune_model_5000.pth"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/simulation/planner.yaml",
+      "sha256": "be3bd1f37acdc3d8c7bf877d73209df0df8154e44c4970fb77f2bc5c9293ec0e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/simulation/planner.yaml"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/config/robots/simulation/robot.yaml",
+      "sha256": "53865f0874849593106d738069d9ebe545e5c0a2d97b04f1340b837188e0fd75",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/config/robots/simulation/robot.yaml"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/launch/limo.launch.py",
+      "sha256": "19b1a9b5a235ed7c5eb4d86507aa9ddd4324ebb4ee69108013eff350861bf3fc",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/launch/limo.launch.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/launch/ranger.launch.py",
+      "sha256": "ea83ea971b88d881f7acfcc639d5cfe4b0f94f5f18896d8d60d08fac04f4cfe1",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/launch/ranger.launch.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/launch/scout.launch.py",
+      "sha256": "83d965b636fb66ddd0b6835c1a615a030e3e8b26125753e7cfd3c8bde8f2edd7",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/launch/scout.launch.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/launch/sim_complete.launch.py",
+      "sha256": "0b21f041c13f752c1006f3afa9d6c38b73eeb7ddc5d6755f4a3bb62e80906eac",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/launch/sim_complete.launch.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/launch/simulation.launch.py",
+      "sha256": "5ea29c52c26181a943442460aea5daaf8263f75b3aece32533424ba4fb24b182",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/launch/simulation.launch.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/neupan_ros2/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/neupan_ros2/__init__.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/neupan_ros2/neupan_node.py",
+      "sha256": "420f6fc518d5521953844ada88c1313308bebf9b4f7ae6bd8e175a8f33eafb22",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/neupan_ros2/neupan_node.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/neupan_ros2/utils.py",
+      "sha256": "67407208d8bf202fe4d9bdf07b815058383eb93d69a080c094c4ee6bae893cfe",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/neupan_ros2/utils.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/neupan_ros2/visualization_manager.py",
+      "sha256": "f7110285b9df53e0b7321546b628344a73d7f911d2a433a755287823f57b7e39",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/neupan_ros2/visualization_manager.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/package.xml",
+      "sha256": "ddfcf387da01d8aabba8337a96ec74ad947599fce8f5e3d97b29606cf8ade768",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/package.xml"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/resource/neupan_ros2",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/resource/neupan_ros2"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/rviz/neupan.rviz",
+      "sha256": "d30b9871cf4cc8967cf9c43018e60287da1d13a0505c8bcb30c9cba352f82ace",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/rviz/neupan.rviz"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/rviz/neupan_sim.rviz",
+      "sha256": "ce2113903304d509f1876d32d927dc8bdff5202bf0b396568e3e9ac01d104269",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/rviz/neupan_sim.rviz"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/setup.cfg",
+      "sha256": "4493d1984e59e1374bccdeaf53f396efbc728048fcd53eb69c00b1c8c9fb6945",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/setup.cfg"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/setup.py",
+      "sha256": "00fa50ac5139189075d51bf834f3fe7cf6809953899fe42eebb4db1d01a48744",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/setup.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/test/test_copyright.py",
+      "sha256": "ea71bbbc6247b5c14d176ed09f39ee274d563cc9b2ec355828ea451ceff31757",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/test/test_copyright.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/test/test_flake8.py",
+      "sha256": "37a813a0507f0ce51a2d0b57312d2cc078a0307a3ca85580ea801b0d2f9755d2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/test/test_flake8.py"
+    },
+    {
+      "repository_path": "packages/neupan_ros2/test/test_pep257.py",
+      "sha256": "13cce3400b6f2788c370ef21414c0ff63650270dfffdb723dc2b228ef87bcb43",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/neupan_ros2/test/test_pep257.py"
+    },
+    {
+      "repository_path": "packages/r1_collision_guard/CMakeLists.txt",
+      "sha256": "1474cb4538f8dba37842935bb21a848583bfaed9be4c5a0dca83c15dae429177",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_collision_guard/CMakeLists.txt"
+    },
+    {
+      "repository_path": "packages/r1_collision_guard/UPSTREAM_BASELINE.md",
+      "sha256": "93dcd433bd5779398e37b896bc35896ef41a867b0e35f51064600972f96bc563",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_collision_guard/UPSTREAM_BASELINE.md"
+    },
+    {
+      "repository_path": "packages/r1_collision_guard/config/r1_collision_guard_hw1.yaml",
+      "sha256": "57a7816656a3c0564a06e2b36062f1d744af04b9cddab68d4e5fc38df3ec16a6",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_collision_guard/config/r1_collision_guard_hw1.yaml"
+    },
+    {
+      "repository_path": "packages/r1_collision_guard/include/r1_collision_guard/guard_logic.hpp",
+      "sha256": "6c9422920bf7676f245263aa6af6019e53a0e6180b2b7b6db6f1f4fa36b051ef",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_collision_guard/include/r1_collision_guard/guard_logic.hpp"
+    },
+    {
+      "repository_path": "packages/r1_collision_guard/include/r1_collision_guard/scan_filter.hpp",
+      "sha256": "c9f04a38ccf1688d8e60f9a531e6fe5c7ede01497dafc9e944b1e8233284c354",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_collision_guard/include/r1_collision_guard/scan_filter.hpp"
+    },
+    {
+      "repository_path": "packages/r1_collision_guard/package.xml",
+      "sha256": "f9860f894f1f73662dfdefe846e6b3a3931911c756095313153d7f9163b9af9b",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_collision_guard/package.xml"
+    },
+    {
+      "repository_path": "packages/r1_collision_guard/src/collision_guard_node.cpp",
+      "sha256": "885879c25f3a7a9ab60ef7cb494b34d0c57defa033ea95277d5a2b3f3e7dc35b",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_collision_guard/src/collision_guard_node.cpp"
+    },
+    {
+      "repository_path": "packages/r1_collision_guard/src/guard_logic.cpp",
+      "sha256": "0d4e5c38f73bbf33b12e80e7eb397bae957b0f3c753452ba8db63881b3266247",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_collision_guard/src/guard_logic.cpp"
+    },
+    {
+      "repository_path": "packages/r1_collision_guard/test/test_guard_logic.cpp",
+      "sha256": "662850cc5ad03c12c0a9f4cdaef3b64e96313384551baf8b066134fe8aba6cc0",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/r1_collision_guard/test/test_guard_logic.cpp"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/.gitignore",
+      "sha256": "617f845372bec21b300b13e29be793d526586b51eeeafd14204be29d465b7c92",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/.gitignore"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/LICENSE",
+      "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/LICENSE"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/README.md",
+      "sha256": "d5c1f6bd68ed231d02c4f4d5ce2f0532b46aa5fe830e9cd9eb21928818cd2226",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/README.md"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/__init__.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/LON/LON_corridor.py",
+      "sha256": "cf1b042147ef0806c3691f72506033286d595da2bdbac31373a297d9062e51ea",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/LON/LON_corridor.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/LON/LON_corridor.yaml",
+      "sha256": "dc41a240aee735caa33bb3c999f1b3bcace9bc3f3e76f16f2316e8a8a26dd8fd",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/LON/LON_corridor.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/LON/LON_corridor_01.py",
+      "sha256": "6efd38475053f5bc01ad68bd11532b6f56c0698967dff7814d737a6cf4d2ae10",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/LON/LON_corridor_01.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/LON/LON_corridor_01.yaml",
+      "sha256": "362ec438ec668bb0229ee621c4519e595f9a47889033d4184afbf9bf8dc931f9",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/LON/LON_corridor_01.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/LON/LON_corridor_02.py",
+      "sha256": "7cf05aec2b808a12528b0529610669e08fe7291ce39305fdab19bd7aee42d6aa",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/LON/LON_corridor_02.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/LON/LON_corridor_02.yaml",
+      "sha256": "823f144ddbeadb1ebdcb9a21a5d833fb1e6922194abb52e90f05f4317f7adb36",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/LON/LON_corridor_02.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/LON/planner.yaml",
+      "sha256": "3b77ebe11166cff95528cbe4c89412a871b16ef17b598577908dbc4d246b3285",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/LON/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/LON/planner_0.1.yaml",
+      "sha256": "0d5e73122fe87846e98014dab1ed119b1a1abd2d73a2c038e9200c028fe4b098",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/LON/planner_0.1.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/LON/planner_0.2.yaml",
+      "sha256": "19b49784072d1888acd7b468239dd93c3cd31b9957543377350cfc24455c1d2e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/LON/planner_0.2.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/animation/corridor_omni_ani.gif",
+      "sha256": "5a48ca81a0f562fbb18acb451f5ca25fbada0d0ba8f76ec59622a936fb72b66b",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/animation/corridor_omni_ani.gif"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/animation/dyna_non_obs_omni_ani.gif",
+      "sha256": "f4bfca2e4dba243b2781a0a2d6b8133f9d3ee966515744574b6d3846422be5e0",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/animation/dyna_non_obs_omni_ani.gif"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/convex_obs/acker/env.yaml",
+      "sha256": "93dfa7073b425affe1c499c091b371c309e79af1dbeb7b2da17cf22750a3dda3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/convex_obs/acker/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/convex_obs/acker/planner.yaml",
+      "sha256": "2a5a2f8fa1618f65d8ea7ba9e7357c4423008e0abc733f8ea73dbbc69a4ee409",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/convex_obs/acker/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/convex_obs/diff/env.yaml",
+      "sha256": "441b19309d1310a4459af581cd2933690ccdb1253b778463e2f2d03b25587868",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/convex_obs/diff/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/convex_obs/diff/planner.yaml",
+      "sha256": "3acbe44666c74eeefd42abc42f2065a24f51c8e67c76abe63a2aa09fa107fe06",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/convex_obs/diff/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/convex_obs/omni/env.yaml",
+      "sha256": "54f43d21f8a39d15df8aed1b57342ec9d099086ff961b3bbe30cca125392feed",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/convex_obs/omni/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/convex_obs/omni/planner.yaml",
+      "sha256": "510f9f5024260a009c82d7fef8977eec85402f879118ff8a395d1d69b669c360",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/convex_obs/omni/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/corridor/acker/env.yaml",
+      "sha256": "5a5939c7e51de16acb1cdb4c716224633468af2f597ffd3f0d444d3042b65170",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/corridor/acker/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/corridor/acker/planner.yaml",
+      "sha256": "eb22d6ae3d04da6bedcb5990d50e10b4a753902349232a4fe276b715b4f3c06e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/corridor/acker/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/corridor/diff/env.yaml",
+      "sha256": "9a669ccefc5bd040692a9977d0b7549ac308b0b6fcd9610ad028ea6f57d124ba",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/corridor/diff/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/corridor/diff/planner.yaml",
+      "sha256": "a4dbf06ead9bbf371555aff78aa4ba45b65a51c4dc082753ab84e6a752017ae8",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/corridor/diff/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/corridor/omni/env.yaml",
+      "sha256": "250d74e0a8e547660368f51f1c3e3c40b8367234ff0e992c080a5acde8a60895",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/corridor/omni/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/corridor/omni/planner.yaml",
+      "sha256": "691bcf1c2a2759dbbc3eece382cdb9e99b9311f7d2c847dc8370a56a646728b3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/corridor/omni/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dune_train/dune_train_acker.py",
+      "sha256": "193c3c470872ba367e9f0a6dcd2168691710fccb27a30d23ea99444eb77b3b3f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dune_train/dune_train_acker.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dune_train/dune_train_acker.yaml",
+      "sha256": "3200d7f7fe97b11740c1caf966f28e60c4c1c000ca0eecf96ed1aed21d191481",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dune_train/dune_train_acker.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dune_train/dune_train_diff.py",
+      "sha256": "e80c07ac13928585f39dd1e4208acd37efde8e50e548b461565733935f322183",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dune_train/dune_train_diff.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dune_train/dune_train_diff.yaml",
+      "sha256": "44304df081a42f0facd9bc05d15c5afb24c0e00f57c61b8a9e5bd63660c17ff8",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dune_train/dune_train_diff.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_non_obs/acker/env.yaml",
+      "sha256": "9f2ff3a16c28edde6948ba9b17152819bdf6fd3f0d6ab12bcabd8c48f6a27f0a",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_non_obs/acker/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_non_obs/acker/planner.yaml",
+      "sha256": "aea544319c31745cb0a650eb9ac82999508ac5adcfa9478092ce49043ee0b35e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_non_obs/acker/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_non_obs/diff/env.yaml",
+      "sha256": "1168b72555823974d17b919d53ba560c39ea345a973ae6e34911c369bb9d74bd",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_non_obs/diff/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_non_obs/diff/planner.yaml",
+      "sha256": "36bfec0c1698ed36007825e9626e91a3ef0b7e13fb4d08376409281ade874905",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_non_obs/diff/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_non_obs/omni/env.yaml",
+      "sha256": "e886605044c96458e95e480eae82ff57719b07105ea5f8035eee8e394d0f3491",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_non_obs/omni/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_non_obs/omni/planner.yaml",
+      "sha256": "a2a1db6d15735cd8e4865525a75666a565fff81eaa4231881751262465687a77",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_non_obs/omni/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_obs/acker/env.yaml",
+      "sha256": "e2390be619b0269d0ba8b6cc299c1453fa07e2469ce5fd71cc161ea4b3ed5941",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_obs/acker/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_obs/acker/planner.yaml",
+      "sha256": "3cc47ca1c3efed70c15db86f22a957b7b6b367a647fb39c589ee9d2c034e2ed3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_obs/acker/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_obs/diff/env.yaml",
+      "sha256": "4442df6e467b4dab27b9b79259a9ebf0ff635dd42b1ad34d5aac32aa3eacb63b",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_obs/diff/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_obs/diff/planner.yaml",
+      "sha256": "aeb16c1a62e12fa258bb82d8c0972e75d77a468e1deedbe17d15cfc6ee84b29c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_obs/diff/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_obs/omni/env.yaml",
+      "sha256": "aa7bba62f25142c4a76b27b129d14fe6719cca5709e4590fcaba7578aa66b032",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_obs/omni/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/dyna_obs/omni/planner.yaml",
+      "sha256": "2e040db528b5b2c0421d106a14b7a472ca40882c26fde9a305f573c08120f749",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/dyna_obs/omni/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_0.pth",
+      "sha256": "86d615691d6cb8b8ee974c03e435af76d0a67c1640f16ab24335835011689b16",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_0.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_1000.pth",
+      "sha256": "2c3508c12490087d28a4f143624876cab06dae76f5c18abc4aa2631e87de091c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_1000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_1500.pth",
+      "sha256": "d55fe04abacc882126ad9dea654f4564beb8befcc2c190a7eaadbccae8f47b06",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_1500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_2000.pth",
+      "sha256": "f6b37054be7336c2cb53c2c83c1a5f64d4fa561b98d25797085d176e2d840f5e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_2000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_2500.pth",
+      "sha256": "b9aaf27c624fca1642af6424c367cc2aad6eb880dd18a7875440b8fc42b3bcce",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_2500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_3000.pth",
+      "sha256": "172d0132b29ad91903f68f50ba8607ed9aaa658aa8cbbadb475a89ef24831728",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_3000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_3500.pth",
+      "sha256": "d0c12231503ab8c4b48eca3bc8e807d62676228ce2594d6467e30b6b64d689e3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_3500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_4000.pth",
+      "sha256": "1a7f751ed5a78d83fb4c32fe455abefab39f378a3ed81498261b0a9cf79cb2ec",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_4000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_4500.pth",
+      "sha256": "d7455101958cea08d49054289fd32cec721cf8642e9b8e00dceaa1ad1289adcb",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_4500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_500.pth",
+      "sha256": "47eaf3c6651ed4fc22baa67008dc20eb4a197a88b42359b089f3fba7ef663aa7",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/model_5000.pth",
+      "sha256": "59bb260eaf601ebff8c685cd0317c9043576ece850c0b8c38e064a6f73939e5c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/model_5000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/results.txt",
+      "sha256": "f222e1698cd764ce4f21316fb4508c5420488b5865eb142795906f0567836ba8",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/results.txt"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/acker_robot_default/train_dict.pkl",
+      "sha256": "4a3b93658bb16a4610a85bca7b8e104485b0ffc1d995990e392eab451bda2ca8",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/acker_robot_default/train_dict.pkl"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_0.pth",
+      "sha256": "a2d6876f9d64f8d93564398efae47cb2229cac48dbd5b86d3d8588a25bce502f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_0.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_1000.pth",
+      "sha256": "91d1f0c0a053075b288ee67eca60c71dd67abb8a30421a630bdc1deaeb0ea75c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_1000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_1500.pth",
+      "sha256": "3daa174d6b25d9798b1ea73bae9500131bb856d4af5949a9487fe1ecd3ccb26e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_1500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_2000.pth",
+      "sha256": "e10b6e16002978ac444c5e7967503708613a916d7e05e890ed008c8719f57688",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_2000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_2500.pth",
+      "sha256": "1b9f7226fa420cd68992ac797b23728ae1b97f7f057354ec7f43c2c059cc09ff",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_2500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_3000.pth",
+      "sha256": "30303b0e2b0cb32ed6e43025923e6bd9968e2e5895d0f46a056bb9be98d9744a",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_3000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_3500.pth",
+      "sha256": "d503ee42e0cd92df0358bc0b6cefffa72edaf97f59fa17a88dddbb1ff68f70eb",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_3500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_4000.pth",
+      "sha256": "bb0228a6d1072af3ef0022bbe5c7f1b635f6414a85b5c7375a8ae39451e44b91",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_4000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_4500.pth",
+      "sha256": "0210e6c27ee9c65debbf0f158485547d4ea3a70f934fce2f8269f11422bf3d50",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_4500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_500.pth",
+      "sha256": "a111ab961be51e6b71f53dedec3513f7d6c71be5ae0dd93941b967a641136ad8",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/model_5000.pth",
+      "sha256": "ab2056632efef39900e63785aa0c03b50e39baf86ae875e0f5b9b8a29ff9086d",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/model_5000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/results.txt",
+      "sha256": "17c0d93ec49e71aacffd9d1a967f7e9dadb0040c04c8165a9c8b4eca51bf4317",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/results.txt"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/diff_robot_default/train_dict.pkl",
+      "sha256": "73479f09ca6ddab98e2963cd4e624105a27d9cc360d36692caed7a6b7c1b2bec",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/diff_robot_default/train_dict.pkl"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_0.pth",
+      "sha256": "4d847fc768d1956857b94db6cf1119024f2c77aca00e53ee3cbc9c14221ba3fe",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_0.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_1000.pth",
+      "sha256": "ff482b7aae01a34c1a1770886598a9a3b688a7344a2eaf1e13714c417628aeb8",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_1000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_1500.pth",
+      "sha256": "cc835538a0b7bb86e984733f41bea08c7c3910c14637ce2e25d9b421b5cb144a",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_1500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_2000.pth",
+      "sha256": "96741892c8c8820b64bb65f5e7b2af19e9ace790937326c92fbe817bca113aa4",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_2000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_2500.pth",
+      "sha256": "03f312a5c2df3b0511a119a6efde03d3430b36ca907a21da3c97bef7275cea4c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_2500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_3000.pth",
+      "sha256": "dead4c1d761e96aa5776111c4a88d6a1dcd325d04a4b3ed915a71d145f04f46a",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_3000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_3500.pth",
+      "sha256": "98317fb34652335509f29cb590f3a061ca037845e0e66e34204ec68ea38cbb62",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_3500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_4000.pth",
+      "sha256": "2f537a1554481e9f934fee5cb484aeb1c754b41e591ed1d2c804fcd97a8a28d8",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_4000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_4500.pth",
+      "sha256": "df61c15c9e1c7fea2484472ab4399feef1d2ca6104c17e06f3e6f86e11faeec1",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_4500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_500.pth",
+      "sha256": "5f1be6ed89d72d120293f3e37a95a7bf49d0a4fd2aa7ce5ca3f6df8e8d78976e",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_500.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/model_5000.pth",
+      "sha256": "b06f82357214d77436495363a98fff1ea3c26275f3f959df86e058f84e98bbc2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/model_5000.pth"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/results.txt",
+      "sha256": "b8483fdde3eb4dead217f8f9664119dc8a735aa550bc6b8bb9dd05800281a155",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/results.txt"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/model/polygon_robot/train_dict.pkl",
+      "sha256": "666374b8c6d4b059cd2dfb81166c35acc7f34ae5ec4e8dcb343abad9c652bb85",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/model/polygon_robot/train_dict.pkl"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/non_obs/acker/env.yaml",
+      "sha256": "32cd85473dd42fed63911346dcc4057f8bfbe4dd72bfc579067adb88bc77e382",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/non_obs/acker/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/non_obs/acker/planner.yaml",
+      "sha256": "3e1db62c5dc9078fbd2b78f6d046502b58c42385bbef12c0e63520ad67b02d8f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/non_obs/acker/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/non_obs/diff/env.yaml",
+      "sha256": "e31ca241f1b945baf35ff93fb2a89862cd10dd1e6ff5c27e1a58b05daddb8903",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/non_obs/diff/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/non_obs/diff/planner.yaml",
+      "sha256": "e6fbe493de33079059c12c3728020b01488b839a391d99672320c597f7d2b5c3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/non_obs/diff/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/non_obs/omni/env.yaml",
+      "sha256": "7f38a0b1c28e8784ade0075d3d35689955b99d37ac3769d5b98875eef5f201e5",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/non_obs/omni/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/non_obs/omni/planner.yaml",
+      "sha256": "e0a68e78a0d89e0b5de3c5eafce24e7c863228b9ae3e6a2a3d03e0e16fdaff85",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/non_obs/omni/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf/acker/env.yaml",
+      "sha256": "ccbb45a8b19b30feb9c9e48963f22aa035b9266f83c2983ff5c4ebc8d32a74fa",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf/acker/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf/acker/planner.yaml",
+      "sha256": "d6e58a5538bc1c6ef2e4b0bd7fef4233b58dd68f4d2bbdacfd1581941c9755c0",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf/acker/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf/diff/env.yaml",
+      "sha256": "2ebdd45b2c8f7bb986c5d37c0ef965da57d182d0b5bf43d2e2d1c8fae1edf4e4",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf/diff/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf/diff/planner.yaml",
+      "sha256": "ff1c08eea2b0cb4b7dee7ce501c555eadc4e15791c68d46f5f35af6c384c3fbd",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf/diff/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf/omni/env.yaml",
+      "sha256": "61e1882af8716f314196062b12e20f98269c5ccf5e02639c4d0b32bbdd238684",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf/omni/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf/omni/planner.yaml",
+      "sha256": "ae6227095a30cc48cd73b01b02c4b67b947db956fdc5e51e834b8671af6e4577",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf/omni/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf_obs/acker/env.yaml",
+      "sha256": "c4f21ac6b8d8e9132d77bd805331285c62cd586b65abe8b2b84d99fefc93b596",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf_obs/acker/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf_obs/acker/planner.yaml",
+      "sha256": "f0d069233086e26cd0350fafd2204d3e03fcb52a0158cddf4778854adab5e3c1",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf_obs/acker/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf_obs/diff/env.yaml",
+      "sha256": "07df26bed825e180cc37d4dc16de1eee7fba3cc4134b8684b5cb4af956a41ef3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf_obs/diff/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf_obs/diff/planner.yaml",
+      "sha256": "56dae7e345787deac6e1631294eb0b1bb6a7bde6ae436d14ef797b9bcb6b0c5a",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf_obs/diff/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf_obs/omni/env.yaml",
+      "sha256": "014dde8e4d5622f28135d21e193f052a24d84a34c34495d9923dfca8bc574bf0",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf_obs/omni/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/pf_obs/omni/planner.yaml",
+      "sha256": "5eb2b4433f89baf155f59b67465ca5f4b55d8fce2779cea70bd5154781370468",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/pf_obs/omni/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/polygon_robot/diff/env.yaml",
+      "sha256": "191b9f38e80730ae69a357513c82adfd49502d7b83c9c39e43f5e52b4af5772f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/polygon_robot/diff/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/polygon_robot/diff/planner.yaml",
+      "sha256": "9c7c2019ca956a77ba814b4a58e29357f85d870565c751e4b7076c6c76170399",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/polygon_robot/diff/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/polygon_robot/omni/env.yaml",
+      "sha256": "2b6d42cdcdfb76d9e6f79ff16fc479b8ab6a2e23c9c0473afded7732e9738133",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/polygon_robot/omni/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/polygon_robot/omni/planner.yaml",
+      "sha256": "79a75ebd13f2bacfc88864a98c4a44da573fc50ee48830db906df79979513af2",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/polygon_robot/omni/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/reverse/acker/env.yaml",
+      "sha256": "ff05f237d2322a0a1d46934bbd9362a4f65d8bd08244c569520748cd8b2447ff",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/reverse/acker/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/reverse/acker/planner.yaml",
+      "sha256": "1f9c7c28844eea757bcb3b331923651bb50c4abb523c2a13bc1f9396d7ea7ca6",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/reverse/acker/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/reverse/diff/env.yaml",
+      "sha256": "7607d42d3dffabf4ca83e7985a5778d2446230b01efda9a7f023dc903c619b5f",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/reverse/diff/env.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/reverse/diff/planner.yaml",
+      "sha256": "56dae7e345787deac6e1631294eb0b1bb6a7bde6ae436d14ef797b9bcb6b0c5a",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/reverse/diff/planner.yaml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/example/run_exp.py",
+      "sha256": "30f1d8bd87e94cc6762c0e8b9199c8acdb7216f2125e80d550ab4bf8dc0120e3",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/example/run_exp.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/img/Architecture.png",
+      "sha256": "51d42da646b5c753471ab9540b38ecf52f0d43a6102614968b0d55a2e74e9c58",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/img/Architecture.png"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/__init__.py",
+      "sha256": "26e50b2ddbb7fd03570ba406da22ff7b428fc11aa73a032e0fb7d2b26b962547",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/__init__.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/blocks/__init__.py",
+      "sha256": "72a32b170d4931871e0269394953ec18252cfe4968e143013e8c51abe8b1b45b",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/blocks/__init__.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/blocks/dune.py",
+      "sha256": "4d0954985b4d248a018f6b3bc01caf2b2d429414f22009ff7d3f03ef4071b548",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/blocks/dune.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/blocks/dune_train.py",
+      "sha256": "245ce14c1289e6398ff28f57c0adba8e5abed49a90cc5d94f23ab60d289197c1",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/blocks/dune_train.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/blocks/initial_path.py",
+      "sha256": "1fe60542d4a9ee34c446f3edcf0e23a8e1949fd6b4240c1f4409d28b8427a4cc",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/blocks/initial_path.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/blocks/nrmp.py",
+      "sha256": "e833ce248ac505bcbb57a1ae55fc394d419459871f6790f3d7214109eaf9bad1",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/blocks/nrmp.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/blocks/obs_point_net.py",
+      "sha256": "fd7f7b7a33bd610e5f453a9d38613fc7ca944e1ab1a8aa6fd116175a1776b11c",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/blocks/obs_point_net.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/blocks/pan.py",
+      "sha256": "bba945816c876dbee4ce560b35f0469a24f31a631539abf26f9226096c275cc0",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/blocks/pan.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/configuration/__init__.py",
+      "sha256": "0bae70ce587a69f760e8c678a8686c8fbe1b4ca436345a15114e590988a8d851",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/configuration/__init__.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/neupan.py",
+      "sha256": "51e2a40f76413bb1d4a0f6f0d7a796e67a928695bedde083ca1a25de51520ed7",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/neupan.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/robot/__init__.py",
+      "sha256": "df24342a4027a430135bb051eeaab5317dd9d941dfc9b9a07100f86e95d25bdd",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/robot/__init__.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/robot/robot.py",
+      "sha256": "b2323e43b5a86cd159353c505787dd0d2802bedb31ca3a3c44a80d8579665000",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/robot/robot.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/neupan/util/__init__.py",
+      "sha256": "8c664ddf0bcb9e21760a525fd497ef14de3a9ccb37b20e6343f57ed1119d10dd",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/neupan/util/__init__.py"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/pyproject.toml",
+      "sha256": "f29bb12b5ccb4afc5c1ab8ef5d3e880d884775c6af6d17adcd9666df7823fff5",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/pyproject.toml"
+    },
+    {
+      "repository_path": "third_party/NeuPAN/requirements.txt",
+      "sha256": "13778637af41db424af510e7f64423fae728b6a67683f4416e0571604e7fea63",
+      "source_path": "/home/rpp/rpp_ws/src/application/neupan_migration/NeuPAN/requirements.txt"
+    },
+    {
+      "repository_path": "tools/starterbutton/start_navigation_high_sampling_neupan.sh",
+      "sha256": "266ce7bb421d346f27a32ee13b77e7e75e70aa411b614c290a60d6c167a44d33",
+      "source_path": "/home/rpp/rpp_tools/starterbutton/.bin/start_navigation_high_sampling_neupan.sh"
+    },
+    {
+      "repository_path": "tools/starterbutton/run_once.sh",
+      "sha256": "08fb04062c5f3f9ba1ec51e67004dcb68c816a3cda7d378d312d37d02124dba3",
+      "source_path": "/home/rpp/rpp_tools/starterbutton/.bin/run_once.sh"
+    },
+    {
+      "repository_path": "tools/starterbutton/launch_with_parent_death.py",
+      "sha256": "5a2e131b1670ae256b637a90714e2b30dd82fe13a24e8aba2fc220a15df88e37",
+      "source_path": "/home/rpp/rpp_tools/starterbutton/.bin/launch_with_parent_death.py"
+    }
+  ]
+}

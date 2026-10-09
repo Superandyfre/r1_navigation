@@ -23,8 +23,20 @@ from r1_neupan_integration.n1_16_bridge import (
     N116_SCHEMA,
     ProductionWholeCoreClient,
 )
+from r1_neupan_integration.command_stabilizer import (
+    BidirectionalCommandStabilizer,
+    CommandStabilizerConfig,
+    GearTransitionConfig,
+    GearTransitionGate,
+)
 from r1_neupan_integration.n2_3_contract import make_context, make_planner_envelope
 from r1_neupan_integration.forward_only import ForwardOnlyConfig, ForwardOnlyController
+from r1_neupan_integration.latest_input_scheduler import LatestInputScheduler
+from r1_neupan_integration.path_validation import (
+    TemporalPathDeviationGuard,
+    max_path_deviation_m as calculate_max_path_deviation_m,
+    near_term_path_deviation_m as calculate_near_term_path_deviation_m,
+)
 
 
 N116_TIMING_FIELDS = [
@@ -74,6 +86,26 @@ class N116Node(N115Node):
         self.declare_parameter("forward_only_enabled", True)
         self.declare_parameter("forward_only_lookahead_m", 0.6)
         self.declare_parameter("forward_only_max_forward_speed_mps", 0.15)
+        self.declare_parameter("command_stabilizer_enabled", True)
+        self.declare_parameter("command_stabilizer_angular_deadband_radps", 0.05)
+        self.declare_parameter("command_stabilizer_linear_deadband_mps", 0.015)
+        self.declare_parameter("command_stabilizer_angular_flip_threshold_radps", 0.12)
+        self.declare_parameter("command_stabilizer_linear_flip_threshold_mps", 0.04)
+        self.declare_parameter("command_stabilizer_flip_confirm_cycles", 2)
+        self.declare_parameter("command_stabilizer_low_speed_linear_mps", 0.03)
+        self.declare_parameter("command_stabilizer_decisive_turn_radps", 0.10)
+        self.declare_parameter("auto_gear_transition_enabled", True)
+        self.declare_parameter("auto_gear_mismatch_deadband_mps", 0.025)
+        self.declare_parameter("auto_gear_confirm_cycles", 5)
+        self.declare_parameter("auto_gear_opposite_direction_commit_cycles", 12)
+        self.declare_parameter("auto_gear_stopped_speed_mps", 0.015)
+        self.declare_parameter("auto_gear_stop_timeout_sec", 2.0)
+        self.declare_parameter("auto_gear_odom_timeout_sec", 0.5)
+        self.declare_parameter("max_path_deviation_m", 0.15)
+        self.declare_parameter("path_deviation_near_term_states", 2)
+        self.declare_parameter("path_deviation_warn_m", 0.15)
+        self.declare_parameter("path_deviation_stop_m", 0.20)
+        self.declare_parameter("path_deviation_stop_cycles", 3)
         # These stay disabled outside the dedicated HW0 shadow launch. The
         # force flag is runtime-settable only when that launch explicitly
         # allows it, and a triggered fault requires a process restart.
@@ -99,6 +131,10 @@ class N116Node(N115Node):
 
     def __init__(self) -> None:
         super().__init__()
+        # N1.15 creates a timer during base initialisation. In production the
+        # scan callback and that timer compete in the same Python executor;
+        # cancel it before spinning and solve from fresh input notifications.
+        self.timer.cancel()
         self._shutdown_requested = False
         self._bridge_failed = False
         self._shadow_tf_fault_injection_allowed = bool(
@@ -116,6 +152,12 @@ class N116Node(N115Node):
         self._active_request = False
         self._active_lock = threading.Lock()
         self._last_wait_trace = ("", 0.0)
+        self._scheduler_callback_started_monotonic = -1.0
+        # Consecutive planner cycles whose predicted trajectory sits inside the
+        # DUNE obstacle field. Downstream progress checking uses it to fail a
+        # provably infeasible segment instead of dithering until the generic
+        # movement timeout.
+        self.infeasible_cycles = 0
         self.status_pub = self.create_publisher(
             String, str(self.get_parameter("bridge_status_topic").value), 50
         )
@@ -137,6 +179,54 @@ class N116Node(N115Node):
         self.forward_only_status_pub = self.create_publisher(
             String, str(self.get_parameter("forward_only_status_topic").value), 50
         )
+        self.command_stabilizer_enabled = bool(
+            self.get_parameter("command_stabilizer_enabled").value
+        )
+        self.command_stabilizer = BidirectionalCommandStabilizer(CommandStabilizerConfig(
+            angular_deadband_radps=float(
+                self.get_parameter("command_stabilizer_angular_deadband_radps").value),
+            linear_deadband_mps=float(
+                self.get_parameter("command_stabilizer_linear_deadband_mps").value),
+            angular_flip_threshold_radps=float(self.get_parameter(
+                "command_stabilizer_angular_flip_threshold_radps").value),
+            linear_flip_threshold_mps=float(self.get_parameter(
+                "command_stabilizer_linear_flip_threshold_mps").value),
+            flip_confirm_cycles=int(self.get_parameter(
+                "command_stabilizer_flip_confirm_cycles").value),
+            low_speed_linear_mps=float(self.get_parameter(
+                "command_stabilizer_low_speed_linear_mps").value),
+            decisive_turn_radps=float(self.get_parameter(
+                "command_stabilizer_decisive_turn_radps").value),
+        ))
+        self.auto_gear_transition_enabled = (
+            bool(self.get_parameter("auto_gear_transition_enabled").value) and
+            self.allow_reverse
+        )
+        self.auto_gear_odom_timeout_sec = float(
+            self.get_parameter("auto_gear_odom_timeout_sec").value
+        )
+        if self.auto_gear_odom_timeout_sec <= 0.0:
+            raise ValueError("auto_gear_odom_timeout_sec must be positive")
+        self.max_path_deviation_m = float(self.get_parameter("max_path_deviation_m").value)
+        self.path_deviation_near_term_states = int(self.get_parameter(
+            "path_deviation_near_term_states").value)
+        self.path_deviation_guard = TemporalPathDeviationGuard(
+            warn_m=float(self.get_parameter("path_deviation_warn_m").value),
+            stop_m=float(self.get_parameter("path_deviation_stop_m").value),
+            stop_cycles=int(self.get_parameter("path_deviation_stop_cycles").value),
+        )
+        self._path_deviation_goal_version: int | None = None
+        self.gear_transition_gate = GearTransitionGate(GearTransitionConfig(
+            mismatch_deadband_mps=float(self.get_parameter(
+                "auto_gear_mismatch_deadband_mps").value),
+            confirm_cycles=int(self.get_parameter("auto_gear_confirm_cycles").value),
+            stopped_speed_mps=float(self.get_parameter(
+                "auto_gear_stopped_speed_mps").value),
+            stop_timeout_sec=float(self.get_parameter(
+                "auto_gear_stop_timeout_sec").value),
+            opposite_direction_commit_cycles=int(self.get_parameter(
+                "auto_gear_opposite_direction_commit_cycles").value),
+        ))
         self._forward_blocked_reported_context: tuple[int, int] | None = None
         self.add_on_set_parameters_callback(self._shadow_fault_parameter_callback)
         self.get_logger().info(
@@ -144,6 +234,30 @@ class N116Node(N115Node):
             % self.forward_only_enabled
         )
         signal.signal(signal.SIGUSR1, self._freeze_planner_result_signal)
+        self._planner_scheduler = LatestInputScheduler(
+            self._run_from_latest_input, self._planner_scheduler_error
+        )
+        self._planner_scheduler.start()
+        self.get_logger().info(
+            "N1.16 planner scheduling is scan-driven with a one-slot latest-input queue"
+        )
+
+    def _planner_input_updated(self) -> None:
+        """Wake one planner cycle; concurrent updates are deliberately coalesced."""
+        scheduler = getattr(self, "_planner_scheduler", None)
+        if scheduler is not None and not self._shutdown_requested:
+            scheduler.notify()
+
+    def _run_from_latest_input(self, started_monotonic: float) -> None:
+        self._scheduler_callback_started_monotonic = float(started_monotonic)
+        self.run()
+
+    def _planner_scheduler_error(self, exc: BaseException) -> None:
+        self._bridge_failed = True
+        self.get_logger().error(
+            "N1.16 latest-input scheduler failed: %s: %s", type(exc).__name__, exc
+        )
+        self._publish_failsafe_stop()
 
     def _trace_wait_state(self, stage: str, **fields: Any) -> None:
         """Expose the first unsatisfied live input without flooding the log."""
@@ -189,7 +303,7 @@ class N116Node(N115Node):
 
     def _publish_context(self) -> None:
         with self.state_lock:
-            context = make_context(self.path_version, self.goal_version)
+            context = make_context(self.nav2_path_version, self.goal_version)
         message = String()
         message.data = json.dumps(context, sort_keys=True, allow_nan=False)
         self.planner_context_pub.publish(message)
@@ -275,6 +389,9 @@ class N116Node(N115Node):
                 "info": {"arrive": False, "stop": False},
             }, allow_nan=False, sort_keys=True)
             self.semantic_pub.publish(message)
+            # The active gear changed after this enforced zero. Schedule a
+            # fresh solve from the same latest scan, not a replayed command.
+            self._planner_input_updated()
             return
         with self._active_lock:
             if self._active_request:
@@ -300,6 +417,10 @@ class N116Node(N115Node):
                 if self.robot_state is None:
                     self._trace_wait_state("robot_state")
                     return
+                if self.dynamic_footprint_enabled and not self.dynamic_footprint_ready:
+                    self._trace_wait_state("dynamic_footprint")
+                    self._publish_failsafe_stop()
+                    return
                 scan_counter = int(self.scan_counter)
                 if self.latest_scan_only and scan_counter <= self.last_processed_scan:
                     self._trace_wait_state(
@@ -313,6 +434,7 @@ class N116Node(N115Node):
                           if self.obstacle_points is None else self.obstacle_points.copy())
                 path = self.path_matrix.copy()
                 path_version = int(self.path_version)
+                nav2_path_version = int(self.nav2_path_version)
                 goal = None if self.goal is None else self.goal.copy()
                 goal_version = int(self.goal_version)
                 scan_stamp = float(self.latest_scan_stamp_sec)
@@ -382,6 +504,10 @@ class N116Node(N115Node):
 
             timing = dict(record["timings"])
             timing["main_input_extraction_ms"] = (input_finished - cycle_start) * 1000.0
+            timing["scheduler_wakeup_to_cycle_start_ms"] = max(
+                0.0,
+                (cycle_start - self._scheduler_callback_started_monotonic) * 1000.0,
+            )
             # The worker PID is carried by the response envelope. Copy it
             # into the published timing record for resource attribution.
             timing["worker_pid"] = float(record.get("worker_pid", -1))
@@ -401,12 +527,22 @@ class N116Node(N115Node):
             self.ref_pub.publish(self._path_message(outputs["ref_state"], self.map_frame, stamp))
             action = outputs["action"]
             command = Twist()
+            max_path_deviation_m = calculate_max_path_deviation_m(outputs["opt_state"], path)
+            near_term_deviation_m = calculate_near_term_path_deviation_m(
+                outputs["opt_state"], path, self.path_deviation_near_term_states)
+            if self._path_deviation_goal_version != goal_version:
+                self.path_deviation_guard.reset()
+                self._path_deviation_goal_version = goal_version
+            path_deviation = self.path_deviation_guard.evaluate(near_term_deviation_m)
+            path_deviation_blocked = path_deviation.blocked
             raw_linear_x = 0.0
             raw_angular_z = 0.0
             decision = None
+            stabilization = None
+            gear_gate_decision = None
             stop_requested = bool(record.get("info", {}).get("stop"))
             arrived = bool(record.get("info", {}).get("arrive"))
-            if not arrived and action.size >= 2:
+            if not path_deviation_blocked and not arrived and action.size >= 2:
                 candidate = action
                 if stop_requested:
                     candidate = outputs.get("optimized_velocity", action)
@@ -433,8 +569,65 @@ class N116Node(N115Node):
                         # Reverse is allowed only in the explicit HW1 profile.
                         # The collision guard validates the signed stopping
                         # trajectory before forwarding it to the base.
-                        command.linear.x = raw_linear_x
-                        command.angular.z = raw_angular_z
+                        if self.auto_gear_transition_enabled:
+                            with self.state_lock:
+                                observed_linear_x = float(self.observed_linear_x)
+                                observed_odom_receive = float(
+                                    self.observed_odom_received_monotonic)
+                            now = time.monotonic()
+                            odom_fresh = (
+                                observed_odom_receive >= 0.0 and
+                                now - observed_odom_receive <=
+                                self.auto_gear_odom_timeout_sec
+                            )
+                            gear_gate_decision = self.gear_transition_gate.decide(
+                                linear_x=raw_linear_x,
+                                angular_z=raw_angular_z,
+                                active_gear=active_gear,
+                                observed_linear_x=observed_linear_x,
+                                odom_fresh=odom_fresh,
+                                now=now,
+                            )
+                            if gear_gate_decision.request_gear is not None:
+                                with self.state_lock:
+                                    if (self.active_gear == active_gear and
+                                            self.pending_gear is None):
+                                        self.pending_gear = (
+                                            gear_gate_decision.request_gear)
+                                        self.requested_gear = (
+                                            gear_gate_decision.request_gear)
+                                    else:
+                                        self.gear_transition_gate.reset()
+                            if gear_gate_decision.state != "DRIVE":
+                                # Never feed an opposite-direction action to
+                                # the closed-loop velocity smoother.
+                                self.command_stabilizer.reset()
+                            elif self.command_stabilizer_enabled:
+                                stabilization = self.command_stabilizer.stabilize(
+                                    gear_gate_decision.linear_x,
+                                    gear_gate_decision.angular_z
+                                )
+                                command.linear.x = stabilization.linear_x
+                                command.angular.z = stabilization.angular_z
+                            else:
+                                command.linear.x = gear_gate_decision.linear_x
+                                command.angular.z = gear_gate_decision.angular_z
+                        elif self.command_stabilizer_enabled:
+                            stabilization = self.command_stabilizer.stabilize(
+                                raw_linear_x, raw_angular_z
+                            )
+                            command.linear.x = stabilization.linear_x
+                            command.angular.z = stabilization.angular_z
+                        else:
+                            command.linear.x = raw_linear_x
+                            command.angular.z = raw_angular_z
+            # A planner stop can carry a signed optimized velocity requesting
+            # a reversal.  Resetting here would erase the gate's confirmation
+            # count before it can safely switch gear.
+            if arrived:
+                self.command_stabilizer.reset()
+                self.gear_transition_gate.reset()
+                self.path_deviation_guard.reset()
             cmd_publish_monotonic = time.monotonic()
             self.cmd_pub.publish(command)
             output_publish = time.monotonic()
@@ -447,7 +640,7 @@ class N116Node(N115Node):
                 cycle_id=cycle_id,
                 scan_counter=scan_counter,
                 planner_result_monotonic=planner_result_monotonic,
-                path_version=path_version,
+                path_version=nav2_path_version,
                 goal_version=goal_version,
             )
             planner_result_message = String()
@@ -471,7 +664,8 @@ class N116Node(N115Node):
             timing_record = {
                 "schema": N116_SCHEMA, "cycle_id": float(cycle_id),
                 "scan_counter": float(scan_counter), "scan_stamp_sec": scan_stamp,
-                "scan_receive_monotonic": scan_receive, "path_version": float(path_version),
+                "scan_receive_monotonic": scan_receive,
+                "path_version": float(nav2_path_version),
                 "goal_version": float(goal_version), "tf_stamp_sec": tf_stamp,
                 "cycle_start_monotonic": float(cycle_start),
                 "worker_core_start_monotonic": float(timing.get("worker_core_start_monotonic", cycle_start)),
@@ -491,13 +685,19 @@ class N116Node(N115Node):
             self.timing_pub.publish(timing_message)
             record["timing_record"] = timing_record
             semantic = dict(record.get("semantic", {}))
+            dune_min_value = semantic.get("dune_min_distance_m")
+            if stop_requested and isinstance(dune_min_value, (int, float)) and dune_min_value < 0.0:
+                self.infeasible_cycles += 1
+            else:
+                self.infeasible_cycles = 0
             if isinstance(semantic.get("initial_path"), np.ndarray):
                 semantic["initial_path"] = semantic["initial_path"].tolist()
             semantic.update({
                 "schema": "r1_n2_pre_semantics_v1",
                 "cycle_id": int(cycle_id),
                 "scan_counter": int(scan_counter),
-                "path_version": int(path_version),
+                "path_version": int(nav2_path_version),
+                "planner_path_version": int(path_version),
                 "goal_version": int(goal_version),
                 "state": state.tolist(),
                 "input_path": path.tolist(),
@@ -513,6 +713,10 @@ class N116Node(N115Node):
                     if outputs.get("distance") is not None and outputs["distance"].size else None
                 ),
                 "scan_filter": scan_filter,
+                "infeasible_cycles": int(self.infeasible_cycles),
+                "scan_timing_ms": {
+                    key: float(value) for key, value in scan_metrics.items()
+                },
                 "dune": {
                     "min_distance_m": semantic.get("dune_min_distance_m"),
                     "obstacle_points_count": semantic.get("dune_obstacle_points_count"),
@@ -538,6 +742,55 @@ class N116Node(N115Node):
                         float(decision.required_front_clearance_m)
                         if decision is not None else None
                     ),
+                },
+                "command_stabilizer": {
+                    "enabled": self.command_stabilizer_enabled,
+                    "state": stabilization.state if stabilization is not None else "BYPASSED",
+                    "reason": stabilization.reason if stabilization is not None else (
+                        "forward_only" if decision is not None else "no_action"
+                    ),
+                    "raw_linear_x": float(raw_linear_x),
+                    "raw_angular_z": float(raw_angular_z),
+                    "linear_x": float(command.linear.x),
+                    "angular_z": float(command.angular.z),
+                },
+                "path_deviation_guard": {
+                    "blocked": bool(path_deviation_blocked),
+                    "max_horizon_deviation_m": float(max_path_deviation_m),
+                    "near_term_deviation_m": float(near_term_deviation_m),
+                    "warning": bool(path_deviation.warning),
+                    "deviation_violation_cycles": int(path_deviation.violation_cycles),
+                    "reason": path_deviation.reason,
+                    "warn_m": float(self.path_deviation_guard.warn_m),
+                    "stop_m": float(self.path_deviation_guard.stop_m),
+                    "stop_cycles": int(self.path_deviation_guard.stop_cycles),
+                    "near_term_states": int(self.path_deviation_near_term_states),
+                    "legacy_max_horizon_limit_m": float(self.max_path_deviation_m),
+                },
+                "gear_transition_gate": {
+                    "enabled": self.auto_gear_transition_enabled,
+                    "state": (
+                        gear_gate_decision.state if gear_gate_decision is not None
+                        else "BYPASSED"
+                    ),
+                    "reason": (
+                        gear_gate_decision.reason if gear_gate_decision is not None
+                        else "forward_only" if decision is not None else "no_action"
+                    ),
+                    "request_gear": (
+                        gear_gate_decision.request_gear
+                        if gear_gate_decision is not None else None
+                    ),
+                    "observed_linear_x": float(self.observed_linear_x),
+                    "odom_fresh": bool(
+                        self.observed_odom_received_monotonic >= 0.0 and
+                        time.monotonic() - self.observed_odom_received_monotonic <=
+                        self.auto_gear_odom_timeout_sec
+                    ),
+                    "raw_linear_x": float(raw_linear_x),
+                    "raw_angular_z": float(raw_angular_z),
+                    "linear_x": float(command.linear.x),
+                    "angular_z": float(command.angular.z),
                 },
                 "obstacle_points_count": int(points.shape[1]),
                 "pan": {
@@ -567,7 +820,10 @@ class N116Node(N115Node):
                     "output_publish_monotonic": float(output_publish),
                     "main_full_cycle_ms": float(timing.get("main_full_cycle_ms", 0.0)),
                     "worker_core_total_ms": float(timing.get("worker_core_total_ms", 0.0)),
+                    "scheduler_wakeup_to_cycle_start_ms": float(
+                        timing.get("scheduler_wakeup_to_cycle_start_ms", 0.0)),
                 },
+                "scheduler": self._planner_scheduler.snapshot(),
                 "info": dict(record.get("info", {})),
                 "navigation_mode": self.navigation_mode,
                 "loop": self.navigation_loop,
@@ -591,6 +847,11 @@ class N116Node(N115Node):
             return
         self._finalized = True
         self._shutdown_requested = True
+        scheduler = getattr(self, "_planner_scheduler", None)
+        if scheduler is not None:
+            stopped = scheduler.stop(float(self.get_parameter("n115_timeout_sec").value) + 1.0)
+            if not stopped:
+                self.get_logger().error("N1.16 planner scheduler did not stop before finalization")
         try:
             self.timer.cancel()
         except Exception:
@@ -620,7 +881,9 @@ def main(args=None) -> None:
     node = N116Node()
     if probe is not None:
         probe.install_node_hooks(node)
-    executor = MultiThreadedExecutor(num_threads=2)
+    # Scan, live-arm geometry, and path/status callbacks must remain
+    # independently serviceable while the isolated planner is solving.
+    executor = MultiThreadedExecutor(num_threads=3)
     executor.add_node(node)
     try:
         executor.spin()

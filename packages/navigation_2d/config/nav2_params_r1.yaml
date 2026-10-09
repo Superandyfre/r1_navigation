@@ -198,11 +198,11 @@ local_costmap:
         enabled: True
         footprint_clearing_enabled: True
         max_obstacle_height: 2.0
-        min_obstacle_height: -2.0 
+        min_obstacle_height: -2.0
         combination_method: 1
-        observation_sources: "back_laser pointcloud"
-        back_laser:
-          topic: /laser/scan_undistort
+        observation_sources: "front_scan"
+        front_scan:
+          topic: /scan
           data_type: "LaserScan"
           clearing: True
           marking: True
@@ -210,19 +210,11 @@ local_costmap:
           raytrace_min_range: 0.1
           obstacle_max_range: 20.0
           obstacle_min_range: 0.1
+          # LaserScan observations are planar (z=0); a positive floor filter
+          # would silently drop every return.
           max_obstacle_height: 1.8
-          min_obstacle_height: 0.15
-        pointcloud:
-          topic: /navigation/pointcloud_filtered
-          data_type: "PointCloud2"
-          clearing: True
-          marking: True
-          raytrace_max_range: 20.0
-          raytrace_min_range: 0.1
-          obstacle_max_range: 20.0
-          obstacle_min_range: 0.1
-          max_obstacle_height: 1.8
-          min_obstacle_height: 0.15
+          min_obstacle_height: -1.0
+          expected_update_rate: 0.5
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0
@@ -250,11 +242,11 @@ global_costmap:
         enabled: True
         footprint_clearing_enabled: True
         max_obstacle_height: 2.0
-        min_obstacle_height: -2.0 
+        min_obstacle_height: -2.0
         combination_method: 1
-        observation_sources: "back_laser pointcloud"
-        back_laser:
-          topic: /laser/scan_undistort
+        observation_sources: "front_scan"
+        front_scan:
+          topic: /scan
           data_type: "LaserScan"
           clearing: True
           marking: True
@@ -262,19 +254,11 @@ global_costmap:
           raytrace_min_range: 0.1
           obstacle_max_range: 20.0
           obstacle_min_range: 0.1
+          # LaserScan observations are planar (z=0); a positive floor filter
+          # would silently drop every return.
           max_obstacle_height: 1.8
-          min_obstacle_height: 0.15
-        pointcloud:
-          topic: /navigation/pointcloud_filtered
-          data_type: "PointCloud2"
-          clearing: True
-          marking: True
-          raytrace_max_range: 20.0
-          raytrace_min_range: 0.1
-          obstacle_max_range: 20.0
-          obstacle_min_range: 0.1
-          max_obstacle_height: 1.8
-          min_obstacle_height: 0.15
+          min_obstacle_height: -1.0
+          expected_update_rate: 0.5
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0

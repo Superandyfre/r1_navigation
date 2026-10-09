@@ -1,6 +1,7 @@
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -21,6 +22,10 @@ public:
   {
     node_names_ = declare_parameter<std::vector<std::string>>(
       "node_names", {"controller_server", "planner_server", "bt_navigator"});
+    max_attempts_ = declare_parameter<int>("max_attempts", 0);
+    if (node_names_.empty() || max_attempts_ < 0) {
+      throw std::invalid_argument("node_names must be nonempty and max_attempts must be nonnegative");
+    }
     for (const auto & node_name : node_names_) {
       const auto prefix = "/" + node_name;
       get_state_clients_.emplace(
@@ -32,15 +37,18 @@ public:
 
   int ensureActive()
   {
-    constexpr int kMaxAttempts = 30;
-    for (int attempt = 0; rclcpp::ok() && attempt < kMaxAttempts; ++attempt) {
+    // A busy hardware startup can delay lifecycle discovery beyond a fixed
+    // budget. Zero deliberately means keep reconciling until the required
+    // nodes are active, rather than silently leaving one inactive.
+    for (int attempt = 0; rclcpp::ok() &&
+      (max_attempts_ == 0 || attempt < max_attempts_); ++attempt) {
       bool all_active = true;
       for (const auto & node_name : node_names_) {
         const auto state = getState(node_name);
         if (!state) {
           all_active = false;
-          RCLCPP_WARN(get_logger(), "Waiting for %s lifecycle services (%d/%d)",
-            node_name.c_str(), attempt + 1, kMaxAttempts);
+          RCLCPP_WARN(get_logger(), "Waiting for %s lifecycle services (attempt %d)",
+            node_name.c_str(), attempt + 1);
           continue;
         }
         if (*state == lifecycle_msgs::msg::State::PRIMARY_STATE_ACTIVE) {
@@ -110,6 +118,7 @@ private:
   }
 
   std::vector<std::string> node_names_;
+  int max_attempts_{0};
   std::unordered_map<std::string,
     rclcpp::Client<lifecycle_msgs::srv::GetState>::SharedPtr> get_state_clients_;
   std::unordered_map<std::string,

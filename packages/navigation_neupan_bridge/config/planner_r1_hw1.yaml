@@ -1,7 +1,7 @@
 # HW1 profile. Its launch requires a mechanical calibration record before use.
 receding: 6
 step_time: 0.25
-ref_speed: 0.15
+ref_speed: 0.20
 device: 'cpu'
 time_print: false
 # NRMP constrains its distance slack to d_min=0.01. The collision threshold
@@ -11,8 +11,8 @@ collision_threshold: 0.005
 
 robot:
   kinematics: 'diff'
-  max_speed: [0.15, 0.4]
-  max_acce: [0.30, 0.80]
+  max_speed: [0.20, 0.25]
+  max_acce: [0.30, 0.50]
   length: 0.682
   width: 0.532
 
@@ -37,12 +37,17 @@ pan:
   iter_threshold: 0.1
 
 adjust:
-  # NeuPAN tracks the SMAC reference through its own state cost.  Give lateral
-  # position the strongest weight, with a deliberately lower yaw weight so
-  # local obstacle avoidance can turn continuously instead of oscillating
-  # against an external heading controller.
-  q_s: [1.5, 2.0, 0.5]
-  p_u: 0.5
-  eta: 10.0
+  # Keep the optimized horizon anchored to the SMAC route.  The previous
+  # balance let a clear corridor produce an unnecessary detour, which was
+  # then rejected by the independent path-deviation guard.  Position weights
+  # now dominate the soft clearance preference; yaw remains softer so a real
+  # obstacle can still induce a controlled turn.
+  q_s: [8.0, 10.0, 2.5]
+  # Track longitudinal reference speed more closely; this is not a slew penalty.
+  p_u: 1.4
+  # This is a soft reward for extra clearance, not the collision constraint.
+  # Keep physical collision protection unchanged while avoiding a needless
+  # refusal of a corridor that the measured footprint can clear.
+  eta: 3.5
   d_max: 0.1
   d_min: 0.01

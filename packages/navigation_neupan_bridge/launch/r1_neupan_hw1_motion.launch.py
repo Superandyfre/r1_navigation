@@ -46,6 +46,11 @@ def _build(context):
     python_executable = LaunchConfiguration("python_executable").perform(context)
     input_cloud = LaunchConfiguration("input_cloud").perform(context)
     scan_source = LaunchConfiguration("scan_source").perform(context)
+    use_mesh_self_filter = LaunchConfiguration("use_mesh_self_filter").perform(context)
+    mesh_projection_margin_m = float(
+        LaunchConfiguration("mesh_projection_margin_m").perform(context))
+    planner_footprint_margin_m = float(
+        LaunchConfiguration("planner_footprint_margin_m").perform(context))
     command_profile = LaunchConfiguration("command_profile").perform(context)
     cmd_vel_out_topic = LaunchConfiguration("cmd_vel_out_topic").perform(context)
     calibration_record = LaunchConfiguration("calibration_record").perform(context)
@@ -67,6 +72,12 @@ def _build(context):
         raise RuntimeError("HW1 calibration record is not approved for HW1")
     if scan_source not in {"livox_only", "dual"}:
         raise RuntimeError("scan_source must be livox_only or dual")
+    if use_mesh_self_filter not in {"false", "true"}:
+        raise RuntimeError("use_mesh_self_filter must be true or false")
+    if not 0.0 <= mesh_projection_margin_m <= 0.10:
+        raise RuntimeError("mesh_projection_margin_m must be within [0.0, 0.10]")
+    if not 0.0 <= planner_footprint_margin_m <= 0.30:
+        raise RuntimeError("planner_footprint_margin_m must be within [0.0, 0.30]")
     if command_profile not in {"direct", "smoothed"}:
         raise RuntimeError("command_profile must be direct or smoothed")
     if not cmd_vel_out_topic.startswith("/"):
@@ -107,14 +118,19 @@ def _build(context):
         python_executable,
         "-m",
         "r1_neupan_integration.torch_runtime_bootstrap",
-        "--torch-num-threads", "8",
-        "--torch-num-interop-threads", "24",
-        "--thread-env-policy", "inherit",
+        # The planner itself is sub-30 ms.  Leaving BLAS/OpenMP at their host
+        # defaults creates 28-thread pools in both bridge and worker, starving
+        # the 10 Hz command publisher behind localization and mesh projection.
+        "--torch-num-threads", "4",
+        "--torch-num-interop-threads", "2",
+        "--thread-env-policy", "match_intra",
         "--runtime-report-file",
         LaunchConfiguration("runtime_report_file").perform(context),
     ])
 
     livox_scan_topic = "/scan_livox" if scan_source == "dual" else "/scan_neupan"
+    navigation_scan_topic = (
+        "/scan_neupan_mesh_shadow" if use_mesh_self_filter == "true" else "/scan_neupan")
     # The localization node withholds /deskew_cloud until its initial pose is
     # valid.  A dual-scan collision guard must still receive the front scan
     # during that bootstrap period, so use Livox's live source directly.
@@ -139,9 +155,53 @@ def _build(context):
             "fallback_footprint_points": arm_data_fallback_points,
             "joint_state_timeout_sec": 0.50,
             "update_frequency": 10.0,
+            # Exact mesh projection is recomputed only after a material joint
+            # change, then republished at 4 Hz for downstream freshness.
+            "mesh_projection_frequency": 4.0,
+            "mesh_reprojection_joint_delta_rad": 0.01,
             "link_radius_m": 0.12,
             "tool_radius_m": 0.16,
             "projection_margin_m": 0.03,
+            # Mesh-only tolerance for surveyed LiDAR-to-arm edge mismatch.
+            # It does not change the navigation or collision footprint.
+            "mesh_projection_margin_m": mesh_projection_margin_m,
+            # Costmaps and the global planner receive the arm hull padded by
+            # this margin; SMAC then rejects corridors the live arm posture
+            # cannot clear, matching NeuPAN's arm-aware local feasibility.
+            "planner_footprint_margin_m": planner_footprint_margin_m,
+        }],
+    )
+    footprint_sync = Node(
+        package="navigation_neupan_bridge",
+        executable="r1_dynamic_footprint_sync",
+        name="r1_dynamic_footprint_sync",
+        output="screen",
+        parameters=[{
+            "use_sim_time": False,
+            # Feed the costmap footprint parameter from the planner-padded
+            # hull so the SMAC lattice's per-plan footprint check and the
+            # footprint topics always agree with the published envelope.
+            "input_topic": "/r1_arm_footprint_planner",
+            "base_frame": "base_link",
+            "global_costmap_node": "/global_costmap/global_costmap",
+            "local_costmap_node": "/local_costmap/local_costmap",
+            "update_threshold_m": 0.02,
+        }],
+    )
+    passage_clearance = Node(
+        package="navigation_neupan_bridge",
+        executable="r1_passage_clearance_diagnostics",
+        name="r1_passage_clearance_diagnostics",
+        output="screen",
+        parameters=[{
+            "use_sim_time": False,
+            "base_frame": "base_link",
+            "scan_topic": navigation_scan_topic,
+            "path_topic": "/neupan_path",
+            "footprint_topic": "/r1_arm_footprint",
+            "planning_clearance_m": 0.15,
+            "probe_distance_m": 0.45,
+            "probe_half_width_m": 0.12,
         }],
     )
     scan_fusion = None
@@ -173,13 +233,28 @@ def _build(context):
                 "planner_config_file": "planner_r1_hw1.yaml",
                 "dune_checkpoint_file": os.path.join(
                     integration_share, "config", "models", "dune_model_5000.pth"),
-                "scan_topic": "/scan_neupan",
+                "scan_topic": navigation_scan_topic,
                 "plan_input_topic": "/neupan_path",
                 "goal_topic": "/neupan_goal",
                 "map_frame": "map",
                 "base_frame": "base_link",
                 "lidar_frame": "base_link",
                 "self_filter_enabled": True,
+                "dynamic_footprint_enabled": True,
+                "dynamic_footprint_topic": "/r1_arm_footprint",
+                "dynamic_footprint_timeout_sec": 0.50,
+                # The convex live footprint arrives at 10 Hz and remains the
+                # immediate motion gate. The exact non-convex mesh projection
+                # is costlier and arrives near 4 Hz, so it has its own bounded
+                # freshness window for NeuPAN obstacle shaping.
+                "dynamic_mesh_components_timeout_sec": 1.50,
+                "dynamic_footprint_clearance_m": 0.15,
+                "dynamic_mesh_components_enabled": True,
+                "dynamic_mesh_components_topic": "/r1_arm_mesh_components",
+                "planner_base_front_m": 0.341,
+                "planner_base_rear_m": 0.341,
+                "planner_base_left_m": 0.266,
+                "planner_base_right_m": 0.266,
                 "allow_reverse": True,
                 "control_frequency": 10.0,
                 "latest_scan_only": True,
@@ -187,8 +262,8 @@ def _build(context):
                 "planner_result_topic": "/neupan_planner_result",
                 "planner_context_topic": "/neupan_planner_context",
                 "bridge_status_topic": "/neupan_bridge_status",
-                "torch_num_threads": 8,
-                "torch_num_interop_threads": 24,
+                "torch_num_threads": 4,
+                "torch_num_interop_threads": 2,
                 "shadow_tf_fault_injection_allowed": False,
                 "shadow_force_robot_tf_failure": False,
             },
@@ -205,7 +280,8 @@ def _build(context):
                 "use_sim_time": False,
                 "footprint_points": footprint_points,
                 "odom_topic": "/odom",
-                "scan_topic": "/scan_neupan",
+                "scan_topic": navigation_scan_topic,
+                "mesh_self_filter_preapplied": use_mesh_self_filter == "true",
                 "cmd_vel_in_topic": (
                     "/neupan_nav2_smoothed_cmd_vel"
                     if command_profile == "smoothed" else "/neupan_nav2_cmd_vel"),
@@ -231,14 +307,25 @@ def _build(context):
             "status_topic": "/r1_localization_health",
             "tf_timeout_sec": 1.5,
             "odom_timeout_sec": 1.5,
+            "localization_timeout_sec": 1.5,
+            "localization_fault_timeout_sec": 3.0,
             "footprint_points": footprint_points,
             "footprint_padding_m": 0.01,
             "require_dynamic_footprint": True,
-            "dynamic_footprint_topic": "/r1_arm_footprint",
-            "dynamic_footprint_timeout_sec": 0.50,
+            # Compare the planner-padded envelope against the costmap's
+            # published footprint. Both carry planner_footprint_margin_m, so
+            # the sync handshake validates like against like; the raw heartbeat
+            # on /r1_arm_footprint stays reserved for the collision guard.
+            "dynamic_footprint_topic": "/r1_arm_footprint_planner",
+            # This monitor only gates localization readiness. Keep enough
+            # margin for the 10 Hz mesh projection during scheduler pauses;
+            # the final collision guard retains its independent 0.50 s limit.
+            "dynamic_footprint_timeout_sec": 1.50,
         }],
     )
-    nodes = [preprocess, arm_footprint, localization_monitor, collision_guard, worker]
+    nodes = [
+        preprocess, arm_footprint, footprint_sync, passage_clearance, localization_monitor, collision_guard, worker,
+    ]
     if scan_fusion is not None:
         nodes.insert(1, scan_fusion)
     return nodes
@@ -252,6 +339,18 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "scan_source", default_value="livox_only",
             description="NeuPAN obstacle scan source: livox_only or dual (Livox plus rear BlueSea)."),
+        DeclareLaunchArgument(
+            "use_mesh_self_filter", default_value="false", choices=["false", "true"],
+            description="Use the validated dual-arm mesh self-return filter; disabled by default."),
+        DeclareLaunchArgument(
+            "mesh_projection_margin_m", default_value="0.06",
+            description="Local mesh-only LiDAR self-return edge tolerance in metres."),
+        DeclareLaunchArgument(
+            "planner_footprint_margin_m", default_value="0.15",
+            description=(
+                "Lateral margin added to the arm footprint handed to the costmaps and "
+                "global planner so SMAC's feasibility model matches NeuPAN's live "
+                "arm-aware clearance. The collision-guard heartbeat stays unpadded.")),
         DeclareLaunchArgument(
             "python_executable",
             default_value=os.path.expanduser("~/venvs/neupan_ros_humble/bin/python"),

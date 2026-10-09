@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "r1_collision_guard/guard_logic.hpp"
+#include "r1_collision_guard/scan_filter.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -144,6 +145,7 @@ public:
       "require_localization_ready", true);
     require_arms_stowed_ = declare_parameter<bool>("require_arms_stowed", true);
     require_dynamic_footprint_ = declare_parameter<bool>("require_dynamic_footprint", false);
+    mesh_self_filter_preapplied_ = declare_parameter<bool>("mesh_self_filter_preapplied", false);
     dynamic_footprint_timeout_sec_ = declare_parameter<double>(
       "dynamic_footprint_timeout_sec", 0.50);
     const auto dynamic_footprint_topic = declare_parameter<std::string>(
@@ -510,6 +512,7 @@ private:
     const auto steady_now = std::chrono::steady_clock::now();
     const auto ros_now = now();
     Decision decision;
+    size_t self_filtered_scan_points{0};
     const bool localization_health_stale = !localization_health.available ||
       std::chrono::duration<double>(steady_now - localization_health.received).count() >
       localization_health_timeout_sec_;
@@ -589,10 +592,22 @@ private:
           if (!interpolateOdom(odom_history, scan.header.stamp, scan_odom)) {
             decision = stop("waiting_scan_odom_interpolation");
           } else {
+            // Scan self-filtering and the stopping-trajectory geometry are
+            // independent.  A pre-filtered scan must still be evaluated
+            // against the live base-plus-arms projection.
             if (require_dynamic_footprint_) {
               logic_->setFootprint(dynamic_footprint.points);
             }
-            const auto points = currentObstaclePoints(scan, scan_odom, odom_history.back());
+            auto points = currentObstaclePoints(scan, scan_odom, odom_history.back());
+            if (require_dynamic_footprint_) {
+              const auto first_self_return = std::remove_if(
+                points.begin(), points.end(), [&dynamic_footprint](const Point2D & point) {
+                  return strictlyInsidePolygon(point, dynamic_footprint.points);
+                });
+              self_filtered_scan_points = static_cast<size_t>(
+                std::distance(first_self_return, points.end()));
+              points.erase(first_self_return, points.end());
+            }
             decision = logic_->evaluate(
               command.linear.x, command.angular.z,
               odom_history.back().linear_x, odom_history.back().angular_z, points);
@@ -607,7 +622,7 @@ private:
     publishStatus(
       decision, command, scan, odom_history, localization_health, scan_history.size(),
       command_available, command_received, source_command_available, source_command_valid,
-      source_command_received, arm_state, dynamic_footprint, steady_now);
+      source_command_received, arm_state, dynamic_footprint, self_filtered_scan_points, steady_now);
   }
 
   void publishStatus(const Decision & decision, const geometry_msgs::msg::Twist & command,
@@ -616,13 +631,15 @@ private:
     const bool command_available, const SteadyTime & command_received,
     const bool source_command_available, const bool source_command_valid,
     const SteadyTime & source_command_received, const ArmState & arm_state,
-    const DynamicFootprint & dynamic_footprint,
+    const DynamicFootprint & dynamic_footprint, const size_t self_filtered_scan_points,
     const SteadyTime & steady_now)
   {
     std_msgs::msg::String message;
     const bool dynamic_footprint_ready = dynamic_footprint.available &&
       std::chrono::duration<double>(steady_now - dynamic_footprint.received).count() <=
       dynamic_footprint_timeout_sec_;
+    const double dynamic_footprint_age_sec = dynamic_footprint.available ?
+      std::chrono::duration<double>(steady_now - dynamic_footprint.received).count() : -1.0;
     std::ostringstream payload;
     payload.setf(std::ios::fixed);
     payload.precision(6);
@@ -650,6 +667,10 @@ private:
             << ",\"arm_max_position_error_rad\":" << arm_state.max_position_error
             << ",\"dynamic_footprint_points\":" << dynamic_footprint.points.size()
             << ",\"dynamic_footprint_ready\":" << (dynamic_footprint_ready ? "true" : "false")
+            << ",\"dynamic_footprint_age_sec\":" << dynamic_footprint_age_sec
+            << ",\"mesh_self_filter_preapplied\":" <<
+      (mesh_self_filter_preapplied_ ? "true" : "false")
+            << ",\"self_filtered_scan_points\":" << self_filtered_scan_points
             << ",\"scan_history_size\":" << scan_history_size
             << ",\"scan_stamp_ns\":" << rclcpp::Time(scan.header.stamp).nanoseconds();
     if (command_available) {
@@ -689,6 +710,7 @@ private:
   bool require_localization_ready_{true};
   bool require_arms_stowed_{true};
   bool require_dynamic_footprint_{false};
+  bool mesh_self_filter_preapplied_{false};
   std::string base_frame_;
   std::string odom_frame_;
   std::vector<std::string> arm_joint_names_;

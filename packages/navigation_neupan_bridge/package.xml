@@ -8,6 +8,7 @@
   <license>BSD-3-Clause</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>geometric_shapes</depend>
   <depend>geometry_msgs</depend>
   <depend>lifecycle_msgs</depend>
   <depend>nav2_core</depend>
@@ -23,12 +24,12 @@
   <depend>tf2</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>tf2_ros</depend>
+  <depend>visualization_msgs</depend>
 
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>rclpy</exec_depend>
   <exec_depend>r1_description</exec_depend>
   <exec_depend>r1_lidar_preprocess</exec_depend>
   <exec_depend>r1_collision_guard</exec_depend>

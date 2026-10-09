@@ -60,6 +60,7 @@ def _build(context):
         package="navigation_neupan_bridge",
         executable="nav_lifecycle_ensure",
         output="screen",
+        parameters=[{"node_names": lifecycle_nodes, "max_attempts": 0}],
     )
     nodes = [
         Node(

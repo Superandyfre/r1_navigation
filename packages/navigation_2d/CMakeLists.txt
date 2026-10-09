@@ -71,6 +71,10 @@ install(DIRECTORY
   config
   rviz
   DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS
+  scripts/arm_state_gate.py
+  DESTINATION lib/${PROJECT_NAME}
+)
 install(TARGETS
   navigation_2d_clearance_critic
   navigation_2d_local_costmap_override_layer

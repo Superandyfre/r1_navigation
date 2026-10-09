@@ -1,0 +1,9 @@
+{
+  "name": "7.双雷达NeuPAN导航",
+  "type": "QToolButton",
+  "Introduction": "启动双雷达 NeuPAN 高采样导航与 RViz；融合左前 Livox 和右后 2D 雷达。",
+  "bash_url": "~/rpp_tools/starterbutton/.bin/start_navigation_high_sampling_neupan.sh",
+  "background_url": "navigation.png",
+  "Additional_environment_variables": "RPP_NEUPAN_SCAN_SOURCE=dual RPP_NEUPAN_USE_MESH_SELF_FILTER=true",
+  "show_shell": "true"
+}

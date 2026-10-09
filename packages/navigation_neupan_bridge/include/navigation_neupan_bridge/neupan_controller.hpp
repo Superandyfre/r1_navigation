@@ -109,6 +109,7 @@ private:
   std::string diagnostics_topic_{"/neupan_controller_status"};
   double envelope_timeout_sec_{0.3};
   double envelope_startup_timeout_sec_{1.0};
+  double envelope_recovery_timeout_sec_{5.0};
   double max_linear_{0.15};
   double max_reverse_{0.15};
   double max_angular_{0.4};
@@ -136,6 +137,8 @@ private:
   std::chrono::steady_clock::time_point plan_published_at_{};
   std::int64_t worker_generation_{-1};
   Envelope envelope_;
+  bool envelope_recovery_active_{false};
+  std::chrono::steady_clock::time_point envelope_recovery_started_at_{};
   GateStatus gate_status_;
   GuardStatus guard_status_;
   LocalizationHealth localization_health_;

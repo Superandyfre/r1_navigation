@@ -59,6 +59,14 @@ controller_server:
       # The operator must be able to arm the HW1 gate after a path has been
       # accepted. This does not alter command watchdogs or actuator limits.
       movement_time_allowance: 60.0
+      # NeuPAN reports a sustained planner-side infeasibility when its
+      # predicted trajectory sits inside the DUNE field (stop + dune_min<0).
+      # At ~50 Hz solver cycles, 150 cycles is ~3 s. Fail the segment then;
+      # the 1 Hz BT replanner reroutes around the true arm envelope instead
+      # of dithering forward/reverse for the full 60 s allowance.
+      neupan_semantics_topic: /neupan_semantics
+      neupan_semantics_timeout_sec: 0.50
+      neupan_infeasible_fail_cycles: 150
 
     FollowPath:
       plugin: "navigation_neupan_bridge/NeuPANController"
@@ -71,15 +79,15 @@ controller_server:
       guard_status_topic: "/r1_collision_guard/status"
       localization_health_topic: "/r1_localization_health"
       diagnostics_topic: "/neupan_controller_status"
-      # The relay and chassis-facing watchdogs remain at 0.30 s.  Give the
-      # Nav2 controller a modestly wider observation window so an executor
-      # scheduling hiccup cannot abort a live 50 Hz relay stream.
+      # An old planner command is never reused. A stale envelope produces a
+      # fresh zero while waiting for a new solve, keeping the action alive.
       envelope_timeout: 1.00
+      envelope_recovery_timeout: 5.00
       # The worker is asynchronous. Hold zero velocity only while its first
       # result for a newly published path arrives; then normal freshness rules apply.
       envelope_startup_timeout: 40.0
-      max_linear: 0.15
-      max_reverse: 0.15
+      max_linear: 0.20
+      max_reverse: 0.20
       max_angular: 0.40
       allow_reverse: true
       shadow_mode: false
@@ -101,17 +109,17 @@ controller_server:
 neupan_velocity_smoother:
   ros__parameters:
     use_sim_time: True
-    # /odom is 10 Hz on R1. Keep closed-loop smoothing at that rate to avoid
-    # using stale velocity feedback while still shaping NeuPAN's 10 Hz output.
-    smoothing_frequency: 10.0
-    feedback: CLOSED_LOOP
+    # Interpolate commands at 30 Hz without copying noisy odometry into each
+    # output step. The collision guard still independently checks live odometry.
+    smoothing_frequency: 30.0
+    feedback: OPEN_LOOP
     odom_topic: /odom
     odom_duration: 0.1
     velocity_timeout: 0.30
     scale_velocities: true
-    max_velocity: [0.15, 0.0, 0.40]
-    min_velocity: [-0.15, 0.0, -0.40]
-    max_accel: [0.15, 0.0, 0.40]
+    max_velocity: [0.20, 0.0, 0.40]
+    min_velocity: [-0.20, 0.0, -0.40]
+    max_accel: [0.20, 0.0, 0.60]
     max_decel: [-0.30, 0.0, -0.80]
     deadband_velocity: [0.005, 0.0, 0.01]
 
@@ -122,8 +130,8 @@ local_costmap:
       # ControllerServer requires a Costmap2DROS interface, but the NeuPAN
       # controller never reads it. Humble requires at least one layer, so use
       # only its low-rate inflation layer; no sensor input is connected here.
-      update_frequency: 1.0
-      publish_frequency: 1.0
+      update_frequency: 5.0
+      publish_frequency: 2.0
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: True
@@ -135,22 +143,34 @@ local_costmap:
       # with the conservative horizontal projection of both live arms.
       footprint: "[[-0.341, -0.266], [-0.341, 0.266], [0.341, 0.266], [0.341, -0.266]]"
       always_send_full_costmap: true
-      plugins: ["inflation_layer"]
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: dual_scan
+        dual_scan:
+          topic: /scan_neupan_mesh_shadow
+          data_type: "LaserScan"
+          marking: true
+          clearing: true
+          obstacle_max_range: 5.0
+          raytrace_max_range: 6.0
+          expected_update_rate: 0.5
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0
         # The published footprint already includes the base and arm projection.
-        # Inflation is only the clearance outside that physical envelope.
-        inflation_radius: 0.15
+        # Cover the live footprint inscribed radius (~0.486 m).
+        inflation_radius: 0.55
 
 global_costmap:
   global_costmap:
     ros__parameters:
       transform_tolerance: 0.3
-      # SMAC plans against the static high-sampling map only. Dynamic
-      # obstacles are deliberately handled by NeuPAN's /scan_neupan chain.
-      update_frequency: 1.0
-      publish_frequency: 1.0
+      # SMAC plans against the static map and the live filtered dual-LiDAR
+      # obstacle layer. NeuPAN remains the local optimizer and final guard.
+      update_frequency: 5.0
+      publish_frequency: 2.0
       global_frame: map
       robot_base_frame: base_link
       use_sim_time: True
@@ -160,7 +180,7 @@ global_costmap:
       resolution: 0.05
       track_unknown_space: true
       always_send_full_costmap: false
-      plugins: ["static_layer", "inflation_layer", "current_footprint_clear"]
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer", "current_footprint_clear"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -168,18 +188,34 @@ global_costmap:
         # Clear only the current calibrated footprint; static obstacles outside
         # it remain part of SMAC's global collision check.
         footprint_clearing_enabled: True
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: dual_scan
+        dual_scan:
+          topic: /scan_neupan_mesh_shadow
+          data_type: "LaserScan"
+          marking: true
+          clearing: true
+          obstacle_max_range: 5.0
+          raytrace_max_range: 6.0
+          expected_update_rate: 0.5
       current_footprint_clear:
         plugin: "navigation_neupan_bridge::CurrentFootprintClearLayer"
         # Smac's 5 cm lattice evaluates the start state at the containing
         # cell centre. Cover exactly that quantization error, after inflation,
         # so a valid continuous pose is not rejected by an adjacent map cell.
         quantization_margin_m: 0.05
+        # Clear only the chassis polygon. The live costmap footprint carries
+        # the arm projection; clearing inside it would erase real obstacles
+        # beside extended arms and let the planner route through them.
+        clear_footprint: "[[-0.341, -0.266], [-0.341, 0.266], [0.341, 0.266], [0.341, -0.266]]"
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.0
         # The published footprint already includes the base and arm projection.
-        # Inflation is only the clearance outside that physical envelope.
-        inflation_radius: 0.15
+        # Cover the live footprint inscribed radius (~0.486 m).
+        inflation_radius: 0.55
 
 planner_server:
   ros__parameters:

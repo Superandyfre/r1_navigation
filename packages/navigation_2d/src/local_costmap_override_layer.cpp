@@ -113,9 +113,17 @@ void LocalCostmapOverrideLayer::updateCosts(
       }
 
       const auto source_index = static_cast<std::size_t>(source_y) * map->info.width + source_x;
-      master_grid.setCost(
-        static_cast<unsigned int>(master_x), static_cast<unsigned int>(master_y),
-        occupancyToCost(map->data[source_index]));
+      // Only raise costs. The local grid can be empty or blind (stale sensor
+      // sources); letting it write free space here would erase static lethal
+      // cells and let the global planner route through real obstacles.
+      const auto override_cost = occupancyToCost(map->data[source_index]);
+      const auto existing_cost = master_grid.getCost(
+        static_cast<unsigned int>(master_x), static_cast<unsigned int>(master_y));
+      if (override_cost > existing_cost) {
+        master_grid.setCost(
+          static_cast<unsigned int>(master_x), static_cast<unsigned int>(master_y),
+          override_cost);
+      }
     }
   }
 }

@@ -1,4 +1,6 @@
 #include "navigation_neupan_bridge/neupan_controller.hpp"
+#include "navigation_neupan_bridge/path_replan_distance.hpp"
+#include "navigation_neupan_bridge/guard_recovery.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -74,6 +76,7 @@ void NeuPANController::configure(
   declareIfMissing(node_, plugin_name_ + ".diagnostics_topic", diagnostics_topic_);
   declareIfMissing(node_, plugin_name_ + ".envelope_timeout", envelope_timeout_sec_);
   declareIfMissing(node_, plugin_name_ + ".envelope_startup_timeout", envelope_startup_timeout_sec_);
+  declareIfMissing(node_, plugin_name_ + ".envelope_recovery_timeout", envelope_recovery_timeout_sec_);
   declareIfMissing(node_, plugin_name_ + ".max_linear", max_linear_);
   declareIfMissing(node_, plugin_name_ + ".max_reverse", max_reverse_);
   declareIfMissing(node_, plugin_name_ + ".max_angular", max_angular_);
@@ -99,6 +102,7 @@ void NeuPANController::configure(
   node_->get_parameter(plugin_name_ + ".diagnostics_topic", diagnostics_topic_);
   node_->get_parameter(plugin_name_ + ".envelope_timeout", envelope_timeout_sec_);
   node_->get_parameter(plugin_name_ + ".envelope_startup_timeout", envelope_startup_timeout_sec_);
+  node_->get_parameter(plugin_name_ + ".envelope_recovery_timeout", envelope_recovery_timeout_sec_);
   node_->get_parameter(plugin_name_ + ".max_linear", max_linear_);
   node_->get_parameter(plugin_name_ + ".max_reverse", max_reverse_);
   node_->get_parameter(plugin_name_ + ".max_angular", max_angular_);
@@ -140,6 +144,7 @@ void NeuPANController::cleanup()
   active_ = false;
   plan_valid_ = false;
   localization_ready_observed_ = false;
+  envelope_recovery_active_ = false;
   envelope_ = Envelope{};
   path_pub_.reset();
   goal_pub_.reset();
@@ -188,24 +193,20 @@ void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
   bool publish_goal = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    // The SMAC route is rebuilt at 1 Hz. With a static global map, those
-    // updates normally differ only because their first pose follows the
-    // current robot pose. Treating that moving prefix as a new NeuPAN context
-    // starves the asynchronous worker: every response becomes stale before it
-    // can be consumed. A distinct terminal pose is the meaningful navigation
-    // context change here. Dynamic obstacle response is owned by NeuPAN's scan
-    // input, not this static-map replan stream.
-    publish_path = !path_published_ || !sameGoal(goal, published_goal_);
+    // Ignore ordinary prefix trimming, but reconnect to the fresh global
+    // route before the 0.20 m near-term deviation guard can deadlock tracking.
+    const bool route_departed = path_published_ &&
+      distanceToRoute(navigation_path.poses.front().pose.position, published_path_) > 0.15;
+    publish_path = !path_published_ || !sameGoal(goal, published_goal_) || route_departed;
     if (publish_path) {
       ++path_version_;
       published_path_ = navigation_path;
       path_published_ = true;
-      publish_goal = !goal_published_ || !sameGoal(goal, published_goal_);
-      if (publish_goal) {
-        ++goal_version_;
-        published_goal_ = goal;
-        goal_published_ = true;
-      }
+      // The Python bridge advances both context versions on every path.
+      ++goal_version_;
+      published_goal_ = goal;
+      goal_published_ = true;
+      publish_goal = true;
       envelope_ = Envelope{};
       worker_generation_ = -1;
       localization_ready_observed_ = false;
@@ -306,6 +307,10 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
       envelope_ = Envelope{};
       worker_generation_ = -1;
     }
+    publishDiagnostic(
+      "error", "envelope_unavailable:path_version=" + std::to_string(expected_path) +
+      ":goal_version=" + std::to_string(expected_goal) +
+      ":wait_sec=" + std::to_string(startup_age));
     throw nav2_core::PlannerException("NeuPAN envelope unavailable");
   }
   const auto receive_age = std::chrono::duration<double>(
@@ -313,9 +318,47 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
   const auto planner_age = monotonicNow() - envelope.planner_result_monotonic;
   if (receive_age > envelope_timeout_sec_ || planner_age < 0.0 ||
       planner_age > envelope_timeout_sec_) {
+    const auto now = std::chrono::steady_clock::now();
+    double recovery_age = 0.0;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!envelope_recovery_active_) {
+        envelope_recovery_active_ = true;
+        envelope_recovery_started_at_ = now;
+      }
+      recovery_age = std::chrono::duration<double>(
+        now - envelope_recovery_started_at_).count();
+    }
+    // Never replay an old planner action. During a bounded recovery window
+    // return zero so Nav2 keeps the FollowPath action alive for a fresh scan
+    // solve. The collision guard receives a fresh zero command as well.
+    if (recovery_age <= envelope_recovery_timeout_sec_) {
+      geometry_msgs::msg::TwistStamped command;
+      command.header = pose.header;
+      command.header.stamp = node_->now();
+      publishDiagnostic(
+        "info", "awaiting_fresh_envelope:receive_age_sec=" +
+        std::to_string(receive_age) + ":recovery_age_sec=" +
+        std::to_string(recovery_age));
+      return command;
+    }
+    publishDiagnostic(
+      "error", "envelope_stale:path_version=" + std::to_string(expected_path) +
+      ":goal_version=" + std::to_string(expected_goal) +
+      ":receive_age_sec=" + std::to_string(receive_age) +
+      ":planner_age_sec=" + std::to_string(planner_age));
     throw nav2_core::PlannerException("NeuPAN envelope stale");
   }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    envelope_recovery_active_ = false;
+  }
   if (envelope.path_version != expected_path || envelope.goal_version != expected_goal) {
+    publishDiagnostic(
+      "error", "envelope_context_mismatch:expected_path=" + std::to_string(expected_path) +
+      ":expected_goal=" + std::to_string(expected_goal) +
+      ":received_path=" + std::to_string(envelope.path_version) +
+      ":received_goal=" + std::to_string(envelope.goal_version));
     throw nav2_core::PlannerException("NeuPAN envelope context mismatch");
   }
   if (!finite(envelope.linear_x) || !finite(envelope.angular_z)) {
@@ -384,6 +427,27 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
       const bool awaiting_first_command =
         guard_status.reason == "command_stale" ||
         guard_status.reason == "source_command_stale";
+      // A brief sensor timestamp gap holds a fresh zero while the guard
+      // waits for valid data. The odometry watchdog stays at 150 ms; only
+      // task termination is delayed, by at most two seconds.
+      const auto sensor_recovery_timeout =
+        guardSensorRecoveryTimeout(guard_status.reason, guard_stop_timeout_sec_);
+      if (sensor_recovery_timeout) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!guard_stop_active_) {
+          guard_stop_active_ = true;
+          guard_stop_started_at_ = guard_now;
+        } else if (std::chrono::duration<double>(guard_now - guard_stop_started_at_).count() >=
+          *sensor_recovery_timeout)
+        {
+          throw nav2_core::PlannerException("R1 collision guard sensor recovery timeout");
+        }
+        geometry_msgs::msg::TwistStamped command;
+        command.header = pose.header;
+        command.header.stamp = node_->now();
+        publishDiagnostic("info", "waiting_for_guard_sensor_recovery:" + guard_status.reason);
+        return command;
+      }
       if (!awaiting_first_command) {
         throw nav2_core::PlannerException("R1 collision guard fault:" + guard_status.reason);
       }
@@ -461,6 +525,7 @@ void NeuPANController::envelopeCallback(const std_msgs::msg::String::SharedPtr m
   }
   worker_generation_ = candidate.worker_generation;
   envelope_ = candidate;
+  envelope_recovery_active_ = false;
 }
 
 void NeuPANController::gateCommandCallback(const geometry_msgs::msg::Twist::SharedPtr message)

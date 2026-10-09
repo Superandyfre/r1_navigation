@@ -186,7 +186,12 @@ private:
           livox_history_.pop_front();
           status = "source_scan_has_zero_stamp";
         } else if (rear_history_.empty()) {
-          status = livox_age < pair_wait_sec_ ? "waiting_for_rear_pair" : "source_scans_unsynchronised";
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "rear buffer empty: seen=%d receive_age=%.6f livox_stamp=%.6f",
+            rear_seen_, std::chrono::duration<double>(now_steady - last_rear_received_).count(),
+            livox_stamp.seconds());
+          status = !rear_seen_ ? "waiting_for_rear_scan" : "rear_scan_stale";
           if (livox_age >= pair_wait_sec_) {
             livox_history_.pop_front();
           }
@@ -207,6 +212,11 @@ private:
             rear_history_.erase(nearest);
             pair_ready = true;
           } else if (livox_age < pair_wait_sec_) {
+            RCLCPP_WARN_THROTTLE(
+              get_logger(), *get_clock(), 2000,
+              "pair pending: delta=%.6f livox_stamp=%.6f rear_stamp=%.6f livox_receive_age=%.6f rear_receive_age=%.6f",
+              pair_delta, livox_stamp.seconds(), rear_stamp.seconds(), livox_age,
+              std::chrono::duration<double>(now_steady - rear.received).count());
             // A later rear scan can be closer than the currently available one.
             status = "waiting_for_rear_pair";
           } else {

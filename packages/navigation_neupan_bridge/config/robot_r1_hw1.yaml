@@ -13,6 +13,9 @@ n1_16_production_bridge:
     scan_topic: '/scan_neupan'
     plan_input_topic: '/neupan_path'
     goal_topic: '/neupan_goal'
+    # One path publication is one context, regardless of companion goal order.
+    goal_from_path_only: true
+    odom_topic: '/odom'
     cmd_vel_topic: '/neupan_cmd_vel'
     plan_output_topic: '/neupan_plan'
     ref_state_topic: '/neupan_ref_state'
@@ -44,7 +47,24 @@ n1_16_production_bridge:
     # result before the next SMAC tick.
     refresh_initial_path: false
     control_frequency: 10.0
+    # Admit small confirmed yaw corrections before heading error accumulates.
+    command_stabilizer_angular_deadband_radps: 0.02
     latest_scan_only: true
+    max_path_deviation_m: 0.15
+    # The full-horizon error is diagnostic-only. Stop only after a sustained
+    # near-term departure from the route, so an obstacle-avoidance prediction
+    # does not repeatedly halt an otherwise safe base command.
+    path_deviation_near_term_states: 2
+    path_deviation_warn_m: 0.15
+    path_deviation_stop_m: 0.20
+    path_deviation_stop_cycles: 3
+    # Mesh components are the exact, non-convex arm geometry for NeuPAN. They
+    # are recomputed at about 4 Hz; the separate convex footprint remains the
+    # 10 Hz immediate safety gate.
+    dynamic_mesh_components_timeout_sec: 1.50
+    # Exact mesh overlap counts are diagnostic-only and too expensive to run
+    # for every live scan. Safety filtering and geometry projection remain on.
+    mesh_overlap_diagnostics_enabled: false
     # One representative startup solve initializes the isolated worker before
     # its first live envelope. Repeating 30 warmups delayed the first command
     # beyond the controller's bounded startup window on this CPU profile.
@@ -53,6 +73,16 @@ n1_16_production_bridge:
     # maneuvers. The collision guard remains the final signed-trajectory gate.
     forward_only_enabled: false
     allow_reverse: true
+    # Opposite-direction planner actions must stop and rewrite the NeuPAN
+    # path gear before reaching the closed-loop velocity smoother.
+    auto_gear_transition_enabled: true
+    auto_gear_mismatch_deadband_mps: 0.025
+    auto_gear_confirm_cycles: 5
+    # A transient opposite signed NeuPAN sample must not start a base reversal.
+    auto_gear_opposite_direction_commit_cycles: 12
+    auto_gear_stopped_speed_mps: 0.015
+    auto_gear_stop_timeout_sec: 2.0
+    auto_gear_odom_timeout_sec: 0.5
     # Used only for read-only path-yaw diagnostics if forward_only is enabled.
     forward_only_lookahead_m: 0.35
     forward_only_max_forward_speed_mps: 0.15
