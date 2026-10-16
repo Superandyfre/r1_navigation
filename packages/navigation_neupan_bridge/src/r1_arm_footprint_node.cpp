@@ -232,6 +232,8 @@ public:
       "/r1_arm_mesh_footprint", rclcpp::QoS(10));
     mesh_components_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(
       "/r1_arm_mesh_components", rclcpp::QoS(10));
+    guard_mesh_components_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(
+      "/r1_arm_guard_mesh_components", rclcpp::QoS(10));
     mesh_shadow_scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>(
       "/scan_neupan_mesh_shadow", rclcpp::SensorDataQoS());
     mesh_filter_status_pub_ = create_publisher<std_msgs::msg::String>(
@@ -399,6 +401,29 @@ private:
     mesh_components_pub_->publish(message);
   }
 
+  void publishGuardMeshComponents(
+    const std::vector<std::vector<Point2D>> & raw,
+    const std::vector<std::vector<Point2D>> & expanded)
+  {
+    std_msgs::msg::Float64MultiArray message;
+    std_msgs::msg::MultiArrayDimension dimension;
+    dimension.label = "r1_arm_guard_mesh_components_v1";
+    dimension.size = raw.size();
+    message.data.push_back(static_cast<double>(raw.size()));
+    for (const auto * group : {&raw, &expanded}) {
+      for (const auto & polygon : *group) {
+        message.data.push_back(static_cast<double>(polygon.size()));
+        for (const auto & point : polygon) {
+          message.data.push_back(point.x);
+          message.data.push_back(point.y);
+        }
+      }
+    }
+    dimension.stride = message.data.size();
+    message.layout.dim.push_back(dimension);
+    guard_mesh_components_pub_->publish(message);
+  }
+
   void addMeshPart(const std::string & frame, const std::string & resource, const double scale)
   {
     std::unique_ptr<shapes::Mesh> mesh(
@@ -464,7 +489,8 @@ private:
   }
 
   bool projectCollisionMeshes(
-    std::vector<std::vector<Point2D>> & component_polygons, std::vector<Point2D> & output)
+    std::vector<std::vector<Point2D>> & component_polygons,
+    std::vector<std::vector<Point2D>> & raw_polygons, std::vector<Point2D> & output)
   {
     if (!mesh_model_ready_) {
       return false;
@@ -495,6 +521,7 @@ private:
       if (hull.size() < 3) {
         return false;
       }
+      raw_polygons.push_back(hull);
       std::vector<Point2D> expanded;
       for (const auto & point : hull) {
         addDisc(expanded, point, mesh_projection_margin_m_);
@@ -576,6 +603,7 @@ private:
     bool geometry_changed = true;
     std::unordered_map<std::string, double> current_joint_positions;
     std::vector<std::vector<Point2D>> cached_components;
+    std::vector<std::vector<Point2D>> cached_raw_components;
     std::vector<Point2D> cached_shadow;
     {
       std::lock_guard<std::mutex> lock(mutex_);
@@ -600,6 +628,7 @@ private:
         }
         if (!geometry_changed) {
           cached_components = mesh_cached_components_;
+          cached_raw_components = mesh_cached_raw_components_;
           cached_shadow = mesh_cached_shadow_;
         }
       }
@@ -609,9 +638,11 @@ private:
       if (!mesh_self_filter_polygons_.empty()) {
         mesh_self_filter_polygons_.clear();
         mesh_cached_components_.clear();
+        mesh_cached_raw_components_.clear();
         mesh_cached_shadow_.clear();
         mesh_projected_joint_positions_.clear();
         publishMeshComponents({});
+        publishGuardMeshComponents({}, {});
       }
       return;
     }
@@ -622,21 +653,25 @@ private:
     if (!geometry_changed && !cached_components.empty() && !cached_shadow.empty()) {
       publishMeshShadowPolygon(cached_shadow);
       publishMeshComponents(cached_components);
+      publishGuardMeshComponents(cached_raw_components, cached_components);
       std::lock_guard<std::mutex> lock(mutex_);
       last_mesh_projection_ = std::chrono::steady_clock::now();
       return;
     }
 
     std::vector<std::vector<Point2D>> mesh_components;
+    std::vector<std::vector<Point2D>> raw_components;
     std::vector<Point2D> mesh_shadow;
-    if (!projectCollisionMeshes(mesh_components, mesh_shadow)) {
+    if (!projectCollisionMeshes(mesh_components, raw_components, mesh_shadow)) {
       return;
     }
     publishMeshShadowPolygon(mesh_shadow);
     publishMeshComponents(mesh_components);
+    publishGuardMeshComponents(raw_components, mesh_components);
     std::lock_guard<std::mutex> lock(mutex_);
     mesh_self_filter_polygons_ = mesh_components;
     mesh_cached_components_ = std::move(mesh_components);
+    mesh_cached_raw_components_ = std::move(raw_components);
     mesh_cached_shadow_ = std::move(mesh_shadow);
     mesh_projected_joint_positions_ = std::move(current_joint_positions);
     last_mesh_projection_ = std::chrono::steady_clock::now();
@@ -715,6 +750,7 @@ private:
   std::vector<MeshPart> mesh_parts_;
   std::vector<std::vector<Point2D>> mesh_self_filter_polygons_;
   std::vector<std::vector<Point2D>> mesh_cached_components_;
+  std::vector<std::vector<Point2D>> mesh_cached_raw_components_;
   std::vector<Point2D> mesh_cached_shadow_;
   std::unordered_map<std::string, double> latest_mesh_joint_positions_;
   std::unordered_map<std::string, double> mesh_projected_joint_positions_;
@@ -739,6 +775,7 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr mesh_footprint_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr mesh_components_pub_;
+  rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr guard_mesh_components_pub_;
   rclcpp::CallbackGroup::SharedPtr scan_callback_group_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr mesh_shadow_scan_sub_;
   rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr mesh_shadow_scan_pub_;

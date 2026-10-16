@@ -7,10 +7,12 @@ import os
 import signal
 import threading
 import time
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
 import rclpy
+import yaml
 from geometry_msgs.msg import Twist
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.executors import MultiThreadedExecutor
@@ -23,6 +25,7 @@ from r1_neupan_integration.n1_16_bridge import (
     N116_SCHEMA,
     ProductionWholeCoreClient,
 )
+from r1_neupan_integration.n1_15_whole_core import same_terminal_pose
 from r1_neupan_integration.command_stabilizer import (
     BidirectionalCommandStabilizer,
     CommandStabilizerConfig,
@@ -32,10 +35,22 @@ from r1_neupan_integration.command_stabilizer import (
 from r1_neupan_integration.n2_3_contract import make_context, make_planner_envelope
 from r1_neupan_integration.forward_only import ForwardOnlyConfig, ForwardOnlyController
 from r1_neupan_integration.latest_input_scheduler import LatestInputScheduler
+from r1_neupan_integration.local_detour import (
+    LocalDetourController, LocalDetourPlanner, ReverseEscapePlanner,
+)
 from r1_neupan_integration.path_validation import (
     TemporalPathDeviationGuard,
     max_path_deviation_m as calculate_max_path_deviation_m,
     near_term_path_deviation_m as calculate_near_term_path_deviation_m,
+)
+from r1_neupan_integration.obstacle_motion_policy import (
+    MotionPolicyConfig,
+    first_command_collision_distance,
+    first_swept_collision_distance,
+    plan_obstacle_speed,
+)
+from r1_neupan_integration.stop_reverse_recovery import (
+    StopReverseRecovery, stopped_reverse_velocity,
 )
 
 
@@ -106,6 +121,16 @@ class N116Node(N115Node):
         self.declare_parameter("path_deviation_warn_m", 0.15)
         self.declare_parameter("path_deviation_stop_m", 0.20)
         self.declare_parameter("path_deviation_stop_cycles", 3)
+        self.declare_parameter("obstacle_motion_enabled", False)
+        self.declare_parameter("local_detour_enabled", False)
+        self.declare_parameter("reverse_escape_enabled", False)
+        self.declare_parameter("neupan_bypass_enabled", False)
+        self.declare_parameter("obstacle_braking_mps2", 0.20)
+        self.declare_parameter("obstacle_reaction_sec", 0.30)
+        self.declare_parameter("obstacle_stop_margin_m", 0.20)
+        self.declare_parameter("obstacle_preview_m", 0.90)
+        self.declare_parameter("local_detour_preview_m", 1.50)
+        self.declare_parameter("obstacle_odom_timeout_sec", 0.50)
         # These stay disabled outside the dedicated HW0 shadow launch. The
         # force flag is runtime-settable only when that launch explicitly
         # allows it, and a triggered fault requires a process restart.
@@ -227,6 +252,52 @@ class N116Node(N115Node):
             opposite_direction_commit_cycles=int(self.get_parameter(
                 "auto_gear_opposite_direction_commit_cycles").value),
         ))
+        self.reverse_recovery = StopReverseRecovery()
+        self.obstacle_motion_enabled = bool(
+            self.get_parameter("obstacle_motion_enabled").value
+        )
+        self.local_detour_enabled = bool(
+            self.get_parameter("local_detour_enabled").value
+        )
+        self.reverse_escape_enabled = bool(
+            self.get_parameter("reverse_escape_enabled").value
+        )
+        self.neupan_bypass_enabled = bool(
+            self.get_parameter("neupan_bypass_enabled").value
+        )
+        self._neupan_bypass_engaged = False
+        self._neupan_bypass_goal_version = None
+        self._neupan_bypass_goal_pose = None
+        self.obstacle_odom_timeout_sec = float(
+            self.get_parameter("obstacle_odom_timeout_sec").value
+        )
+        if self.obstacle_odom_timeout_sec <= 0.0:
+            raise ValueError("obstacle_odom_timeout_sec must be positive")
+        with open(self.client.config_path, "r", encoding="utf-8") as stream:
+            planner_config = yaml.safe_load(stream) or {}
+        self.obstacle_motion_config = MotionPolicyConfig(
+            max_speed_mps=float(planner_config["ref_speed"]),
+            braking_mps2=float(self.get_parameter("obstacle_braking_mps2").value),
+            reaction_sec=float(self.get_parameter("obstacle_reaction_sec").value),
+            stop_margin_m=float(self.get_parameter("obstacle_stop_margin_m").value),
+            preview_m=float(self.get_parameter("obstacle_preview_m").value),
+            front_m=self.planner_base_extents["base_front_m"],
+            rear_m=self.planner_base_extents["base_rear_m"],
+            left_m=self.planner_base_extents["base_left_m"],
+            right_m=self.planner_base_extents["base_right_m"],
+            steps=int(self.client.receding or planner_config["receding"]),
+            step_time_sec=float(planner_config["step_time"]),
+        )
+        self.local_detour_config = replace(
+            self.obstacle_motion_config,
+            preview_m=max(
+                self.obstacle_motion_config.preview_m,
+                float(self.get_parameter("local_detour_preview_m").value),
+            ),
+        )
+        self.local_detour_planner = LocalDetourPlanner(self.local_detour_config)
+        self.local_detour_controller = LocalDetourController()
+        self.reverse_escape_planner = ReverseEscapePlanner(self.obstacle_motion_config)
         self._forward_blocked_reported_context: tuple[int, int] | None = None
         self.add_on_set_parameters_callback(self._shadow_fault_parameter_callback)
         self.get_logger().info(
@@ -429,9 +500,21 @@ class N116Node(N115Node):
                         last_processed_scan=self.last_processed_scan,
                     )
                     return
+                if self.obstacle_motion_enabled and self.processed_scan_counter != scan_counter:
+                    self._trace_wait_state("processed_scan", scan_counter=scan_counter)
+                    return
+                if self.obstacle_motion_enabled and self.raw_environment_points is None:
+                    self._trace_wait_state("scan_transform", scan_counter=scan_counter)
+                    self._publish_failsafe_stop()
+                    return
                 state = self.robot_state.copy()
                 points = (np.empty((2, 0), dtype=np.float64)
                           if self.obstacle_points is None else self.obstacle_points.copy())
+                raw_points = (
+                    np.empty((2, 0), dtype=np.float64)
+                    if self.raw_environment_points is None
+                    else self.raw_environment_points.copy()
+                )
                 path = self.path_matrix.copy()
                 path_version = int(self.path_version)
                 nav2_path_version = int(self.nav2_path_version)
@@ -441,12 +524,55 @@ class N116Node(N115Node):
                 scan_receive = float(self.latest_scan_receive_monotonic)
                 scan_metrics = dict(self.latest_scan_metrics)
                 scan_filter = dict(self.latest_scan_filter)
+                measured_velocity = np.asarray([
+                    [self.observed_linear_x], [self.observed_angular_z],
+                ], dtype=np.float64)
+                odom_age_sec = time.monotonic() - self.observed_odom_received_monotonic
                 tf_stamp = float(getattr(self, "tf_stamp_sec", -1.0))
                 active_gear = int(self.active_gear)
                 requested_gear = int(self.requested_gear)
                 gear_transition_pending = self.pending_gear is not None
                 previous_scan = int(self.last_processed_scan)
                 self.last_processed_scan = scan_counter
+            motion_decision = None
+            route_decision = None
+            local_detour = None
+            bypass_requested = False
+            if self._neupan_bypass_goal_version != goal_version:
+                if not same_terminal_pose(self._neupan_bypass_goal_pose, goal):
+                    self._neupan_bypass_engaged = False
+                self._neupan_bypass_goal_version = goal_version
+                self._neupan_bypass_goal_pose = None if goal is None else goal.copy()
+            if self.obstacle_motion_enabled:
+                if odom_age_sec > self.obstacle_odom_timeout_sec:
+                    self._trace_wait_state("fresh_odom", age_sec=odom_age_sec)
+                    self._publish_failsafe_stop()
+                    return
+                route_decision = plan_obstacle_speed(
+                    state, path, raw_points, points, self.obstacle_motion_config
+                )
+                bypass_requested = (
+                    self.neupan_bypass_enabled
+                    and ((active_gear == 1 and route_decision.route_blocked)
+                         or self._neupan_bypass_engaged)
+                )
+                if self.local_detour_enabled and active_gear == 1:
+                    detour_route_decision = plan_obstacle_speed(
+                        state, path, raw_points, points, self.local_detour_config
+                    )
+                    local_detour = self.local_detour_planner.update(
+                        state, path, raw_points, points, detour_route_decision,
+                        path_version, time.monotonic(),
+                    )
+                else:
+                    self.local_detour_planner.reset()
+                    self.local_detour_controller.reset()
+                motion_decision = (
+                    plan_obstacle_speed(
+                        state, local_detour.path, raw_points, points,
+                        self.obstacle_motion_config,
+                    ) if local_detour is not None else route_decision
+                )
             obsolete = 0 if previous_scan == 0 else max(0, scan_counter - previous_scan - 1)
             self.obsolete_dropped += obsolete
             self.unique_processed += 1
@@ -478,6 +604,19 @@ class N116Node(N115Node):
                     scan_update_monotonic=float(
                         getattr(self, "latest_scan_update_monotonic", -1.0)
                     ),
+                    reference_speed_profile=(
+                        motion_decision.speed_profile if motion_decision is not None else None
+                    ),
+                    measured_velocity=(
+                        measured_velocity if motion_decision is not None else None
+                    ),
+                    local_reference_path=(
+                        local_detour.path if local_detour is not None else None
+                    ),
+                    local_reference_id=(
+                        local_detour.identifier if local_detour is not None else 0
+                    ),
+                    bypass_mode=bypass_requested,
                 )
             except BridgeProtocolError as exc:
                 self._bridge_failed = True
@@ -527,6 +666,28 @@ class N116Node(N115Node):
             self.ref_pub.publish(self._path_message(outputs["ref_state"], self.map_frame, stamp))
             action = outputs["action"]
             command = Twist()
+            optimized_free_distance = float("inf")
+            if motion_decision is not None:
+                optimized_free_distance = min(
+                    first_swept_collision_distance(
+                        state, outputs["opt_state"], raw_points,
+                        self.obstacle_motion_config,
+                    ),
+                    first_swept_collision_distance(
+                        state, outputs["opt_state"], points,
+                        self.obstacle_motion_config,
+                    ),
+                )
+            verified_neupan_bypass = (
+                bypass_requested
+                and bool(record.get("info", {}).get("bypass_valid", False))
+                and np.isinf(optimized_free_distance)
+            )
+            bypass_phase = record.get("info", {}).get("bypass_phase")
+            if bypass_phase == "done":
+                self._neupan_bypass_engaged = False
+            elif verified_neupan_bypass:
+                self._neupan_bypass_engaged = True
             max_path_deviation_m = calculate_max_path_deviation_m(outputs["opt_state"], path)
             near_term_deviation_m = calculate_near_term_path_deviation_m(
                 outputs["opt_state"], path, self.path_deviation_near_term_states)
@@ -535,6 +696,34 @@ class N116Node(N115Node):
                 self._path_deviation_goal_version = goal_version
             path_deviation = self.path_deviation_guard.evaluate(near_term_deviation_m)
             path_deviation_blocked = path_deviation.blocked
+            if verified_neupan_bypass:
+                path_deviation_blocked = False
+                self.path_deviation_guard.reset()
+            verified_local_detour = False
+            if local_detour is not None and not motion_decision.route_blocked:
+                verified_local_detour = True
+                path_deviation_blocked = False
+                self.path_deviation_guard.reset()
+            elif (self.local_detour_enabled and motion_decision is not None
+                  and motion_decision.route_blocked):
+                predicted = outputs["opt_state"]
+                route_vector = path[:2, -1] - state[:2, 0]
+                route_norm = float(np.linalg.norm(route_vector))
+                predicted_progress = (
+                    float(np.dot(predicted[:2, -1] - predicted[:2, 0], route_vector)
+                          / route_norm)
+                    if route_norm > 1.0e-6 else 0.0
+                )
+                verified_local_detour = (
+                    optimized_free_distance >= motion_decision.free_distance_m
+                    and optimized_free_distance > self.obstacle_motion_config.stop_margin_m
+                    and near_term_deviation_m > self.path_deviation_guard.warn_m
+                    and near_term_deviation_m <= 0.35
+                    and predicted_progress > 0.02
+                )
+                if verified_local_detour:
+                    path_deviation_blocked = False
+                    self.path_deviation_guard.reset()
             raw_linear_x = 0.0
             raw_angular_z = 0.0
             decision = None
@@ -542,13 +731,63 @@ class N116Node(N115Node):
             gear_gate_decision = None
             stop_requested = bool(record.get("info", {}).get("stop"))
             arrived = bool(record.get("info", {}).get("arrive"))
-            if not path_deviation_blocked and not arrived and action.size >= 2:
-                candidate = action
-                if stop_requested:
-                    candidate = outputs.get("optimized_velocity", action)
+            recovery_reverse_requested = False
+            escape_linear = None
+            escape_state = "DISABLED"
+            if (self.obstacle_motion_enabled and self.reverse_escape_enabled
+                    and route_decision is not None):
+                escape_linear, escape_state = self.reverse_escape_planner.update(
+                    state, float(measured_velocity[0, 0]), raw_points, points,
+                    route_decision, local_detour is not None, active_gear,
+                    nav2_path_version, time.monotonic(),
+                )
+            detour_phase = None
+            guided_detour_command = False
+            recovery_velocity = (
+                stopped_reverse_velocity(outputs.get("optimized_velocity", np.empty((0,))))
+                if stop_requested and self.allow_reverse and not self.forward_only_enabled
+                and not self.obstacle_motion_enabled
+                else None
+            )
+            if recovery_velocity is not None and not arrived and goal is not None:
+                recovery_reverse_requested = self.reverse_recovery.permit(
+                    goal_pose=(float(goal[0, 0]), float(goal[1, 0]), float(goal[2, 0])),
+                    pose=(float(state[0, 0]), float(state[1, 0])),
+                    active_gear=active_gear,
+                    now=time.monotonic(),
+                )
+            if escape_linear is not None and escape_linear < 0.0:
+                recovery_reverse_requested = True
+            if not arrived and (recovery_reverse_requested or
+                                escape_linear is not None or
+                                (local_detour is not None and verified_local_detour) or
+                                (not stop_requested and not path_deviation_blocked)):
+                if escape_linear is not None:
+                    candidate = np.asarray([[escape_linear], [0.0]])
+                elif recovery_reverse_requested:
+                    candidate = np.asarray(recovery_velocity).reshape(2, 1)
+                elif (route_decision is not None and route_decision.route_blocked
+                      and local_detour is None
+                      and route_decision.speed_profile[0] <= 0.0
+                      and not verified_neupan_bypass):
+                    candidate = np.zeros((2, 1))
+                else:
+                    candidate = action
+                if local_detour is not None and verified_local_detour and not recovery_reverse_requested:
+                    guided_linear, guided_angular, detour_phase = self.local_detour_controller.command(
+                        state, local_detour
+                    )
+                    candidate = np.asarray([[guided_linear], [guided_angular]])
+                    guided_detour_command = True
                 if candidate.size >= 2:
                     raw_linear_x = float(candidate.reshape(-1)[0])
                     raw_angular_z = float(candidate.reshape(-1)[1])
+                    if verified_neupan_bypass and raw_linear_x > 0.0:
+                        optimized_speed = plan_obstacle_speed(
+                            state, outputs["opt_state"], raw_points, points,
+                            self.obstacle_motion_config,
+                        ).speed_profile[0]
+                        raw_linear_x = min(raw_linear_x, float(optimized_speed))
                     if self.forward_only_enabled:
                         decision = self.forward_only.decide(
                             raw_linear_x=raw_linear_x,
@@ -621,13 +860,65 @@ class N116Node(N115Node):
                         else:
                             command.linear.x = raw_linear_x
                             command.angular.z = raw_angular_z
-            # A planner stop can carry a signed optimized velocity requesting
-            # a reversal.  Resetting here would erase the gate's confirmation
-            # count before it can safely switch gear.
-            if arrived:
+            if arrived or (stop_requested and not guided_detour_command and
+                           not recovery_reverse_requested and escape_linear is None):
                 self.command_stabilizer.reset()
                 self.gear_transition_gate.reset()
                 self.path_deviation_guard.reset()
+            unsafe_prediction = False
+            command_free_distance = float("inf")
+            stopping_distance = 0.0
+            if motion_decision is not None and (
+                abs(command.linear.x) > 1.0e-6 or abs(command.angular.z) > 1.0e-6
+            ):
+                speed = max(abs(command.linear.x), abs(float(measured_velocity[0, 0])))
+                stopping_distance = (
+                    speed * self.obstacle_motion_config.reaction_sec
+                    + speed * speed / (2.0 * self.obstacle_motion_config.braking_mps2)
+                    + self.obstacle_motion_config.stop_margin_m
+                )
+                command_preview = replace(
+                    self.obstacle_motion_config,
+                    preview_m=min(
+                        self.obstacle_motion_config.preview_m,
+                        max(0.30, stopping_distance + 0.10),
+                    ),
+                    # The MPC horizon grew from 6 to 20 steps for bypass.
+                    # Keep the original 1.5 s constant-command rotation sweep.
+                    steps=min(6, self.obstacle_motion_config.steps),
+                )
+                command_free_distance = min(
+                    first_command_collision_distance(
+                        state, command.linear.x, command.angular.z,
+                        raw_points, command_preview,
+                    ),
+                    first_command_collision_distance(
+                        state, command.linear.x, command.angular.z,
+                        points, command_preview,
+                    ),
+                )
+                if not guided_detour_command:
+                    command_free_distance = min(
+                        command_free_distance, optimized_free_distance
+                    )
+                unsafe_prediction = command_free_distance < stopping_distance
+                if unsafe_prediction:
+                    command = Twist()
+            recovery_reverse_active = recovery_reverse_requested and command.linear.x < 0.0
+            obstacle_state = "CLEAR"
+            if local_detour is not None and verified_local_detour and not unsafe_prediction:
+                obstacle_state = "DETOUR" if abs(command.linear.x) > 0.005 or abs(command.angular.z) > 0.05 else "WAIT"
+            elif motion_decision is not None and motion_decision.route_blocked:
+                if recovery_reverse_active:
+                    obstacle_state = "RECOVER"
+                elif verified_neupan_bypass and not unsafe_prediction:
+                    obstacle_state = "DETOUR"
+                elif verified_local_detour and not unsafe_prediction and command.linear.x > 0.0:
+                    obstacle_state = "DETOUR"
+                elif abs(command.linear.x) < 0.005 and abs(measured_velocity[0, 0]) < 0.015:
+                    obstacle_state = "WAIT"
+                else:
+                    obstacle_state = "SLOW"
             cmd_publish_monotonic = time.monotonic()
             self.cmd_pub.publish(command)
             output_publish = time.monotonic()
@@ -714,6 +1005,62 @@ class N116Node(N115Node):
                 ),
                 "scan_filter": scan_filter,
                 "infeasible_cycles": int(self.infeasible_cycles),
+                "recovery_reverse_requested": recovery_reverse_requested,
+                "recovery_reverse_active": recovery_reverse_active,
+                "obstacle_motion": {
+                    "enabled": self.obstacle_motion_enabled,
+                    "local_detour_enabled": self.local_detour_enabled,
+                    "reverse_escape_enabled": self.reverse_escape_enabled,
+                    "neupan_bypass_enabled": self.neupan_bypass_enabled,
+                    "neupan_bypass_requested": bypass_requested,
+                    "neupan_bypass_verified": verified_neupan_bypass,
+                    "neupan_bypass_phase": bypass_phase,
+                    "neupan_bypass_side": int(record.get("info", {}).get("bypass_side", 0)),
+                    "neupan_bypass_clearance_m": record.get("info", {}).get("bypass_clearance_m"),
+                    "neupan_bypass_solver_failures": int(record.get("info", {}).get("bypass_solver_failures", 0)),
+                    "state": obstacle_state,
+                    "reason": (
+                        motion_decision.reason if motion_decision is not None else "disabled"
+                    ),
+                    "route_blocked": bool(
+                        motion_decision.route_blocked if motion_decision is not None else False
+                    ),
+                    "original_route_blocked": bool(
+                        route_decision.route_blocked if route_decision is not None else False
+                    ),
+                    "local_detour_id": (
+                        local_detour.identifier if local_detour is not None else None
+                    ),
+                    "local_detour_side": (
+                        local_detour.side if local_detour is not None else None
+                    ),
+                    "local_detour_phase": detour_phase,
+                    "local_detour_search": self.local_detour_planner.last_status,
+                    "guided_detour_command": guided_detour_command,
+                    "worker_stop_requested": stop_requested,
+                    "reverse_escape_state": escape_state,
+                    "free_distance_m": (
+                        motion_decision.free_distance_m
+                        if motion_decision is not None and np.isfinite(motion_decision.free_distance_m)
+                        else None
+                    ),
+                    "optimized_free_distance_m": (
+                        optimized_free_distance if np.isfinite(optimized_free_distance)
+                        else None
+                    ),
+                    "command_free_distance_m": (
+                        command_free_distance if np.isfinite(command_free_distance)
+                        else None
+                    ),
+                    "command_stopping_distance_m": stopping_distance,
+                    "reference_speed_profile": (
+                        motion_decision.speed_profile.tolist()
+                        if motion_decision is not None else None
+                    ),
+                    "verified_local_detour": verified_local_detour,
+                    "unsafe_prediction": unsafe_prediction,
+                    "odom_age_sec": float(odom_age_sec),
+                },
                 "scan_timing_ms": {
                     key: float(value) for key, value in scan_metrics.items()
                 },

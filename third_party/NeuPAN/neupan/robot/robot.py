@@ -67,6 +67,14 @@ class robot:
 
         self.speed_bound = self.max_speed
         self.acce_bound = self.max_acce * self.dt
+        self.smooth_weight = float(kwargs.get("smooth_weight", 0.0))
+        self.path_relative_cost = bool(kwargs.get("path_relative_cost", False))
+        self.geometry_collision_cost = bool(kwargs.get("geometry_collision_cost", False))
+        self.geometry_margin_m = float(kwargs.get("geometry_margin_m", 0.0))
+        if not np.isfinite(self.geometry_margin_m) or self.geometry_margin_m < 0.0:
+            raise ValueError("geometry_margin_m must be finite and nonnegative")
+        if not np.isfinite(self.smooth_weight) or self.smooth_weight < 0.0:
+            raise ValueError("smooth_weight must be finite and nonnegative")
 
         self.name = kwargs.get("name", self.kinematics + "_robot" + '_default') 
 
@@ -100,12 +108,33 @@ class robot:
         self.para_s = cp.Parameter((3, self.T+1), name='para_state') 
         self.para_gamma_a = cp.Parameter((3, self.T+1), name='para_gamma_a') 
         self.para_gamma_b = cp.Parameter((self.T,), name='para_gamma_b')
+        self.para_measured_u = cp.Parameter((2, 1), name='para_measured_u')
+        self.para_first_step_bound = cp.Parameter((2, 1), nonneg=True, name='para_first_step_bound')
+        self.para_speed_limits = cp.Parameter((self.T,), nonneg=True, name='para_speed_limits')
+        self.para_min_speed = cp.Parameter(
+            name='para_min_speed', value=-float(self.max_speed[0, 0])
+        )
+
+        path_parameters = []
+        if self.path_relative_cost:
+            self.para_path_tangent = cp.Parameter((2, self.T + 1), name='para_path_tangent')
+            self.para_path_normal = cp.Parameter((2, self.T + 1), name='para_path_normal')
+            self.para_path_longitudinal = cp.Parameter((self.T + 1,), name='para_path_longitudinal')
+            self.para_path_lateral = cp.Parameter((self.T + 1,), name='para_path_lateral')
+            path_parameters = [
+                self.para_path_tangent, self.para_path_normal,
+                self.para_path_longitudinal, self.para_path_lateral,
+            ]
 
         self.para_A_list = [ cp.Parameter((3, 3), name='para_A_'+str(t)) for t in range(self.T)]
         self.para_B_list = [ cp.Parameter((3, 2), name='para_B_'+str(t)) for t in range(self.T)]
         self.para_C_list = [ cp.Parameter((3, 1), name='para_C_'+str(t)) for t in range(self.T)]
 
-        return [self.para_s, self.para_gamma_a, self.para_gamma_b] + self.para_A_list + self.para_B_list + self.para_C_list
+        return [
+            self.para_s, self.para_gamma_a, self.para_gamma_b,
+            self.para_measured_u, self.para_first_step_bound, self.para_speed_limits,
+            self.para_min_speed,
+        ] + path_parameters + self.para_A_list + self.para_B_list + self.para_C_list
 
 
     def coefficient_parameter_define(self, no_obs: bool = False, max_num: int = 10):
@@ -119,10 +148,11 @@ class robot:
             self.para_gamma_c, self.para_zeta_a = [], []
 
         else:
+            dimension = 3 if self.geometry_collision_cost else 2
             self.para_gamma_c = [
                 cp.Parameter(
-                    (max_num, 2),
-                    value=np.zeros((max_num, 2)),
+                    (max_num, dimension),
+                    value=np.zeros((max_num, dimension)),
                     name="para_gamma_c" + str(i),
                 )
                 for i in range(self.T)
@@ -150,22 +180,32 @@ class robot:
 
         diff_u = para_p_u * self.indep_u[0, :] - self.para_gamma_b
 
-        # Support both scalar and vector para_q_s
-        # If para_q_s is a vector (3,1), use element-wise multiplication
-        # If para_q_s is a scalar, use scalar multiplication
-        if para_q_s.shape == (3, 1):
+        # Support both scalar and vector para_q_s.
+        if self.path_relative_cost:
+            xy = self.indep_s[0:2, :]
+            along = cp.sum(cp.multiply(self.para_path_tangent, xy), axis=0)
+            across = cp.sum(cp.multiply(self.para_path_normal, xy), axis=0)
+            yaw = para_q_s[2, 0] * self.indep_s[2, :] - self.para_gamma_a[2, :]
+            diff_s_cost = (
+                cp.sum_squares(along - self.para_path_longitudinal)
+                + cp.sum_squares(across - self.para_path_lateral)
+                + cp.sum_squares(yaw)
+            )
+        elif para_q_s.shape == (3, 1):
             # Element-wise multiplication: para_q_s (3,) broadcasts with indep_s (3, T+1)
             diff_s = cp.multiply(para_q_s, self.indep_s) - self.para_gamma_a
+            diff_s_cost = cp.sum_squares(diff_s[0:2]) if self.kinematics == 'omni' else cp.sum_squares(diff_s)
         else:
             # Scalar multiplication (backward compatibility)
             diff_s = para_q_s * self.indep_s - self.para_gamma_a
-
-        if self.kinematics == 'omni':
-            diff_s_cost = cp.sum_squares(diff_s[0:2])
-        else:
-            diff_s_cost = cp.sum_squares(diff_s)
+            diff_s_cost = cp.sum_squares(diff_s[0:2]) if self.kinematics == 'omni' else cp.sum_squares(diff_s)
 
         C0_cost = diff_s_cost + cp.sum_squares(diff_u)
+        if self.smooth_weight:
+            C0_cost += self.smooth_weight * (
+                cp.sum_squares(self.indep_u[:, 0:1] - self.para_measured_u)
+                + cp.sum_squares(self.indep_u[:, 1:] - self.indep_u[:, :-1])
+            )
 
         return C0_cost
 
@@ -183,7 +223,8 @@ class robot:
     def I_cost(self, indep_dis, ro_obs):
 
         cost = 0
-        indep_t = self.indep_s[0:2, 1:]
+        dimension = 3 if self.geometry_collision_cost else 2
+        indep_t = self.indep_s[0:dimension, 1:]
 
         I_list = []
 
@@ -230,15 +271,77 @@ class robot:
         constraints = []
 
         constraints += [ cp.abs(self.indep_u[:, 1:] - self.indep_u[:, :-1] ) <= self.acce_bound ] 
+        constraints += [cp.abs(self.indep_u[:, 0:1] - self.para_measured_u) <= self.para_first_step_bound]
+        # The obstacle profile limits approach speed toward the route blockage.
+        # Reverse remains available under the robot's normal speed bound.
+        constraints += [self.indep_u[0, :] <= self.para_speed_limits]
+        constraints += [self.indep_u[0, :] >= self.para_min_speed]
         constraints += [ cp.abs(self.indep_u) <= self.speed_bound]
         constraints += [ self.indep_s[:, 0:1] == self.para_s[:, 0:1] ]
 
         return constraints
     
 
-    def generate_state_parameter_value(self, nom_s, nom_u, qs_ref_s, pu_ref_us):
+    def generate_state_parameter_value(self, nom_s, nom_u, qs_ref_s, pu_ref_us,
+                                       measured_velocity=None, speed_limits=None,
+                                       ref_s=None, q_s=None, path_lateral_scale=1.0,
+                                       min_linear_speed=None):
 
-        state_value_list = [nom_s, qs_ref_s, pu_ref_us]
+        if measured_velocity is None:
+            measured = nom_u[:, 0:1]
+            first_step_bound = torch.as_tensor(
+                2.0 * self.max_speed, dtype=nom_u.dtype, device=nom_u.device)
+        else:
+            measured = measured_velocity.reshape((2, 1))
+            if not torch.isfinite(measured).all():
+                raise ValueError("measured velocity must be finite")
+            speed_bound = torch.as_tensor(
+                self.max_speed, dtype=nom_u.dtype, device=nom_u.device)
+            measured = torch.clamp(measured, -speed_bound, speed_bound)
+            first_step_bound = torch.as_tensor(
+                self.acce_bound + 0.005, dtype=nom_u.dtype, device=nom_u.device)
+
+        if speed_limits is None:
+            limits = torch.full((self.T,), float(self.max_speed[0, 0]),
+                                dtype=nom_u.dtype, device=nom_u.device)
+        else:
+            limits = speed_limits.reshape((self.T,))
+            if not torch.isfinite(limits).all() or torch.any(limits < 0.0):
+                raise ValueError("speed limits must be finite and nonnegative")
+            limits = torch.clamp(limits, max=float(self.max_speed[0, 0]))
+            if measured_velocity is not None:
+                braking_floor = torch.clamp(
+                    torch.abs(measured[0, 0])
+                    - (torch.arange(self.T, dtype=nom_u.dtype, device=nom_u.device) + 1.0)
+                    * float(self.acce_bound[0, 0]),
+                    min=0.0,
+                )
+                limits = torch.maximum(limits, braking_floor)
+
+        state_value_list = [nom_s, qs_ref_s, pu_ref_us,
+                            measured, first_step_bound, limits,
+                            torch.as_tensor(
+                                -float(self.max_speed[0, 0]) if min_linear_speed is None
+                                else float(min_linear_speed),
+                                dtype=nom_u.dtype, device=nom_u.device,
+                            )]
+
+        if self.path_relative_cost:
+            if ref_s is None or q_s is None or not 0.0 < path_lateral_scale <= 1.0:
+                raise ValueError("path-relative cost requires a reference and lateral scale")
+            delta = ref_s[:2, 1:] - ref_s[:2, :-1]
+            delta = torch.cat((delta, delta[:, -1:]), dim=1)
+            length = torch.linalg.vector_norm(delta, dim=0, keepdim=True)
+            heading = torch.stack((torch.cos(ref_s[2]), torch.sin(ref_s[2])))
+            tangent = torch.where(length > 1.0e-5, delta / length.clamp_min(1.0e-5), heading)
+            normal = torch.stack((-tangent[1], tangent[0]))
+            weighted_tangent = q_s[0, 0] * tangent
+            weighted_normal = q_s[1, 0] * path_lateral_scale * normal
+            state_value_list += [
+                weighted_tangent, weighted_normal,
+                torch.sum(weighted_tangent * ref_s[:2], dim=0),
+                torch.sum(weighted_normal * ref_s[:2], dim=0),
+            ]
 
         tensor_A_list = []
         tensor_B_list = []
@@ -373,4 +476,3 @@ class robot:
         assert vertices_np.shape[1] >= 3, "vertices must be a numpy array of shape (2, N), N >= 3"
 
         return vertices_np
-

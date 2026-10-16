@@ -7,4 +7,11 @@
       Clears only the current padded R1 footprint after static-map inflation.
     </description>
   </class>
+  <class
+    type="navigation_neupan_bridge::SoftClearanceLayer"
+    base_class_type="nav2_costmap_2d::Layer">
+    <description>
+      Adds nonlethal clearance preference beyond the hard inflation radius.
+    </description>
+  </class>
 </library>

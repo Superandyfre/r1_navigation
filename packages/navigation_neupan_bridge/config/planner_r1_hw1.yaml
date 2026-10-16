@@ -1,9 +1,12 @@
 # HW1 profile. Its launch requires a mechanical calibration record before use.
-receding: 6
+receding: 20
 step_time: 0.25
 ref_speed: 0.20
 device: 'cpu'
 time_print: false
+bypass_enabled: true
+bypass_lateral_scale: 0.20
+bypass_min_clearance: 0.05
 # NRMP constrains its distance slack to d_min=0.01. The collision threshold
 # must be strictly below that numerical lower bound or every finite solve is
 # falsely reported as a collision due to floating-point roundoff.
@@ -15,6 +18,10 @@ robot:
   max_acce: [0.30, 0.50]
   length: 0.682
   width: 0.532
+  smooth_weight: 0.05
+  path_relative_cost: true
+  geometry_collision_cost: true
+  geometry_margin_m: 0.08
 
 ipath:
   # Preserve local path geometry for the short receding horizon.
@@ -51,3 +58,4 @@ adjust:
   eta: 3.5
   d_max: 0.1
   d_min: 0.01
+  ro_obs: 4000

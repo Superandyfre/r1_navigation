@@ -24,6 +24,7 @@ from math import inf
 from typing import Optional
 from neupan.configuration import to_device, tensor_to_np
 from neupan.util import downsample_decimation
+from neupan.bypass import signed_clearances
 
 class PAN(torch.nn.Module):
     """
@@ -107,7 +108,12 @@ class PAN(torch.nn.Module):
         self.printed = False
 
     def forward(
-        self, nom_s: torch.Tensor, nom_u: torch.Tensor, ref_s: torch.Tensor, ref_us: torch.Tensor, obs_points: torch.Tensor = None, point_velocities: torch.Tensor = None
+        self, nom_s: torch.Tensor, nom_u: torch.Tensor, ref_s: torch.Tensor, ref_us: torch.Tensor,
+        obs_points: torch.Tensor = None, point_velocities: torch.Tensor = None,
+        measured_velocity: torch.Tensor = None, speed_limits: torch.Tensor = None,
+        path_lateral_scale: float = 1.0,
+        geometry_mode: bool = False,
+        min_linear_speed: float = None,
     ):
         """
         input:
@@ -125,9 +131,22 @@ class PAN(torch.nn.Module):
         process:
         """
 
+        has_obstacles = obs_points is not None and obs_points.shape[1] > 0
+        if not has_obstacles and self.dune_layer is not None:
+            self.dune_layer.min_distance = inf
+            self.dune_layer.obstacle_points = None
+
         for i in range(self.iter_num):
 
-            if obs_points is not None and not self.no_obs:
+            if has_obstacles and geometry_mode:
+                current_clearance = signed_clearances(
+                    nom_s[:, 0].detach().cpu().numpy(),
+                    obs_points.detach().cpu().numpy(), self.robot.vertices,
+                    self.robot.G, self.robot.h,
+                )
+                self.dune_layer.min_distance = float(current_clearance.min())
+                mu_list, lam_list, sort_point_list = [], [], []
+            elif has_obstacles and not self.no_obs:
                 point_flow_list, R_list, obs_points_list = self.generate_point_flow(
                     nom_s, obs_points, point_velocities
                 )
@@ -138,7 +157,9 @@ class PAN(torch.nn.Module):
                 mu_list, lam_list, sort_point_list = [], [], []
                 
             nom_s, nom_u, nom_distance = self.nrmp_layer(
-                nom_s, nom_u, ref_s, ref_us, mu_list, lam_list, sort_point_list
+                nom_s, nom_u, ref_s, ref_us, mu_list, lam_list, sort_point_list,
+                measured_velocity, speed_limits, path_lateral_scale,
+                obs_points if geometry_mode else None, min_linear_speed,
             )
 
             if self.stop_criteria(nom_s, nom_u, mu_list, lam_list):

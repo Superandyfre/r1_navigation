@@ -143,6 +143,8 @@ void NeuPANController::cleanup()
   std::lock_guard<std::mutex> lock(mutex_);
   active_ = false;
   plan_valid_ = false;
+  path_published_ = false;
+  route_update_gate_.reset();
   localization_ready_observed_ = false;
   envelope_recovery_active_ = false;
   envelope_ = Envelope{};
@@ -193,15 +195,17 @@ void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
   bool publish_goal = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    // Ignore ordinary prefix trimming, but reconnect to the fresh global
-    // route before the 0.20 m near-term deviation guard can deadlock tracking.
-    const bool route_departed = path_published_ &&
-      distanceToRoute(navigation_path.poses.front().pose.position, published_path_) > 0.15;
+    const auto now = std::chrono::steady_clock::now();
+    // Moderate route shifts need repeated evidence before resetting the
+    // asynchronous solver; a material new bend needs only one sample.
+    const bool route_departed = path_published_ && sameGoal(goal, published_goal_) &&
+      route_update_gate_.consider(navigation_path, published_path_, now);
     publish_path = !path_published_ || !sameGoal(goal, published_goal_) || route_departed;
     if (publish_path) {
       ++path_version_;
       published_path_ = navigation_path;
       path_published_ = true;
+      route_update_gate_.published(now);
       // The Python bridge advances both context versions on every path.
       ++goal_version_;
       published_goal_ = goal;
@@ -303,6 +307,7 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
       std::lock_guard<std::mutex> lock(mutex_);
       plan_valid_ = false;
       path_published_ = false;
+      route_update_gate_.reset();
       goal_published_ = false;
       envelope_ = Envelope{};
       worker_generation_ = -1;

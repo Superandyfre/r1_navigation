@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "geometry_msgs/msg/polygon_stamped.hpp"
+#include "navigation_neupan_bridge/polygon_boundary_distance.hpp"
 #include "rclcpp/parameter_client.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -24,31 +25,12 @@ namespace
 {
 using SteadyTime = std::chrono::steady_clock::time_point;
 
-struct Point2D
-{
-  double x{};
-  double y{};
-};
-
 bool finitePolygon(const std::vector<Point2D> & polygon)
 {
   return polygon.size() >= 3 && std::all_of(
     polygon.begin(), polygon.end(), [](const Point2D & point) {
       return std::isfinite(point.x) && std::isfinite(point.y);
     });
-}
-
-double maxVertexDifference(const std::vector<Point2D> & first, const std::vector<Point2D> & second)
-{
-  if (first.size() != second.size()) {
-    return std::numeric_limits<double>::infinity();
-  }
-  double maximum = 0.0;
-  for (size_t index = 0; index < first.size(); ++index) {
-    maximum = std::max(maximum, std::hypot(
-      first[index].x - second[index].x, first[index].y - second[index].y));
-  }
-  return maximum;
 }
 
 std::string footprintParameter(const std::vector<Point2D> & polygon)
@@ -114,7 +96,7 @@ private:
       return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    if (!desired_.empty() && maxVertexDifference(desired_, polygon) < update_threshold_m_) {
+    if (!desired_.empty() && maxBoundaryDifference(desired_, polygon) < update_threshold_m_) {
       received_ = std::chrono::steady_clock::now();
       return;
     }

@@ -1,7 +1,7 @@
 """NeuPAN HW1 motion chain for Humble.
 
 The chassis driver remains externally owned. NeuPAN publishes through the
-Nav2 controller, velocity smoother, and final scan-based collision guard.
+Nav2 controller, velocity smoother, and final command gate.
 """
 
 import json
@@ -47,6 +47,7 @@ def _build(context):
     input_cloud = LaunchConfiguration("input_cloud").perform(context)
     scan_source = LaunchConfiguration("scan_source").perform(context)
     use_mesh_self_filter = LaunchConfiguration("use_mesh_self_filter").perform(context)
+    collision_check_enabled = LaunchConfiguration("collision_check_enabled").perform(context)
     mesh_projection_margin_m = float(
         LaunchConfiguration("mesh_projection_margin_m").perform(context))
     planner_footprint_margin_m = float(
@@ -74,6 +75,8 @@ def _build(context):
         raise RuntimeError("scan_source must be livox_only or dual")
     if use_mesh_self_filter not in {"false", "true"}:
         raise RuntimeError("use_mesh_self_filter must be true or false")
+    if collision_check_enabled not in {"false", "true"}:
+        raise RuntimeError("collision_check_enabled must be true or false")
     if not 0.0 <= mesh_projection_margin_m <= 0.10:
         raise RuntimeError("mesh_projection_margin_m must be within [0.0, 0.10]")
     if not 0.0 <= planner_footprint_margin_m <= 0.30:
@@ -158,6 +161,7 @@ def _build(context):
             # Exact mesh projection is recomputed only after a material joint
             # change, then republished at 4 Hz for downstream freshness.
             "mesh_projection_frequency": 4.0,
+            "mesh_filter_frequency": 15.0,
             "mesh_reprojection_joint_delta_rad": 0.01,
             "link_radius_m": 0.12,
             "tool_radius_m": 0.16,
@@ -165,9 +169,9 @@ def _build(context):
             # Mesh-only tolerance for surveyed LiDAR-to-arm edge mismatch.
             # It does not change the navigation or collision footprint.
             "mesh_projection_margin_m": mesh_projection_margin_m,
-            # Costmaps and the global planner receive the arm hull padded by
-            # this margin; SMAC then rejects corridors the live arm posture
-            # cannot clear, matching NeuPAN's arm-aware local feasibility.
+            # The planner uses the live arm hull for hard collision checks.
+            # Clearance beyond that hull is a traversal cost in SMAC, so a
+            # narrow but physically passable corridor remains searchable.
             "planner_footprint_margin_m": planner_footprint_margin_m,
         }],
     )
@@ -199,9 +203,9 @@ def _build(context):
             "scan_topic": navigation_scan_topic,
             "path_topic": "/neupan_path",
             "footprint_topic": "/r1_arm_footprint",
-            "planning_clearance_m": 0.15,
+            "planning_clearance_m": 0.10,
             "probe_distance_m": 0.45,
-            "probe_half_width_m": 0.12,
+            "probe_half_width_m": 0.35,
         }],
     )
     scan_fusion = None
@@ -243,12 +247,13 @@ def _build(context):
                 "dynamic_footprint_enabled": True,
                 "dynamic_footprint_topic": "/r1_arm_footprint",
                 "dynamic_footprint_timeout_sec": 0.50,
-                # The convex live footprint arrives at 10 Hz and remains the
-                # immediate motion gate. The exact non-convex mesh projection
-                # is costlier and arrives near 4 Hz, so it has its own bounded
-                # freshness window for NeuPAN obstacle shaping.
+                # The convex live footprint arrives at 10 Hz for Nav2; the
+                # exact mesh arrives near 4 Hz for NeuPAN obstacle shaping.
                 "dynamic_mesh_components_timeout_sec": 1.50,
-                "dynamic_footprint_clearance_m": 0.15,
+                # Mesh geometry already includes 0.06 m projection tolerance.
+                # This adds 0.04 m of planner clearance. The final command
+                # gate can run collision checks when configured to do so.
+                "dynamic_footprint_clearance_m": 0.04,
                 "dynamic_mesh_components_enabled": True,
                 "dynamic_mesh_components_topic": "/r1_arm_mesh_components",
                 "planner_base_front_m": 0.341,
@@ -280,8 +285,10 @@ def _build(context):
                 "use_sim_time": False,
                 "footprint_points": footprint_points,
                 "odom_topic": "/odom",
-                "scan_topic": navigation_scan_topic,
-                "mesh_self_filter_preapplied": use_mesh_self_filter == "true",
+                "scan_topic": "/scan_neupan" if use_mesh_self_filter == "true" else navigation_scan_topic,
+                "mesh_self_filter_preapplied": False,
+                "use_exact_mesh_components": use_mesh_self_filter == "true",
+                "collision_check_enabled": collision_check_enabled == "true",
                 "cmd_vel_in_topic": (
                     "/neupan_nav2_smoothed_cmd_vel"
                     if command_profile == "smoothed" else "/neupan_nav2_cmd_vel"),
@@ -311,6 +318,9 @@ def _build(context):
             "localization_fault_timeout_sec": 3.0,
             "footprint_points": footprint_points,
             "footprint_padding_m": 0.01,
+            # A single occupied cell at the chassis edge is map uncertainty,
+            # not evidence that localization placed the chassis inside a wall.
+            "static_map_fault_inset_m": 0.05,
             "require_dynamic_footprint": True,
             # Compare the planner-padded envelope against the costmap's
             # published footprint. Both carry planner_footprint_margin_m, so
@@ -343,14 +353,16 @@ def generate_launch_description():
             "use_mesh_self_filter", default_value="false", choices=["false", "true"],
             description="Use the validated dual-arm mesh self-return filter; disabled by default."),
         DeclareLaunchArgument(
+            "collision_check_enabled", default_value="true", choices=["false", "true"],
+            description="Run final obstacle collision checks; UI7 can disable them explicitly."),
+        DeclareLaunchArgument(
             "mesh_projection_margin_m", default_value="0.06",
             description="Local mesh-only LiDAR self-return edge tolerance in metres."),
         DeclareLaunchArgument(
-            "planner_footprint_margin_m", default_value="0.15",
+            "planner_footprint_margin_m", default_value="0.0",
             description=(
-                "Lateral margin added to the arm footprint handed to the costmaps and "
-                "global planner so SMAC's feasibility model matches NeuPAN's live "
-                "arm-aware clearance. The collision-guard heartbeat stays unpadded.")),
+                "Extra hard margin around the arm footprint handed to costmaps "
+                "and SMAC; zero keeps physically passable gaps searchable.")),
         DeclareLaunchArgument(
             "python_executable",
             default_value=os.path.expanduser("~/venvs/neupan_ros_humble/bin/python"),

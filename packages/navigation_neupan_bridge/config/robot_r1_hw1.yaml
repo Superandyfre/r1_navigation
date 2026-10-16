@@ -58,6 +58,18 @@ n1_16_production_bridge:
     path_deviation_warn_m: 0.15
     path_deviation_stop_m: 0.20
     path_deviation_stop_cycles: 3
+    # NeuPAN slows along its route only when the swept base/arm geometry sees
+    # an obstruction. These values affect longitudinal stopping, not the
+    # lateral costmap inflation used to pass narrow gaps.
+    obstacle_motion_enabled: true
+    neupan_bypass_enabled: true
+    local_detour_enabled: false
+    reverse_escape_enabled: false
+    obstacle_braking_mps2: 0.20
+    obstacle_reaction_sec: 0.30
+    obstacle_stop_margin_m: 0.20
+    obstacle_preview_m: 0.90
+    obstacle_odom_timeout_sec: 0.50
     # Mesh components are the exact, non-convex arm geometry for NeuPAN. They
     # are recomputed at about 4 Hz; the separate convex footprint remains the
     # 10 Hz immediate safety gate.
@@ -69,8 +81,8 @@ n1_16_production_bridge:
     # its first live envelope. Repeating 30 warmups delayed the first command
     # beyond the controller's bounded startup window on this CPU profile.
     n115_warmup_count: 1
-    # NeuPAN owns path tracking and obstacle avoidance, including short reverse
-    # maneuvers. The collision guard remains the final signed-trajectory gate.
+    # NeuPAN owns bypass trajectories. The independent swept check still
+    # rejects an unsafe candidate before its command reaches the base.
     forward_only_enabled: false
     allow_reverse: true
     # Opposite-direction planner actions must stop and rewrite the NeuPAN
@@ -79,7 +91,7 @@ n1_16_production_bridge:
     auto_gear_mismatch_deadband_mps: 0.025
     auto_gear_confirm_cycles: 5
     # A transient opposite signed NeuPAN sample must not start a base reversal.
-    auto_gear_opposite_direction_commit_cycles: 12
+    auto_gear_opposite_direction_commit_cycles: 4
     auto_gear_stopped_speed_mps: 0.015
     auto_gear_stop_timeout_sec: 2.0
     auto_gear_odom_timeout_sec: 0.5

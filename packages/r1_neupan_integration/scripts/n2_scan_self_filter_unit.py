@@ -4,6 +4,7 @@
 import numpy as np
 
 from r1_neupan_integration.scan_self_filter import (
+    _lateral_support_in_longitudinal_strip,
     inflate_obstacles_for_dynamic_footprint,
     inflate_obstacles_for_mesh_components,
     mesh_component_overlap_mask,
@@ -107,6 +108,46 @@ def main() -> None:
           "a distal-wide arm component must not pull a base-side wall into the path")
     check(tapered_displacement[1] > 0.70 and tapered_adjusted[1, 1] < 0.40,
           "a wall beside the real distal arm cross section must remain expanded")
+    # Compare the candidate-point optimization with the full-strip calculation
+    # on both sides, including components that cannot extend the chassis.
+    rng = np.random.default_rng(7)
+    sample_points = rng.uniform(-2.0, 2.0, size=(2, 300))
+    sample_tangent = np.asarray([0.8, 0.6])
+    sample_normal = np.asarray([-0.6, 0.8])
+    sample_components = components + tapered_components
+    optimized, optimized_displacement = inflate_obstacles_for_mesh_components(
+        sample_points, sample_components,
+        base_front_m=0.341, base_rear_m=0.341,
+        base_left_m=0.266, base_right_m=0.266,
+        clearance_m=0.15, path_tangent=sample_tangent,
+    )
+    longitudinal = sample_tangent @ sample_points
+    lateral = sample_normal @ sample_points
+    base_support = np.where(lateral >= 0.0, 0.266, 0.266)
+    full_support = base_support.copy()
+    for component in sample_components:
+        positive, negative, active = _lateral_support_in_longitudinal_strip(
+            component @ sample_tangent, component @ sample_normal, longitudinal, 0.15,
+        )
+        full_support = np.where(
+            active,
+            np.maximum(full_support, np.where(lateral >= 0.0, positive, negative)),
+            full_support,
+        )
+    expected_displacement = np.where(
+        np.abs(lateral) > 1.0e-9,
+        np.maximum(0.0, full_support - base_support) + 0.15,
+        0.0,
+    )
+    expected = (
+        sample_tangent[:, None] * longitudinal[None, :]
+        + sample_normal[:, None] * (
+            np.sign(lateral) * np.maximum(0.0, np.abs(lateral) - expected_displacement)
+        )[None, :]
+    )
+    check(np.allclose(optimized_displacement, expected_displacement) and
+          np.allclose(optimized, expected),
+          "candidate-point optimization must preserve full-strip geometry")
     overlap = mesh_component_overlap_mask(
         np.asarray([[0.75, 0.20], [0.45, 0.00]]), components,
         margin_m=0.0,

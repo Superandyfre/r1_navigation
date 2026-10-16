@@ -13,6 +13,7 @@
 #include "nav2_core/controller.hpp"
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "navigation_neupan_bridge/route_update_gate.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -134,6 +135,7 @@ private:
   bool goal_published_{false};
   nav_msgs::msg::Path published_path_;
   bool path_published_{false};
+  RouteUpdateGate route_update_gate_;
   std::chrono::steady_clock::time_point plan_published_at_{};
   std::int64_t worker_generation_{-1};
   Envelope envelope_;

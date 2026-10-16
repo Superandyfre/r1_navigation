@@ -23,6 +23,7 @@
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "visualization_msgs/msg/marker_array.hpp"
+#include "navigation_neupan_bridge/passage_clearance_state.hpp"
 
 namespace
 {
@@ -55,7 +56,7 @@ public:
     footprint_topic_ = declare_parameter<std::string>("footprint_topic", "/r1_arm_footprint");
     clearance_m_ = declare_parameter<double>("planning_clearance_m", 0.15);
     probe_distance_m_ = declare_parameter<double>("probe_distance_m", 0.45);
-    probe_half_width_m_ = declare_parameter<double>("probe_half_width_m", 0.12);
+    probe_half_width_m_ = declare_parameter<double>("probe_half_width_m", 0.35);
     publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 5.0);
     if (clearance_m_ < 0.0 || probe_distance_m_ < 0.0 || probe_half_width_m_ <= 0.0 ||
       publish_rate_hz_ <= 0.0)
@@ -267,8 +268,12 @@ private:
     const bool have_right = std::isfinite(right_wall);
     const bool measured = have_left && have_right;
     const double available_width = measured ? left_wall - right_wall : 0.0;
-    const bool clear = measured && available_width >= required_width;
-    const std::string state = !measured ? "INSUFFICIENT_SCAN" : (clear ? "CLEAR" : "TOO_NARROW");
+    const double left_clearance = measured ? left_wall - footprint_left : 0.0;
+    const double right_clearance = measured ? footprint_right - right_wall : 0.0;
+    const std::string state = navigation_neupan_bridge::passageClearanceState(
+      measured, available_width, required_width,
+      left_clearance, right_clearance, clearance_m_);
+    const bool clear = state == "CLEAR";
     const float red = clear ? 0.1F : 1.0F;
     const float green = clear ? 1.0F : 0.15F;
     const float blue = 0.1F;
@@ -287,7 +292,7 @@ private:
     std::ostringstream label;
     label << std::fixed << std::setprecision(2) << state << "  required=" << required_width << "m";
     if (measured) {
-      label << "  measured=" << available_width << "m";
+      label << "  L=" << left_clearance << "m R=" << right_clearance << "m";
     }
     addText(&markers, label.str(), red, green, blue);
     marker_pub_->publish(markers);
@@ -305,7 +310,20 @@ private:
     } else {
       json << "null";
     }
-    json << ",\"probe_distance_m\":" << probe_distance_m_ << "}";
+    json << ",\"left_clearance_m\":";
+    if (measured) {
+      json << left_clearance;
+    } else {
+      json << "null";
+    }
+    json << ",\"right_clearance_m\":";
+    if (measured) {
+      json << right_clearance;
+    } else {
+      json << "null";
+    }
+    json << ",\"probe_distance_m\":" << probe_distance_m_
+         << ",\"probe_half_width_m\":" << probe_half_width_m_ << "}";
     status.data = json.str();
     status_pub_->publish(status);
   }

@@ -43,6 +43,7 @@ setup(
              'scripts/n2_4c2_matrix_report.py',
              'scripts/n2_4c_runtime_report.py',
              'scripts/command_stabilizer_unit.py',
+             'scripts/stop_reverse_recovery_unit.py',
              'scripts/n1_gear_context_unit.py',
              'scripts/latest_input_scheduler_unit.py',
              'scripts/path_validation_unit.py'],

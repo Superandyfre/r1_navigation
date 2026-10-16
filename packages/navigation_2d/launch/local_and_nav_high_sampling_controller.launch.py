@@ -37,6 +37,7 @@ def _select(context):
             launch_arguments["scan_source"] = LaunchConfiguration("scan_source")
             launch_arguments["command_profile"] = LaunchConfiguration("command_profile")
             launch_arguments["cmd_vel_out_topic"] = LaunchConfiguration("cmd_vel_out_topic")
+            launch_arguments["collision_check_enabled"] = LaunchConfiguration("collision_check_enabled")
     return [IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([package_share, "launch", launches[mode]]),
@@ -84,5 +85,8 @@ def generate_launch_description():
             "cmd_vel_out_topic", default_value="/cmd_vel",
             description="Collision-guard output; use an isolated topic for no-motion integration tests.",
         ),
+        DeclareLaunchArgument(
+            "collision_check_enabled", default_value="true", choices=["false", "true"],
+            description="Enable final obstacle collision checks."),
         OpaqueFunction(function=_select),
     ])

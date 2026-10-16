@@ -109,6 +109,7 @@ def generate_launch_description():
                 "mesh_projection_margin_m": LaunchConfiguration("mesh_projection_margin_m"),
                 "command_profile": LaunchConfiguration("command_profile"),
                 "cmd_vel_out_topic": LaunchConfiguration("cmd_vel_out_topic"),
+                "collision_check_enabled": LaunchConfiguration("collision_check_enabled"),
             }.items()),
             Node(
                 package="rviz2",
@@ -193,6 +194,9 @@ def generate_launch_description():
             "use_mesh_self_filter", default_value="true", choices=["false", "true"],
             description="Use the dual-arm mesh self-return filter for NeuPAN obstacle scanning.",
         ),
+        DeclareLaunchArgument(
+            "collision_check_enabled", default_value="true", choices=["false", "true"],
+            description="Enable final obstacle collision checks."),
         DeclareLaunchArgument(
             "mesh_projection_margin_m", default_value="0.06",
             description="Local mesh-only LiDAR self-return edge tolerance in metres.",

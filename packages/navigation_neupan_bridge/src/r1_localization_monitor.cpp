@@ -32,6 +32,8 @@
 #include "tf2/utils.h"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
+#include "navigation_neupan_bridge/static_map_overlap_state.hpp"
+#include "navigation_neupan_bridge/static_map_fault_geometry.hpp"
 
 namespace navigation_neupan_bridge
 {
@@ -82,59 +84,6 @@ struct PublishedFootprint
   SteadyTime received{};
   bool available{false};
 };
-
-bool pointInPolygon(const std::vector<double> & polygon, const double x, const double y)
-{
-  bool inside = false;
-  const size_t count = polygon.size() / 2;
-  for (size_t index = 0, previous = count - 1; index < count; previous = index++) {
-    const double current_x = polygon[index * 2];
-    const double current_y = polygon[index * 2 + 1];
-    const double previous_x = polygon[previous * 2];
-    const double previous_y = polygon[previous * 2 + 1];
-    const bool crosses = (current_y > y) != (previous_y > y);
-    if (crosses && x < (previous_x - current_x) * (y - current_y) /
-      (previous_y - current_y) + current_x)
-    {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
-
-double pointSegmentDistance(
-  const double x, const double y, const double ax, const double ay,
-  const double bx, const double by)
-{
-  const double dx = bx - ax;
-  const double dy = by - ay;
-  const double length_squared = dx * dx + dy * dy;
-  if (length_squared <= 1e-12) {
-    return std::hypot(x - ax, y - ay);
-  }
-  const double ratio = std::clamp(((x - ax) * dx + (y - ay) * dy) / length_squared, 0.0, 1.0);
-  return std::hypot(x - (ax + ratio * dx), y - (ay + ratio * dy));
-}
-
-bool insideOrNearPolygon(
-  const std::vector<double> & polygon, const double x, const double y,
-  const double padding)
-{
-  if (pointInPolygon(polygon, x, y)) {
-    return true;
-  }
-  const size_t count = polygon.size() / 2;
-  for (size_t index = 0; index < count; ++index) {
-    const size_t next = (index + 1) % count;
-    if (pointSegmentDistance(
-        x, y, polygon[index * 2], polygon[index * 2 + 1],
-        polygon[next * 2], polygon[next * 2 + 1]) <= padding)
-    {
-      return true;
-    }
-  }
-  return false;
-}
 
 bool dynamicFootprintMatchesPublished(
   const DynamicFootprint & dynamic,
@@ -230,11 +179,13 @@ public:
     localization_fault_timeout_sec_ = declare_parameter<double>(
       "localization_fault_timeout_sec", 3.00);
     stable_window_sec_ = declare_parameter<double>("stable_window_sec", 3.0);
+    static_map_overlap_state_ = StaticMapOverlapState(stable_window_sec_);
     soft_translation_jump_m_ = declare_parameter<double>("soft_translation_jump_m", 0.08);
     hard_translation_jump_m_ = declare_parameter<double>("hard_translation_jump_m", 0.20);
     soft_yaw_jump_rad_ = declare_parameter<double>("soft_yaw_jump_rad", 0.0872665);
     hard_yaw_jump_rad_ = declare_parameter<double>("hard_yaw_jump_rad", 0.2094395);
     footprint_padding_m_ = declare_parameter<double>("footprint_padding_m", 0.01);
+    static_map_fault_inset_m_ = declare_parameter<double>("static_map_fault_inset_m", 0.0);
     footprint_ = declare_parameter<std::vector<double>>(
       "footprint_points", std::vector<double>{-0.341, -0.266, -0.341, 0.266, 0.341, 0.266, 0.341,
         -0.266});
@@ -253,7 +204,7 @@ public:
       odom_timeout_sec_ <= 0.0 || localization_timeout_sec_ <= 0.0 ||
       localization_fault_timeout_sec_ < localization_timeout_sec_ || stable_window_sec_ <= 0.0 ||
       dynamic_footprint_timeout_sec_ <= 0.0 || costmap_footprint_timeout_sec_ <= 0.0 ||
-      footprint_sync_tolerance_m_ <= 0.0)
+      footprint_sync_tolerance_m_ <= 0.0 || static_map_fault_inset_m_ < 0.0)
     {
       throw std::invalid_argument("invalid localization monitor configuration");
     }
@@ -458,7 +409,7 @@ private:
     previous_available_ = false;
     last_map_tf_stamp_available_ = false;
     soft_jump_count_ = 0;
-    consecutive_lethal_costmaps_ = 0;
+    static_map_overlap_state_.reset();
     last_checked_costmap_generation_ = 0;
     last_lethal_sample_ = {};
     stable_costmap_samples_ = 0;
@@ -559,7 +510,7 @@ private:
         const double y = origin.y + (static_cast<double>(iy) + 0.5) * resolution;
         const double dx = cosine * (x - pose.x) + sine * (y - pose.y);
         const double dy = -sine * (x - pose.x) + cosine * (y - pose.y);
-        const bool inside = insideOrNearPolygon(footprint, dx, dy, footprint_padding_m_);
+        const bool inside = deepInsideFootprint(footprint, dx, dy, static_map_fault_inset_m_);
         const size_t offset = static_cast<size_t>(iy) * metadata.width +
           static_cast<size_t>(ix);
         // Occupancy >= 65 is the standard lethal threshold. Unknown (-1) is
@@ -594,7 +545,7 @@ private:
     }
     fault_latched_ = false;
     fault_reason_.clear();
-    consecutive_lethal_costmaps_ = 0;
+    static_map_overlap_state_.reset();
     operator_relocalization_pending_ = false;
     response->success = true;
     response->message = "localization fault latch cleared";
@@ -643,6 +594,7 @@ private:
     SteadyTime costmap_received{};
     bool costmap_available = false;
     uint64_t costmap_generation = 0;
+    bool static_map_available = false;
     DynamicFootprint dynamic_footprint;
     PublishedFootprint published_footprint;
     {
@@ -656,6 +608,7 @@ private:
       costmap_received = costmap_received_;
       costmap_available = costmap_available_;
       costmap_generation = costmap_generation_;
+      static_map_available = static_map_available_;
       dynamic_footprint = dynamic_footprint_;
       published_footprint = published_footprint_;
     }
@@ -811,25 +764,32 @@ private:
       stable_costmap_samples_ >= 2;
     if (preflight_ready_) {
       ever_ready_ = true;
-      if (costmap_generation != last_checked_costmap_generation_) {
-        last_checked_costmap_generation_ = costmap_generation;
-        // Gross localization-failure backstop: the calibrated CHASSIS box
-        // inside a static-map wall. The arm envelope is deliberately NOT used
-        // here — its reach and margins vary with arm posture, so legitimate
-        // close passes beside static walls would latch a localization fault.
-        // Proximity of the arms to obstacles is enforced by the collision
-        // guard's true mesh checks and by the planner's padded envelope.
-        last_lethal_sample_ = footprintLethalCost(map_pose, footprint_);
-        if (last_lethal_sample_.count != 0) {
-          ++consecutive_lethal_costmaps_;
-          if (consecutive_lethal_costmaps_ >= 2) {
-            fault_latched_ = true;
-            fault_reason_ = "start_in_lethal_static_map";
-          }
-        } else {
-          consecutive_lethal_costmaps_ = 0;
-        }
-      }
+    }
+    const bool valid_static_map_check = preflight_ready_ && static_map_available;
+    const bool fresh_static_map_check = valid_static_map_check &&
+      costmap_generation != last_checked_costmap_generation_;
+    if (fresh_static_map_check) {
+      last_checked_costmap_generation_ = costmap_generation;
+      // Only the chassis box is checked against the static map. Arm proximity
+      // is handled by the collision guard and the planner footprint.
+      last_lethal_sample_ = footprintLethalCost(map_pose, footprint_);
+    }
+    const auto static_map_transition = static_map_overlap_state_.observe(
+      valid_static_map_check, fresh_static_map_check, last_lethal_sample_.count != 0,
+      steady_now);
+    if (static_map_transition == StaticMapOverlapTransition::Latched && !fault_latched_) {
+      fault_latched_ = true;
+      fault_reason_ = "start_in_lethal_static_map";
+      RCLCPP_ERROR(
+        get_logger(), "Static map overlap: %u occupied cells; first cell at (%.3f, %.3f)",
+        last_lethal_sample_.count, last_lethal_sample_.map_x, last_lethal_sample_.map_y);
+    } else if (static_map_transition == StaticMapOverlapTransition::Recovered &&
+      fault_reason_ == "start_in_lethal_static_map")
+    {
+      // Recover only this transient map-overlap fault after stable clear samples.
+      fault_latched_ = false;
+      fault_reason_.clear();
+      RCLCPP_INFO(get_logger(), "Static map overlap cleared after stable free samples");
     }
     if (!healthy) {
       previous_available_ = false;
@@ -867,6 +827,7 @@ private:
   double soft_yaw_jump_rad_{0.0872665};
   double hard_yaw_jump_rad_{0.2094395};
   double footprint_padding_m_{0.01};
+  double static_map_fault_inset_m_{0.0};
   std::vector<double> footprint_;
   bool require_dynamic_footprint_{false};
   double dynamic_footprint_timeout_sec_{0.50};
@@ -904,7 +865,7 @@ private:
   bool preflight_ready_{false};
   bool ever_ready_{false};
   uint64_t last_checked_costmap_generation_{0};
-  uint32_t consecutive_lethal_costmaps_{0};
+  StaticMapOverlapState static_map_overlap_state_{3.0};
   LethalFootprintSample last_lethal_sample_;
   bool fault_latched_{false};
   bool operator_relocalization_pending_{false};

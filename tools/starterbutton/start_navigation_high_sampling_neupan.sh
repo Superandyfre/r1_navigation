@@ -1,9 +1,28 @@
 #!/bin/bash
 
-source "$(dirname "$0")/run_once.sh"
+script_file="$(readlink -f "${BASH_SOURCE[0]}")"
+script_dir="$(dirname "${script_file}")"
+source "${script_dir}/run_once.sh"
 single_instance_or_exit "starterbutton-navigation-high-sampling-neupan"
 
 source ~/.rpprc
+navigation_repo="$(cd "${script_dir}/../.." && pwd)"
+if [[ ! -f "${navigation_repo}/install/local_setup.bash" ]]; then
+  echo "R1 navigation install is missing: ${navigation_repo}/install" >&2
+  exit 1
+fi
+source "${navigation_repo}/install/local_setup.bash"
+# NeuPAN is a Python library, not a ROS package. Pin it to the same source tree.
+export PYTHONPATH="${navigation_repo}/third_party/NeuPAN:${PYTHONPATH:-}"
+
+for navigation_package in navigation_2d navigation_neupan_bridge \
+  r1_neupan_integration r1_lidar_preprocess r1_collision_guard; do
+  navigation_prefix="$(ros2 pkg prefix "${navigation_package}" 2>/dev/null || true)"
+  case "${navigation_prefix}" in
+    "${navigation_repo}"/install/*) ;;
+    *) echo "${navigation_package} does not resolve to ${navigation_repo}/install" >&2; exit 1 ;;
+  esac
+done
 
 # Humble's Python extensions are built for system Python 3.10.  The button
 # must not inherit an interactive Conda Python when starting ROS executables.
@@ -29,6 +48,7 @@ arm_local_ip="${RPP_ARM_LOCAL_IP:-192.168.11.11}"
 # may still override these values explicitly for a diagnostic session.
 scan_source="${RPP_NEUPAN_SCAN_SOURCE:-dual}"
 mesh_self_filter="${RPP_NEUPAN_USE_MESH_SELF_FILTER:-true}"
+collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-true}}"
 
 if [[ "${scan_source}" != "livox_only" && "${scan_source}" != "dual" ]]; then
   echo "RPP_NEUPAN_SCAN_SOURCE must be livox_only or dual" >&2
@@ -37,6 +57,11 @@ fi
 
 if [[ "${mesh_self_filter}" != "false" && "${mesh_self_filter}" != "true" ]]; then
   echo "RPP_NEUPAN_USE_MESH_SELF_FILTER must be true or false" >&2
+  exit 1
+fi
+
+if [[ "${collision_check_enabled}" != "false" && "${collision_check_enabled}" != "true" ]]; then
+  echo "RPP_NEUPAN_COLLISION_CHECK_ENABLED must be true or false" >&2
   exit 1
 fi
 
@@ -88,11 +113,12 @@ on_exit_signal() {
 
 trap on_exit_signal HUP INT TERM
 
-/usr/bin/python3 "$(dirname "$0")/launch_with_parent_death.py" \
+/usr/bin/python3 "${script_dir}/launch_with_parent_death.py" \
   ros2 launch navigation_2d local_and_nav_high_sampling_controller.launch.py \
   local_controller_mode:=neupan \
   scan_source:="${scan_source}" \
   use_mesh_self_filter:="${mesh_self_filter}" \
+  collision_check_enabled:="${collision_check_enabled}" \
   calibration_record:=/home/rpp/rpp_ws/config/r1_hw1_calibration.json \
   start_arm_drivers:=false \
   left_robot_ip:="${left_arm_ip}" \

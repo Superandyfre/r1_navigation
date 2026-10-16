@@ -300,18 +300,33 @@ def inflate_obstacles_for_mesh_components(
     mesh_support = base_support.copy()
     for component in [polygon_vertices_from_flat_xy(value) for value in components]:
         component_longitudinal = component @ tangent
+        component_lateral = component @ normal
+        active_columns = (
+            (longitudinal + clearance_m >= np.min(component_longitudinal))
+            & (longitudinal - clearance_m <= np.max(component_longitudinal))
+            & np.where(
+                positive_side,
+                np.max(component_lateral) > float(base_left_m),
+                -np.min(component_lateral) > float(base_right_m),
+            )
+        )
+        if not np.any(active_columns):
+            continue
+        indices = np.flatnonzero(active_columns)
         positive_support, negative_support, active = _lateral_support_in_longitudinal_strip(
             component_longitudinal,
-            component @ normal,
-            longitudinal,
+            component_lateral,
+            longitudinal[indices],
             clearance_m,
         )
         if not np.any(active):
             continue
         support = np.where(
-            positive_side, positive_support, negative_support
+            positive_side[indices], positive_support, negative_support
         )
-        mesh_support = np.where(active, np.maximum(mesh_support, support), mesh_support)
+        mesh_support[indices] = np.where(
+            active, np.maximum(mesh_support[indices], support), mesh_support[indices]
+        )
     displacement = np.maximum(0.0, mesh_support - base_support) + clearance_m
     # A point exactly on the path centreline has no signed wall side.  Leave
     # it unchanged so an arm's side projection cannot fabricate a central

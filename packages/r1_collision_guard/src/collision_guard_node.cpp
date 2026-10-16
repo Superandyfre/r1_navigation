@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "r1_collision_guard/guard_logic.hpp"
+#include "r1_collision_guard/mesh_components.hpp"
 #include "r1_collision_guard/scan_filter.hpp"
 
 #include <algorithm>
@@ -24,6 +25,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/float64_multi_array.hpp"
 #include "geometry_msgs/msg/polygon_stamped.hpp"
 
 namespace r1_collision_guard
@@ -110,6 +112,10 @@ public:
     config.max_linear_mps = declare_parameter<double>("max_linear_mps", 0.15);
     config.max_reverse_mps = declare_parameter<double>("max_reverse_mps", 0.15);
     config.max_angular_radps = declare_parameter<double>("max_angular_radps", 0.4);
+    max_linear_mps_ = config.max_linear_mps;
+    max_reverse_mps_ = config.max_reverse_mps;
+    max_angular_radps_ = config.max_angular_radps;
+    collision_check_enabled_ = declare_parameter<bool>("collision_check_enabled", true);
     control_frequency_ = declare_parameter<double>("control_frequency", 50.0);
     config.control_period_sec = 1.0 / control_frequency_;
     config.reaction_delay_sec = declare_parameter<double>("reaction_delay_sec", 0.10);
@@ -146,6 +152,10 @@ public:
     require_arms_stowed_ = declare_parameter<bool>("require_arms_stowed", true);
     require_dynamic_footprint_ = declare_parameter<bool>("require_dynamic_footprint", false);
     mesh_self_filter_preapplied_ = declare_parameter<bool>("mesh_self_filter_preapplied", false);
+    use_exact_mesh_components_ = declare_parameter<bool>("use_exact_mesh_components", false);
+    mesh_components_timeout_sec_ = declare_parameter<double>("mesh_components_timeout_sec", 1.50);
+    const auto mesh_components_topic = declare_parameter<std::string>(
+      "mesh_components_topic", "/r1_arm_guard_mesh_components");
     dynamic_footprint_timeout_sec_ = declare_parameter<double>(
       "dynamic_footprint_timeout_sec", 0.50);
     const auto dynamic_footprint_topic = declare_parameter<std::string>(
@@ -167,6 +177,7 @@ public:
       command_timeout_sec_ <= 0.0 || source_command_timeout_sec_ <= 0.0 ||
       localization_health_timeout_sec_ <= 0.0 ||
       dynamic_footprint_timeout_sec_ <= 0.0 ||
+      mesh_components_timeout_sec_ <= 0.0 ||
       joint_state_timeout_sec_ <= 0.0 || arm_stow_tolerance_rad_ <= 0.0 ||
       arm_motion_tolerance_radps_ < 0.0 || arm_settle_time_sec_ < 0.0 ||
       scan_history_size_ < 2 ||
@@ -180,11 +191,17 @@ public:
     {
       throw std::runtime_error("arm stow guard requires matching joint names and positions");
     }
+    if (use_exact_mesh_components_ &&
+      (!require_dynamic_footprint_ || mesh_self_filter_preapplied_))
+    {
+      throw std::runtime_error("exact mesh guard requires a live footprint and raw scan");
+    }
     std::vector<Point2D> footprint;
     footprint.reserve(footprint_points.size() / 2);
     for (size_t index = 0; index < footprint_points.size(); index += 2) {
       footprint.push_back({footprint_points[index], footprint_points[index + 1]});
     }
+    base_footprint_ = footprint;
     logic_ = std::make_unique<GuardLogic>(config, std::move(footprint));
 
     command_sub_ = create_subscription<geometry_msgs::msg::Twist>(
@@ -210,11 +227,35 @@ public:
     dynamic_footprint_sub_ = create_subscription<geometry_msgs::msg::PolygonStamped>(
       dynamic_footprint_topic, rclcpp::QoS(20),
       std::bind(&CollisionGuardNode::dynamicFootprintCallback, this, std::placeholders::_1));
+    if (use_exact_mesh_components_) {
+      mesh_components_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+        mesh_components_topic, rclcpp::QoS(10),
+        std::bind(&CollisionGuardNode::meshComponentsCallback, this, std::placeholders::_1));
+    }
     command_pub_ = create_publisher<geometry_msgs::msg::Twist>(output_topic, rclcpp::QoS(20));
     status_pub_ = create_publisher<std_msgs::msg::String>(status_topic, rclcpp::QoS(20));
     timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / control_frequency_),
       std::bind(&CollisionGuardNode::tick, this));
+    parameter_callback_ = add_on_set_parameters_callback(
+      [this](const std::vector<rclcpp::Parameter> & parameters) {
+        rcl_interfaces::msg::SetParametersResult result;
+        result.successful = true;
+        for (const auto & parameter : parameters) {
+          if (parameter.get_name() != "collision_check_enabled") {
+            continue;
+          }
+          if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
+            result.successful = false;
+            result.reason = "collision_check_enabled must be a boolean";
+            return result;
+          }
+          collision_check_enabled_ = parameter.as_bool();
+          RCLCPP_WARN(get_logger(), "collision checking %s",
+            collision_check_enabled_ ? "enabled" : "disabled");
+        }
+        return result;
+      });
     RCLCPP_INFO(get_logger(), "R1 collision guard active: %s (source %s) -> %s at %.1f Hz",
       command_topic.c_str(), source_command_topic.c_str(), output_topic.c_str(), control_frequency_);
   }
@@ -383,6 +424,39 @@ private:
     dynamic_footprint_ = std::move(footprint);
   }
 
+  void meshComponentsCallback(const std_msgs::msg::Float64MultiArray::SharedPtr message)
+  {
+    try {
+      if (message->layout.dim.empty() ||
+        message->layout.dim[0].label != "r1_arm_guard_mesh_components_v1")
+      {
+        throw std::invalid_argument("mesh component schema invalid");
+      }
+      const size_t count = message->layout.dim[0].size;
+      auto components = decodeGuardMeshComponents(message->data, count);
+      if (message->layout.data_offset != 0U ||
+        message->layout.dim[0].stride != message->data.size())
+      {
+        throw std::invalid_argument("mesh component layout invalid");
+      }
+      components.expanded.insert(components.expanded.begin(), base_footprint_);
+      components.raw.insert(components.raw.begin(), base_footprint_);
+      std::lock_guard<std::mutex> lock(mutex_);
+      logic_->setFootprints(std::move(components.expanded));
+      mesh_self_filter_polygons_ = std::move(components.raw);
+      mesh_components_received_ = std::chrono::steady_clock::now();
+      mesh_component_count_ = count;
+      mesh_components_available_ = true;
+    } catch (const std::exception & error) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      mesh_components_available_ = false;
+      mesh_component_count_ = 0U;
+      mesh_self_filter_polygons_.clear();
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+        "Invalid arm mesh components: %s", error.what());
+    }
+  }
+
   bool interpolateOdom(const std::deque<OdomSample> & history, const rclcpp::Time & stamp,
     OdomSample & output) const
   {
@@ -491,6 +565,8 @@ private:
     LocalizationHealth localization_health;
     ArmState arm_state;
     DynamicFootprint dynamic_footprint;
+    bool mesh_components_available = false;
+    SteadyTime mesh_components_received{};
     {
       std::lock_guard<std::mutex> lock(mutex_);
       command = command_;
@@ -508,6 +584,8 @@ private:
       localization_health = localization_health_;
       arm_state = arm_state_;
       dynamic_footprint = dynamic_footprint_;
+      mesh_components_available = mesh_components_available_;
+      mesh_components_received = mesh_components_received_;
     }
     const auto steady_now = std::chrono::steady_clock::now();
     const auto ros_now = now();
@@ -523,6 +601,9 @@ private:
     const bool dynamic_footprint_stale = !dynamic_footprint.available ||
       std::chrono::duration<double>(steady_now - dynamic_footprint.received).count() >
       dynamic_footprint_timeout_sec_;
+    const bool mesh_components_stale = !mesh_components_available ||
+      std::chrono::duration<double>(steady_now - mesh_components_received).count() >
+      mesh_components_timeout_sec_;
     if (require_localization_ready_ && !localization_ready_seen &&
       (localization_health_stale || localization_health.state == "BOOTSTRAP"))
     {
@@ -536,6 +617,8 @@ private:
       decision = fault("localization_" + localization_health.state + ":" + localization_health.reason);
     } else if (require_dynamic_footprint_ && dynamic_footprint_stale) {
       decision = fault("dynamic_footprint_stale");
+    } else if (use_exact_mesh_components_ && mesh_components_stale) {
+      decision = fault("mesh_components_stale");
     } else if (require_arms_stowed_ && arm_state_stale) {
       decision = fault("arm_joint_state_stale");
     } else if (require_arms_stowed_ && !arm_state.valid) {
@@ -575,6 +658,12 @@ private:
       !std::isfinite(odom_history.back().linear_x) || !std::isfinite(odom_history.back().angular_z))
     {
       decision = fault("nonfinite_input");
+    } else if (!collision_check_enabled_) {
+      decision.state = Decision::State::PASS;
+      decision.reason = "collision_check_disabled";
+      decision.linear_x = std::clamp(command.linear.x, -max_reverse_mps_, max_linear_mps_);
+      decision.angular_z = std::clamp(
+        command.angular.z, -max_angular_radps_, max_angular_radps_);
     } else {
       ScanSample aligned_scan;
       if (!selectAlignedScan(scan_history, odom_history.back().stamp, aligned_scan)) {
@@ -592,14 +681,26 @@ private:
           if (!interpolateOdom(odom_history, scan.header.stamp, scan_odom)) {
             decision = stop("waiting_scan_odom_interpolation");
           } else {
-            // Scan self-filtering and the stopping-trajectory geometry are
-            // independent.  A pre-filtered scan must still be evaluated
-            // against the live base-plus-arms projection.
-            if (require_dynamic_footprint_) {
+            // The final guard uses the raw scan. Remove only returns strictly
+            // inside the physical mesh; retain the expanded tolerance band.
+            if (require_dynamic_footprint_ && !use_exact_mesh_components_) {
               logic_->setFootprint(dynamic_footprint.points);
             }
             auto points = currentObstaclePoints(scan, scan_odom, odom_history.back());
-            if (require_dynamic_footprint_) {
+            if (use_exact_mesh_components_) {
+              const auto first_self_return = std::remove_if(
+                points.begin(), points.end(), [this](const Point2D & point) {
+                  return std::any_of(
+                    mesh_self_filter_polygons_.begin(), mesh_self_filter_polygons_.end(),
+                    [&point](const auto & polygon) {
+                      return strictlyInsidePolygon(point, polygon);
+                    });
+                });
+              self_filtered_scan_points = static_cast<size_t>(
+                std::distance(first_self_return, points.end()));
+              points.erase(first_self_return, points.end());
+            }
+            if (require_dynamic_footprint_ && !use_exact_mesh_components_) {
               const auto first_self_return = std::remove_if(
                 points.begin(), points.end(), [&dynamic_footprint](const Point2D & point) {
                   return strictlyInsidePolygon(point, dynamic_footprint.points);
@@ -670,6 +771,12 @@ private:
             << ",\"dynamic_footprint_age_sec\":" << dynamic_footprint_age_sec
             << ",\"mesh_self_filter_preapplied\":" <<
       (mesh_self_filter_preapplied_ ? "true" : "false")
+            << ",\"exact_mesh_components_enabled\":" <<
+      (use_exact_mesh_components_ ? "true" : "false")
+            << ",\"mesh_component_count\":" << mesh_component_count_
+            << ",\"mesh_components_age_sec\":" <<
+      (mesh_components_available_ ?
+      std::chrono::duration<double>(steady_now - mesh_components_received_).count() : -1.0)
             << ",\"self_filtered_scan_points\":" << self_filtered_scan_points
             << ",\"scan_history_size\":" << scan_history_size
             << ",\"scan_stamp_ns\":" << rclcpp::Time(scan.header.stamp).nanoseconds();
@@ -694,6 +801,11 @@ private:
   }
 
   std::unique_ptr<GuardLogic> logic_;
+  double max_linear_mps_{0.15};
+  double max_reverse_mps_{0.15};
+  double max_angular_radps_{0.4};
+  bool collision_check_enabled_{true};
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_;
   double control_frequency_{50.0};
   double scan_timeout_sec_{0.25};
   double odom_timeout_sec_{0.15};
@@ -702,6 +814,7 @@ private:
   int scan_history_size_{32};
   double localization_health_timeout_sec_{0.50};
   double dynamic_footprint_timeout_sec_{0.50};
+  double mesh_components_timeout_sec_{1.50};
   double joint_state_timeout_sec_{0.50};
   double arm_stow_tolerance_rad_{0.035};
   double arm_motion_tolerance_radps_{0.020};
@@ -711,6 +824,12 @@ private:
   bool require_arms_stowed_{true};
   bool require_dynamic_footprint_{false};
   bool mesh_self_filter_preapplied_{false};
+  bool use_exact_mesh_components_{false};
+  bool mesh_components_available_{false};
+  size_t mesh_component_count_{0U};
+  SteadyTime mesh_components_received_{};
+  std::vector<Point2D> base_footprint_;
+  std::vector<std::vector<Point2D>> mesh_self_filter_polygons_;
   std::string base_frame_;
   std::string odom_frame_;
   std::vector<std::string> arm_joint_names_;
@@ -741,6 +860,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr localization_health_sub_;
   std::vector<rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr> arm_joint_state_subs_;
   rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr dynamic_footprint_sub_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr mesh_components_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr command_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::TimerBase::SharedPtr timer_;

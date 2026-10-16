@@ -753,6 +753,21 @@ def _planner_path_matrix(planner: Any) -> np.ndarray:
     return np.hstack([np.asarray(point, dtype=np.float64) for point in initial_path])
 
 
+def same_terminal_pose(previous: np.ndarray | None,
+                       current: np.ndarray | None) -> bool:
+    if previous is None or current is None:
+        return False
+    previous = np.asarray(previous, dtype=np.float64).reshape(-1)
+    current = np.asarray(current, dtype=np.float64).reshape(-1)
+    if previous.size < 3 or current.size < 3:
+        return False
+    heading_error = math.atan2(math.sin(previous[2] - current[2]),
+                               math.cos(previous[2] - current[2]))
+    return (np.isfinite(previous[:3]).all() and np.isfinite(current[:3]).all()
+            and np.linalg.norm(previous[:2] - current[:2]) <= 1.0e-3
+            and abs(heading_error) <= 1.0e-2)
+
+
 def _reset_planner_state(planner: Any) -> None:
     """Reset state mutated by a forward while retaining the loaded model."""
     planner.reset()
@@ -945,6 +960,8 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
 
         path_version = int(spec.get("initial_path_version", 0))
         goal_version = -1
+        active_goal_pose = _planner_path_matrix(planner)[:3, -1:].copy()
+        active_local_reference_id = 0
         sequence = 0
         while True:
             raw_request = conn.recv_bytes()
@@ -990,18 +1007,52 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
             ):
                 fault_injected = True
                 os._exit(42)
-            if int(request.get("path_version", path_version)) > path_version:
-                _set_path(planner, _unpack_array(request["path"]))
-                # A Nav2 replan replaces the entire route contract. Do not
-                # carry an optimized state from the prior route into it.
+            requested_path_version = int(request.get("path_version", path_version))
+            requested_goal_version = int(request.get("goal_version", -1))
+            requested_goal = (_unpack_array(request["goal"])
+                              if request.get("goal") is not None else np.empty((0,)))
+            next_goal_pose = (requested_goal if requested_goal.size >= 3
+                              else normalize_path_matrix(_unpack_array(request["path"]))[:3, -1:])
+            same_goal = same_terminal_pose(active_goal_pose, next_goal_pose)
+            if requested_path_version > path_version:
+                next_path = normalize_path_matrix(_unpack_array(request["path"]))
+                preserve_bypass = (same_goal and request.get("bypass_mode", False)
+                                   and getattr(planner, "bypass_guide", None) is not None)
+                if preserve_bypass:
+                    planner.ipath.set_initial_path([
+                        next_path[:, index:index + 1]
+                        for index in range(next_path.shape[1])
+                    ])
+                    planner.ipath.arrive_flag = False
+                    planner.cur_vel_array = np.zeros_like(planner.cur_vel_array)
+                else:
+                    _set_path(planner, next_path)
+                    planner.reset()
+                planner.pan.current_nom_values = [None, None, None, None]
+                path_version = requested_path_version
+                active_local_reference_id = 0
+            elif not same_goal:
                 planner.reset()
                 planner.pan.current_nom_values = [None, None, None, None]
-                path_version = int(request["path_version"])
-            if int(request.get("goal_version", -1)) > goal_version:
+            active_goal_pose = np.asarray(next_goal_pose, dtype=np.float64).reshape(3, 1).copy()
+            local_reference = request.get("local_reference_path")
+            local_reference_id = int(request.get("local_reference_id", 0))
+            if local_reference is not None and local_reference_id > 0:
+                if active_local_reference_id != local_reference_id:
+                    _set_path(planner, _unpack_array(local_reference))
+                    planner.reset()
+                    planner.pan.current_nom_values = [None, None, None, None]
+                    active_local_reference_id = local_reference_id
+            elif active_local_reference_id:
+                _set_path(planner, _unpack_array(request["path"]))
+                planner.reset()
+                planner.pan.current_nom_values = [None, None, None, None]
+                active_local_reference_id = 0
+            if requested_goal_version > goal_version:
                 # The endpoint is envelope metadata only. The corresponding
                 # SMAC path was already supplied above; regenerating a direct
                 # state-to-goal path here discards its obstacle-safe bends.
-                goal_version = int(request["goal_version"])
+                goal_version = requested_goal_version
 
             if request.get("restore_planner_state") is not None:
                 _restore_planner_state(planner, request["restore_planner_state"])
@@ -1010,6 +1061,10 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
             points = _unpack_array(request["obstacle_points"])
             if points.size == 0:
                 points = None
+            speed_record = request.get("reference_speed_profile")
+            speed_profile = _unpack_array(speed_record) if speed_record is not None else None
+            measured_record = request.get("measured_velocity")
+            measured_velocity = _unpack_array(measured_record) if measured_record is not None else None
             decode_finished = time.perf_counter_ns()
             timing.reset()
             core_wall_started = time.perf_counter_ns()
@@ -1023,7 +1078,12 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
             recorder.begin(request, planner, state, points)
             try:
                 with torch.set_grad_enabled(True):
-                    action, info = planner(state, points)
+                    action, info = planner(
+                        state, points,
+                        reference_speed_profile=speed_profile,
+                        measured_velocity=measured_velocity,
+                        bypass_mode=bool(request.get("bypass_mode", False)),
+                    )
             except Exception as exc:
                 status = "exception"
                 exception = f"{type(exc).__name__}: {exc}"
@@ -1052,6 +1112,11 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                 "info": {
                     "stop": bool(getattr(planner, "info", {}).get("stop", False)),
                     "arrive": bool(getattr(planner, "info", {}).get("arrive", False)),
+                    "bypass_valid": bool(getattr(planner, "info", {}).get("bypass_valid", False)),
+                    "bypass_side": int(getattr(planner, "info", {}).get("bypass_side", 0)),
+                    "bypass_phase": str(getattr(planner, "info", {}).get("bypass_phase", "none")),
+                    "bypass_clearance_m": getattr(planner, "info", {}).get("bypass_clearance_m"),
+                    "bypass_solver_failures": int(getattr(planner, "info", {}).get("bypass_solver_failures", 0)),
                 },
                 "semantic": _planner_semantics(planner),
                 "worker_pid": os.getpid(),

@@ -17,22 +17,49 @@ constexpr double kEpsilon = 1.0e-9;
 }
 
 GuardLogic::GuardLogic(GuardConfig config, std::vector<Point2D> footprint)
-: config_(config), footprint_(std::move(footprint))
+: config_(config)
 {
-  if (footprint_.size() < 3 || config_.control_period_sec <= 0.0 ||
+  if (config_.control_period_sec <= 0.0 ||
     config_.braking_deceleration_mps2 <= 0.0 ||
     config_.braking_angular_deceleration_radps2 <= 0.0)
   {
     throw std::invalid_argument("invalid collision guard geometry or braking configuration");
   }
+  setFootprint(std::move(footprint));
 }
 
 void GuardLogic::setFootprint(std::vector<Point2D> footprint)
 {
-  if (footprint.size() < 3) {
-    throw std::invalid_argument("collision guard footprint must have at least three points");
+  setFootprints({std::move(footprint)});
+}
+
+void GuardLogic::setFootprints(std::vector<std::vector<Point2D>> footprints)
+{
+  if (footprints.empty()) {
+    throw std::invalid_argument("collision guard requires at least one footprint polygon");
   }
-  footprint_ = std::move(footprint);
+  std::vector<FootprintPolygon> prepared;
+  prepared.reserve(footprints.size());
+  for (auto & points : footprints) {
+    if (points.size() < 3) {
+      throw std::invalid_argument("collision guard footprint must have at least three points");
+    }
+    FootprintPolygon polygon;
+    polygon.min_x = polygon.min_y = std::numeric_limits<double>::infinity();
+    polygon.max_x = polygon.max_y = -std::numeric_limits<double>::infinity();
+    for (const auto & point : points) {
+      if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
+        throw std::invalid_argument("collision guard footprint contains a nonfinite point");
+      }
+      polygon.min_x = std::min(polygon.min_x, point.x);
+      polygon.max_x = std::max(polygon.max_x, point.x);
+      polygon.min_y = std::min(polygon.min_y, point.y);
+      polygon.max_y = std::max(polygon.max_y, point.y);
+    }
+    polygon.points = std::move(points);
+    prepared.push_back(std::move(polygon));
+  }
+  footprints_ = std::move(prepared);
 }
 
 double GuardLogic::clamp(double value, double low, double high)
@@ -82,14 +109,24 @@ bool GuardLogic::pointCollides(const Point2D & point, const Pose2D & pose) const
   const double cosine = std::cos(pose.yaw);
   const double sine = std::sin(pose.yaw);
   const Point2D local{cosine * dx + sine * dy, -sine * dx + cosine * dy};
-  if (pointInsidePolygon(local, footprint_)) {
-    return true;
-  }
-  for (size_t i = 0; i < footprint_.size(); ++i) {
-    if (pointToSegmentDistance(local, footprint_[i], footprint_[(i + 1) % footprint_.size()]) <=
-      config_.geometry_margin_m)
+  for (const auto & polygon : footprints_) {
+    if (local.x < polygon.min_x - config_.geometry_margin_m ||
+      local.x > polygon.max_x + config_.geometry_margin_m ||
+      local.y < polygon.min_y - config_.geometry_margin_m ||
+      local.y > polygon.max_y + config_.geometry_margin_m)
     {
+      continue;
+    }
+    if (pointInsidePolygon(local, polygon.points)) {
       return true;
+    }
+    for (size_t i = 0; i < polygon.points.size(); ++i) {
+      if (pointToSegmentDistance(
+          local, polygon.points[i], polygon.points[(i + 1) % polygon.points.size()]) <=
+        config_.geometry_margin_m)
+      {
+        return true;
+      }
     }
   }
   return false;

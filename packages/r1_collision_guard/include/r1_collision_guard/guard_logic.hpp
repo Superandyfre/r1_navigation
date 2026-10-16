@@ -55,6 +55,7 @@ class GuardLogic
 public:
   GuardLogic(GuardConfig config, std::vector<Point2D> footprint);
   void setFootprint(std::vector<Point2D> footprint);
+  void setFootprints(std::vector<std::vector<Point2D>> footprints);
   Decision evaluate(
     double requested_linear_x, double requested_angular_z,
     double actual_linear_x, double actual_angular_z,
@@ -78,8 +79,17 @@ private:
   static void advance(Pose2D & pose, double linear_x, double angular_z, double dt);
   static double clamp(double value, double low, double high);
 
+  struct FootprintPolygon
+  {
+    std::vector<Point2D> points;
+    double min_x{0.0};
+    double max_x{0.0};
+    double min_y{0.0};
+    double max_y{0.0};
+  };
+
   GuardConfig config_;
-  std::vector<Point2D> footprint_;
+  std::vector<FootprintPolygon> footprints_;
 };
 
 const char * stateName(Decision::State state);

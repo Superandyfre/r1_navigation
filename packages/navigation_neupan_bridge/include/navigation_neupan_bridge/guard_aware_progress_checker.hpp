@@ -41,8 +41,15 @@ private:
 
   struct NeupanInfeasibility
   {
-    int sustained_cycles{0};
-    double dune_min_m{0.0};
+    bool active{false};
+    rclcpp::Time started{0, 0, RCL_ROS_TIME};
+    rclcpp::Time received{0, 0, RCL_ROS_TIME};
+  };
+
+  struct NeupanWait
+  {
+    bool active{false};
+    rclcpp::Time started{0, 0, RCL_ROS_TIME};
     rclcpp::Time received{0, 0, RCL_ROS_TIME};
   };
 
@@ -50,6 +57,7 @@ private:
   void neupanSemanticsCallback(const std_msgs::msg::String::SharedPtr message);
   bool isGuardBlocking(const rclcpp::Time & now) const;
   bool isNeupanInfeasible(const rclcpp::Time & now) const;
+  int neupanWaitState(const rclcpp::Time & now) const;
   static geometry_msgs::msg::Pose2D toPose2D(const geometry_msgs::msg::PoseStamped & pose);
   static double normalizeAngle(double angle);
   bool movedEnough(const geometry_msgs::msg::Pose2D & pose) const;
@@ -61,6 +69,7 @@ private:
   mutable std::mutex mutex_;
   GuardStatus guard_status_;
   NeupanInfeasibility neupan_infeasibility_;
+  NeupanWait neupan_wait_;
   std::string guard_block_reason_{"immediate_braking_trajectory_blocked"};
   double guard_status_timeout_sec_{0.20};
   double command_epsilon_{0.005};
@@ -69,7 +78,8 @@ private:
   double movement_time_allowance_sec_{60.0};
   double max_guarded_block_time_sec_{300.0};
   double neupan_semantics_timeout_sec_{0.50};
-  int neupan_infeasible_fail_cycles_{100};
+  double neupan_infeasible_fail_sec_{5.0};
+  double max_neupan_wait_sec_{30.0};
   geometry_msgs::msg::Pose2D baseline_pose_;
   rclcpp::Time baseline_time_{0, 0, RCL_ROS_TIME};
   bool baseline_pose_set_{false};

@@ -246,6 +246,11 @@ class ProductionWholeCoreClient:
         restore_planner_state: dict[str, Any] | None = None,
         scan_callback_receive_monotonic: float = -1.0,
         scan_update_monotonic: float = -1.0,
+        reference_speed_profile: np.ndarray | None = None,
+        measured_velocity: np.ndarray | None = None,
+        local_reference_path: np.ndarray | None = None,
+        local_reference_id: int = 0,
+        bypass_mode: bool = False,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         if self._closed:
             self._fail("bridge_closed", "bridge is closed")
@@ -268,7 +273,15 @@ class ProductionWholeCoreClient:
             "navigation_loop": navigation_loop(navigation_loop_mode),
             "active_gear": validate_gear(active_gear),
             "restore_planner_state": restore_planner_state,
+            "bypass_mode": bool(bypass_mode),
         }
+        if reference_speed_profile is not None:
+            request["reference_speed_profile"] = _pack_array(reference_speed_profile)
+        if measured_velocity is not None:
+            request["measured_velocity"] = _pack_array(measured_velocity)
+        if local_reference_path is not None:
+            request["local_reference_path"] = _pack_array(local_reference_path)
+            request["local_reference_id"] = int(local_reference_id)
         request["request_created_monotonic"] = time.monotonic()
         prep_started = time.perf_counter_ns()
         request["main_send_started_monotonic"] = time.monotonic()

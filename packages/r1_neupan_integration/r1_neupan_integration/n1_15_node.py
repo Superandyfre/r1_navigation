@@ -308,6 +308,8 @@ class N115Node(Node):
 
         self.robot_state = None
         self.obstacle_points = None
+        self.raw_environment_points = None
+        self.processed_scan_counter = 0
         self.latest_scan_ranges = None
         self.latest_scan_stamp_sec = -1.0
         self.latest_scan_receive_monotonic = -1.0
@@ -322,6 +324,7 @@ class N115Node(Node):
         self.dynamic_mesh_components = None
         self.dynamic_mesh_components_received_monotonic = -1.0
         self.observed_linear_x = 0.0
+        self.observed_angular_z = 0.0
         self.observed_odom_received_monotonic = -1.0
         self.scan_counter = 0
         self.last_processed_scan = 0
@@ -550,8 +553,10 @@ class N115Node(Node):
         path_tangent_base = _path_tangent_in_base_frame(path_matrix, state)
         if valid_ranges.size == 0:
             points = None
+            raw_points = np.empty((2, 0), dtype=np.float64)
             transform_ms = 0.0
             tf_lookup_ms = 0.0
+            geometry_ms = 0.0
         else:
             transform_started = time.perf_counter()
             local_points = np.vstack([
@@ -563,6 +568,7 @@ class N115Node(Node):
             # the R1 footprint filter and map projection remain base-frame
             # correct without delaying live scans.
             tf_started = time.perf_counter()
+            geometry_ms = 0.0
             try:
                 scan_frame = str(message.header.frame_id) or self.lidar_frame
                 if scan_frame != self.lidar_frame:
@@ -578,6 +584,8 @@ class N115Node(Node):
                         _rotation(float(scan_yaw)) @ local_points
                         + scan_translation[:, None]
                     )
+                tf_lookup_ms = (time.perf_counter() - tf_started) * 1000.0
+                geometry_started = time.perf_counter()
                 filter_input_count = int(local_points.shape[1])
                 if self.self_filter_enabled:
                     local_ranges = np.hypot(local_points[0], local_points[1])
@@ -596,6 +604,7 @@ class N115Node(Node):
                     local_points = local_points[:, keep]
                 else:
                     filter_shape = "disabled"
+                raw_local_points = local_points.copy()
                 if local_points.shape[1]:
                     environment_index = int(np.argmin(np.hypot(local_points[0], local_points[1])))
                     nearest_environment = local_points[:, environment_index]
@@ -666,20 +675,26 @@ class N115Node(Node):
                 # intermittent. At 0.15 m/s the one control-cycle pose age is
                 # below 1.5 cm; the final collision guard still checks the
                 # base-frame scan independently.
-                tf_lookup_ms = (time.perf_counter() - tf_started) * 1000.0
-                points = _rotation(float(state[2, 0])) @ local_points + state[:2, :]
+                geometry_ms = (time.perf_counter() - geometry_started) * 1000.0
+                rotation = _rotation(float(state[2, 0]))
+                points = rotation @ local_points + state[:2, :]
+                raw_points = rotation @ raw_local_points + state[:2, :]
             except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
                 points = None
+                raw_points = None
                 tf_lookup_ms = (time.perf_counter() - tf_started) * 1000.0
             transform_ms = (time.perf_counter() - transform_started) * 1000.0
         with self.state_lock:
             self.obstacle_points = None if points is None else points.copy()
+            self.raw_environment_points = None if raw_points is None else raw_points.copy()
+            self.processed_scan_counter = self.scan_counter
             self.latest_scan_update_monotonic = time.monotonic()
             self.latest_scan_metrics = {
                 "scan_processing_ms": (time.perf_counter() - started) * 1000.0,
                 "scan_conversion_ms": conversion_ms,
                 "scan_filter_ms": filter_ms,
                 "scan_tf_lookup_ms": tf_lookup_ms,
+                "scan_geometry_ms": geometry_ms,
                 "scan_transform_ms": transform_ms,
             }
             self.latest_scan_filter = {
@@ -783,10 +798,12 @@ class N115Node(Node):
     def odom_callback(self, message: Odometry) -> None:
         """Keep the latest measured base speed for zero-speed gear changes."""
         linear_x = float(message.twist.twist.linear.x)
-        if not np.isfinite(linear_x):
+        angular_z = float(message.twist.twist.angular.z)
+        if not np.isfinite(linear_x) or not np.isfinite(angular_z):
             return
         with self.state_lock:
             self.observed_linear_x = linear_x
+            self.observed_angular_z = angular_z
             self.observed_odom_received_monotonic = time.monotonic()
 
     def _consume_gear_transition(self) -> dict[str, Any] | None:

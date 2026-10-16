@@ -1,11 +1,20 @@
-<!-- NeuPAN policy: replan at 1 Hz, but never execute recovery motion. -->
+<!-- Replan once after controller failure; never execute recovery motion. -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <PipelineSequence name="NavigateWithNeuPANReplanning">
-      <RateController hz="1.0">
-        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
-      </RateController>
-      <FollowPath path="{path}" controller_id="FollowPath"/>
-    </PipelineSequence>
+    <RecoveryNode number_of_retries="1" name="ReplanAfterFollowPathFailure">
+      <PipelineSequence name="NavigateWithNeuPANReplanning">
+        <RateController hz="1.0">
+          <Fallback>
+            <Sequence>
+              <ComputePathToPose goal="{goal}" path="{candidate_path}" planner_id="GridBased"/>
+              <AcceptNeuPANPath candidate_path="{candidate_path}" goal="{goal}" path="{path}" accepted_goal="{accepted_goal}"/>
+            </Sequence>
+            <IsNeuPANWaiting path="{path}" goal="{goal}" accepted_goal="{accepted_goal}"/>
+          </Fallback>
+        </RateController>
+        <FollowPath path="{path}" controller_id="FollowPath"/>
+      </PipelineSequence>
+      <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+    </RecoveryNode>
   </BehaviorTree>
 </root>
