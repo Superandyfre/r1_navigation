@@ -18,6 +18,9 @@
 #include <string>
 #include <utility>
 #include <limits>
+#include <iomanip>
+#include <sstream>
+#include "r1_neupan_runtime/motion_authorization.hpp"
 
 #include "lifecycle_msgs/msg/state.hpp"
 #include "nav2_core/exceptions.hpp"
@@ -48,6 +51,11 @@ ControllerServer::ControllerServer(const rclcpp::NodeOptions & options)
 {
   RCLCPP_INFO(get_logger(), "Creating controller server");
 
+  authority_boot_id_ = r1_neupan_runtime::newBootId();
+  runtime_costmap_wait_timeout_sec_ = declare_parameter("runtime_costmap_wait_timeout_sec", 5.0);
+  if (!std::isfinite(runtime_costmap_wait_timeout_sec_) || runtime_costmap_wait_timeout_sec_ <= 0) {
+    throw std::invalid_argument("runtime_costmap_wait_timeout_sec must be finite and positive");
+  }
   declare_parameter("controller_frequency", 20.0);
 
   declare_parameter("progress_checker_plugin", default_progress_checker_id_);
@@ -352,6 +360,33 @@ bool ControllerServer::findGoalCheckerId(
   return true;
 }
 
+void ControllerServer::beginRuntimeExecution()
+{
+  auto * observer = dynamic_cast<r1_neupan_runtime::ExecutionObserver *>(
+    controllers_.at(current_controller_).get());
+  if (!observer) {return;}  // Standard Nav2 controllers retain their interface.
+  const auto uuid = action_server_->get_current_goal_id();
+  std::ostringstream id;
+  id << std::hex << std::setfill('0');
+  bool nonzero = false;
+  for (const auto byte : uuid) {
+    id << std::setw(2) << static_cast<unsigned int>(byte); nonzero |= byte != 0;
+  }
+  if (!nonzero) {throw nav2_core::PlannerException("missing_active_action_uuid");}
+  runtime_execution_ = std::make_unique<r1_neupan_runtime::ExecutionSession>(
+    observer, authority_boot_id_, id.str());
+}
+
+void ControllerServer::checkRuntimeExecution()
+{
+  if (runtime_execution_) {runtime_execution_->check();}
+}
+
+void ControllerServer::endRuntimeExecution(const std::string & reason) noexcept
+{
+  if (runtime_execution_) {runtime_execution_->end(reason); runtime_execution_.reset();}
+}
+
 void ControllerServer::computeControl()
 {
   std::lock_guard<std::mutex> lock(dynamic_params_lock_);
@@ -377,6 +412,7 @@ void ControllerServer::computeControl()
       return;
     }
 
+    beginRuntimeExecution();
     setPlannerPath(action_server_->get_current_goal()->path);
     progress_checker_->reset();
 
@@ -385,22 +421,49 @@ void ControllerServer::computeControl()
     while (rclcpp::ok()) {
       if (action_server_ == nullptr || !action_server_->is_server_active()) {
         RCLCPP_DEBUG(get_logger(), "Action server unavailable or inactive. Stopping.");
+        endRuntimeExecution("server_inactive");
+        publishZeroVelocity();
         return;
       }
 
       if (action_server_->is_cancel_requested()) {
         RCLCPP_INFO(get_logger(), "Goal was canceled. Stopping the robot.");
+        endRuntimeExecution("canceled");
         action_server_->terminate_all();
         publishZeroVelocity();
         return;
       }
 
       // Don't compute a trajectory until costmap is valid (after clear costmap)
-      rclcpp::Rate r(100);
+      auto wait_started = std::chrono::steady_clock::now();
+      rclcpp::WallRate r(100);
       while (!costmap_ros_->isCurrent()) {
+        if (!rclcpp::ok() || !action_server_->is_server_active()) {
+          endRuntimeExecution("server_inactive");
+          publishZeroVelocity();
+          return;
+        }
+        if (action_server_->is_cancel_requested()) {
+          endRuntimeExecution("canceled");
+          publishZeroVelocity();
+          action_server_->terminate_all();
+          return;
+        }
+        checkRuntimeExecution();
+        if (action_server_->is_preempt_requested()) {
+          updateGlobalPath();
+          wait_started = std::chrono::steady_clock::now();
+        }
+        if (runtime_execution_ && std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - wait_started).count() >
+          runtime_costmap_wait_timeout_sec_)
+        {
+          throw nav2_core::PlannerException("runtime_costmap_wait_timeout");
+        }
         r.sleep();
       }
 
+      checkRuntimeExecution();
       updateGlobalPath();
 
       computeAndPublishVelocity();
@@ -418,17 +481,31 @@ void ControllerServer::computeControl()
     }
   } catch (nav2_core::PlannerException & e) {
     RCLCPP_ERROR(this->get_logger(), "%s", e.what());
+    endRuntimeExecution("failed");
     publishZeroVelocity();
     action_server_->terminate_current();
     return;
   } catch (std::exception & e) {
     RCLCPP_ERROR(this->get_logger(), "%s", e.what());
+    endRuntimeExecution("failed");
     publishZeroVelocity();
     std::shared_ptr<Action::Result> result = std::make_shared<Action::Result>();
     action_server_->terminate_current(result);
     return;
+  } catch (...) {
+    endRuntimeExecution("unknown_exception");
+    publishZeroVelocity();
+    action_server_->terminate_current();
+    return;
   }
 
+  if (!rclcpp::ok()) {
+    endRuntimeExecution("shutdown");
+    publishZeroVelocity();
+    action_server_->terminate_current();
+    return;
+  }
+  endRuntimeExecution("succeeded");
   RCLCPP_DEBUG(get_logger(), "Controller succeeded, setting result");
 
   publishZeroVelocity();
@@ -527,6 +604,12 @@ void ControllerServer::computeAndPublishVelocity()
   action_server_->publish_feedback(feedback);
 
   RCLCPP_DEBUG(get_logger(), "Publishing velocity at time %.2f", now().seconds());
+  // A fatal detected after compute is not masked by failure_tolerance.
+  checkRuntimeExecution();
+  if (action_server_->is_cancel_requested() || !action_server_->is_server_active()) {
+    publishZeroVelocity();
+    return;
+  }
   publishVelocity(cmd_vel_2d);
 }
 
@@ -534,6 +617,8 @@ void ControllerServer::updateGlobalPath()
 {
   if (action_server_->is_preempt_requested()) {
     RCLCPP_INFO(get_logger(), "Passing new path to controller.");
+    endRuntimeExecution("preempted");
+    publishZeroVelocity();
     auto goal = action_server_->accept_pending_goal();
     std::string current_controller;
     if (findControllerId(goal->controller_id, current_controller)) {
@@ -542,8 +627,7 @@ void ControllerServer::updateGlobalPath()
       RCLCPP_INFO(
         get_logger(), "Terminating action, invalid controller %s requested.",
         goal->controller_id.c_str());
-      action_server_->terminate_current();
-      return;
+      throw nav2_core::PlannerException("invalid_preempting_controller");
     }
     std::string current_goal_checker;
     if (findGoalCheckerId(goal->goal_checker_id, current_goal_checker)) {
@@ -552,9 +636,9 @@ void ControllerServer::updateGlobalPath()
       RCLCPP_INFO(
         get_logger(), "Terminating action, invalid goal checker %s requested.",
         goal->goal_checker_id.c_str());
-      action_server_->terminate_current();
-      return;
+      throw nav2_core::PlannerException("invalid_preempting_goal_checker");
     }
+    beginRuntimeExecution();
     setPlannerPath(goal->path);
   }
 }
@@ -629,6 +713,12 @@ ControllerServer::dynamicParametersCallback(std::vector<rclcpp::Parameter> param
   for (auto parameter : parameters) {
     const auto & type = parameter.get_type();
     const auto & name = parameter.get_name();
+
+    if (name == "runtime_costmap_wait_timeout_sec") {
+      result.successful = false;
+      result.reason = "runtime deadline requires controlled restart";
+      return result;
+    }
 
     // If we are trying to change the parameter of a plugin we can just skip it at this point
     // as they handle parameter changes themselves and don't need to lock the mutex

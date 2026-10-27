@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.5)
 project(nav2_controller)
 
 find_package(ament_cmake REQUIRED)
+find_package(r1_neupan_runtime REQUIRED)
 find_package(nav2_core REQUIRED)
 find_package(nav2_common REQUIRED)
 find_package(angles REQUIRED)
@@ -16,6 +17,8 @@ find_package(nav_2d_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 
 nav2_package()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(
   include
@@ -34,6 +37,7 @@ add_library(${library_name} SHARED
 )
 
 set(dependencies
+  r1_neupan_runtime
   angles
   rclcpp
   rclcpp_action

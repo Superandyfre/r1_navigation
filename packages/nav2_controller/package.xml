@@ -9,6 +9,7 @@
 
   <buildtool_depend>ament_cmake</buildtool_depend>
   <build_depend>nav2_common</build_depend>
+  <depend>r1_neupan_runtime</depend>
   <depend>angles</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_action</depend>

@@ -23,6 +23,7 @@
 #include <mutex>
 
 #include "nav2_core/controller.hpp"
+#include "r1_neupan_runtime/execution_observer.hpp"
 #include "nav2_core/progress_checker.hpp"
 #include "nav2_core/goal_checker.hpp"
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
@@ -123,6 +124,12 @@ protected:
    * @throw nav2_core::PlannerException
    */
   void computeControl();
+  void beginRuntimeExecution();
+  void checkRuntimeExecution();
+  void endRuntimeExecution(const std::string & reason) noexcept;
+  std::string authority_boot_id_;
+  std::unique_ptr<r1_neupan_runtime::ExecutionSession> runtime_execution_;
+  double runtime_costmap_wait_timeout_sec_{5.0};
 
   /**
    * @brief Find the valid controller ID name for the given request
