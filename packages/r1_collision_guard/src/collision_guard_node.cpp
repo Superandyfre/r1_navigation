@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "r1_collision_guard/guard_logic.hpp"
+#include "r1_neupan_runtime/motion_authorization.hpp"
 #include "r1_collision_guard/mesh_components.hpp"
 #include "r1_collision_guard/scan_filter.hpp"
 
@@ -116,6 +117,19 @@ public:
     max_reverse_mps_ = config.max_reverse_mps;
     max_angular_radps_ = config.max_angular_radps;
     collision_check_enabled_ = declare_parameter<bool>("collision_check_enabled", true);
+    // There is no runtime bypass for motion authorization. Old producer stacks
+    // without the new grant and source contract remain disarmed.
+    r1_neupan_runtime::AuthorizationConfig authorization_config;
+    authorization_config.health_timeout = declare_parameter<double>("worker_health_timeout_sec", 0.50);
+    authorization_config.source_timeout = declare_parameter<double>("planner_source_timeout_sec", 0.50);
+    authorization_config.input_timeout = declare_parameter<double>("planner_input_timeout_sec", 0.75);
+    authorization_config.authority_timeout = declare_parameter<double>("navigation_authority_timeout_sec", 0.50);
+    authorization_config.recovery_timeout = declare_parameter<double>("planner_recovery_timeout_sec", 5.0);
+    authorization_ = std::make_unique<r1_neupan_runtime::MotionAuthorization>(
+      r1_neupan_runtime::newBootId(), authorization_config);
+    const auto worker_health_topic = declare_parameter<std::string>("worker_health_topic", "/neupan_worker_health");
+    const auto planner_source_topic = declare_parameter<std::string>("planner_source_topic", "/neupan_planner_result");
+    const auto motion_grant_topic = declare_parameter<std::string>("motion_grant_topic", "/neupan_motion_grant");
     control_frequency_ = declare_parameter<double>("control_frequency", 50.0);
     config.control_period_sec = 1.0 / control_frequency_;
     config.reaction_delay_sec = declare_parameter<double>("reaction_delay_sec", 0.10);
@@ -204,6 +218,28 @@ public:
     base_footprint_ = footprint;
     logic_ = std::make_unique<GuardLogic>(config, std::move(footprint));
 
+    worker_health_sub_ = create_subscription<std_msgs::msg::String>(
+      worker_health_topic, rclcpp::QoS(20), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        authorization_->health(parseProtocol(msg->data), monotonicNow());
+      });
+    planner_source_sub_ = create_subscription<std_msgs::msg::String>(
+      planner_source_topic, rclcpp::QoS(20), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        authorization_->source(parseProtocol(msg->data), monotonicNow());
+      });
+    motion_grant_sub_ = create_subscription<std_msgs::msg::String>(
+      motion_grant_topic, rclcpp::QoS(20), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto previous_grant = authorization_->grantId();
+        authorization_->authorization(parseProtocol(msg->data), monotonicNow());
+        if (authorization_->grantId() != previous_grant) {
+          // A newly prepared route/attempt cannot consume commands queued in
+          // the smoother or guard for the previous grant. Wait for new input.
+          command_available_ = false;
+          source_command_available_ = false;
+        }
+      });
     command_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       command_topic, rclcpp::QoS(20),
       std::bind(&CollisionGuardNode::commandCallback, this, std::placeholders::_1));
@@ -242,9 +278,17 @@ public:
         rcl_interfaces::msg::SetParametersResult result;
         result.successful = true;
         for (const auto & parameter : parameters) {
-          if (parameter.get_name() != "collision_check_enabled") {
-            continue;
+          const auto & name = parameter.get_name();
+          if (name == "worker_health_timeout_sec" || name == "planner_source_timeout_sec" ||
+            name == "planner_input_timeout_sec" || name == "navigation_authority_timeout_sec" ||
+            name == "planner_recovery_timeout_sec" || name == "worker_health_topic" ||
+            name == "planner_source_topic" || name == "motion_grant_topic")
+          {
+            result.successful = false;
+            result.reason = "authorization configuration requires controlled restart";
+            return result;
           }
+          if (name != "collision_check_enabled") {continue;}
           if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
             result.successful = false;
             result.reason = "collision_check_enabled must be a boolean";
@@ -548,6 +592,17 @@ private:
     return decision;
   }
 
+  static double monotonicNow()
+  {
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+
+  static nlohmann::json parseProtocol(const std::string & data)
+  {
+    const auto parsed = nlohmann::json::parse(data, nullptr, false);
+    return parsed.is_discarded() ? nlohmann::json::object() : parsed;
+  }
+
   void tick()
   {
     geometry_msgs::msg::Twist command;
@@ -716,10 +771,21 @@ private:
         }
       }
     }
-    geometry_msgs::msg::Twist output;
-    output.linear.x = decision.linear_x;
-    output.angular.z = decision.angular_z;
-    command_pub_->publish(output);
+    // Recheck at the final actuator boundary, after the existing geometry and
+    // sensor checks, including when collision_check_enabled is false.
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      physical_safety_state_ = stateName(decision.state);
+      authorization_decision_ = authorization_->evaluate(monotonicNow());
+      if (!authorization_decision_.allowed) {
+        decision = authorization_decision_.fault ? fault(authorization_decision_.reason) :
+          stop(authorization_decision_.reason);
+      }
+      geometry_msgs::msg::Twist output;
+      output.linear.x = decision.linear_x;
+      output.angular.z = decision.angular_z;
+      command_pub_->publish(output);
+    }
     publishStatus(
       decision, command, scan, odom_history, localization_health, scan_history.size(),
       command_available, command_received, source_command_available, source_command_valid,
@@ -741,66 +807,65 @@ private:
       dynamic_footprint_timeout_sec_;
     const double dynamic_footprint_age_sec = dynamic_footprint.available ?
       std::chrono::duration<double>(steady_now - dynamic_footprint.received).count() : -1.0;
-    std::ostringstream payload;
-    payload.setf(std::ios::fixed);
-    payload.precision(6);
-    payload << "{\"schema\":\"r1_collision_guard_status_v1\""
-            << ",\"state\":\"" << stateName(decision.state) << "\""
-            << ",\"reason\":\"" << decision.reason << "\""
-            << ",\"requested_linear_x\":" << command.linear.x
-            << ",\"requested_angular_z\":" << command.angular.z
-            << ",\"output_linear_x\":" << decision.linear_x
-            << ",\"output_angular_z\":" << decision.angular_z
-            << ",\"safe_scale\":" << decision.safe_scale
-            << ",\"stopping_distance_m\":" << decision.stopping_distance_m
-            << ",\"collision_time_sec\":" << decision.collision_time_sec
-            << ",\"collision_point_x\":" << decision.collision_point.x
-            << ",\"collision_point_y\":" << decision.collision_point.y
-            << ",\"localization_state\":\"" << localization_health.state << "\""
-            << ",\"localization_reason\":\"" << localization_health.reason << "\""
-            << ",\"arm_state\":\"" << (
-              require_dynamic_footprint_ ?
-              (dynamic_footprint_ready ? "DYNAMIC_PROJECTION_READY" : "DYNAMIC_PROJECTION_STALE") :
-              (!arm_state.available ? "MISSING" :
-              !arm_state.valid ? "INVALID" :
-              !arm_state.stowed ? "NOT_STOWED" :
-              arm_state.moving ? "MOVING" : "STOWED")) << "\""
-            << ",\"arm_max_position_error_rad\":" << arm_state.max_position_error
-            << ",\"dynamic_footprint_points\":" << dynamic_footprint.points.size()
-            << ",\"dynamic_footprint_ready\":" << (dynamic_footprint_ready ? "true" : "false")
-            << ",\"dynamic_footprint_age_sec\":" << dynamic_footprint_age_sec
-            << ",\"mesh_self_filter_preapplied\":" <<
-      (mesh_self_filter_preapplied_ ? "true" : "false")
-            << ",\"exact_mesh_components_enabled\":" <<
-      (use_exact_mesh_components_ ? "true" : "false")
-            << ",\"mesh_component_count\":" << mesh_component_count_
-            << ",\"mesh_components_age_sec\":" <<
-      (mesh_components_available_ ?
-      std::chrono::duration<double>(steady_now - mesh_components_received_).count() : -1.0)
-            << ",\"self_filtered_scan_points\":" << self_filtered_scan_points
-            << ",\"scan_history_size\":" << scan_history_size
-            << ",\"scan_stamp_ns\":" << rclcpp::Time(scan.header.stamp).nanoseconds();
+    // JSON serialization escapes diagnostic strings and emits null for
+    // nonfinite requested input, so the safety status itself stays parseable.
+    nlohmann::json payload = {
+      {"schema", "r1_collision_guard_status_v1"},
+      {"state", stateName(decision.state)}, {"reason", decision.reason},
+      {"requested_linear_x", command.linear.x}, {"requested_angular_z", command.angular.z},
+      {"output_linear_x", decision.linear_x}, {"output_angular_z", decision.angular_z},
+      {"safe_scale", decision.safe_scale}, {"stopping_distance_m", decision.stopping_distance_m},
+      {"collision_time_sec", decision.collision_time_sec},
+      {"collision_point_x", decision.collision_point.x}, {"collision_point_y", decision.collision_point.y},
+      {"localization_state", localization_health.state}, {"localization_reason", localization_health.reason},
+      {"arm_state", require_dynamic_footprint_ ?
+        (dynamic_footprint_ready ? "DYNAMIC_PROJECTION_READY" : "DYNAMIC_PROJECTION_STALE") :
+        (!arm_state.available ? "MISSING" : !arm_state.valid ? "INVALID" :
+        !arm_state.stowed ? "NOT_STOWED" : arm_state.moving ? "MOVING" : "STOWED")},
+      {"arm_max_position_error_rad", arm_state.max_position_error},
+      {"dynamic_footprint_points", dynamic_footprint.points.size()},
+      {"dynamic_footprint_ready", dynamic_footprint_ready},
+      {"dynamic_footprint_age_sec", dynamic_footprint_age_sec},
+      {"mesh_self_filter_preapplied", mesh_self_filter_preapplied_},
+      {"exact_mesh_components_enabled", use_exact_mesh_components_},
+      {"mesh_component_count", mesh_component_count_},
+      {"mesh_components_age_sec", mesh_components_available_ ?
+        std::chrono::duration<double>(steady_now - mesh_components_received_).count() : -1.0},
+      {"self_filtered_scan_points", self_filtered_scan_points}, {"scan_history_size", scan_history_size},
+      {"scan_stamp_ns", rclcpp::Time(scan.header.stamp).nanoseconds()},
+      {"source_command_ready", source_command_available && source_command_valid}};
     if (command_available) {
-      payload << ",\"command_age_sec\":" <<
-        std::chrono::duration<double>(steady_now - command_received).count();
+      payload["command_age_sec"] = std::chrono::duration<double>(steady_now - command_received).count();
     }
-    payload << ",\"source_command_ready\":" <<
-      (source_command_available && source_command_valid ? "true" : "false");
     if (source_command_available) {
-      payload << ",\"source_command_age_sec\":" <<
+      payload["source_command_age_sec"] =
         std::chrono::duration<double>(steady_now - source_command_received).count();
     }
     if (!odom_history.empty()) {
-      payload << ",\"actual_linear_x\":" << odom_history.back().linear_x
-              << ",\"actual_angular_z\":" << odom_history.back().angular_z
-              << ",\"odom_stamp_ns\":" << odom_history.back().stamp.nanoseconds();
+      payload["actual_linear_x"] = odom_history.back().linear_x;
+      payload["actual_angular_z"] = odom_history.back().angular_z;
+      payload["odom_stamp_ns"] = rclcpp::Time(odom_history.back().stamp).nanoseconds();
     }
-    payload << "}";
-    message.data = payload.str();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      payload.update(nlohmann::json{
+        {"authorization_protocol", "r1_neupan_motion_grant_v1"},
+        {"source_protocol", "r1_neupan_planner_source_v2"}, {"build_revision", R1_FAILSTOP_BUILD_REVISION},
+        {"guard_boot_id", authorization_->bootId()}, {"authorization_state", authorization_decision_.state},
+        {"authorization_reason", authorization_decision_.reason}, {"physical_safety_state", physical_safety_state_},
+        {"grant_id", authorization_->grantId()}, {"navigation_attempt_id", authorization_->attemptId()}});
+    }
+    message.data = payload.dump();
     status_pub_->publish(message);
   }
 
   std::unique_ptr<GuardLogic> logic_;
+  std::unique_ptr<r1_neupan_runtime::MotionAuthorization> authorization_;
+  r1_neupan_runtime::AuthorizationDecision authorization_decision_;
+  std::string physical_safety_state_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr worker_health_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr planner_source_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr motion_grant_sub_;
   double max_linear_mps_{0.15};
   double max_reverse_mps_{0.15};
   double max_angular_radps_{0.4};
