@@ -1,3 +1,4 @@
+#include <fstream>
 #include <gtest/gtest.h>
 #include "r1_neupan_runtime/motion_authorization.hpp"
 using namespace r1_neupan_runtime;
@@ -254,3 +255,18 @@ TEST_F(Gate, BootIdsDifferAcrossNewInstances) {
   EXPECT_NE(newBootId(),newBootId());
 }
 }  // namespace
+
+TEST(SourceProtocolVectors, PythonProducerAndCppConsumerShareStrictContract) {
+  std::ifstream file(R1_SOURCE_VECTORS_PATH);
+  ASSERT_TRUE(file.good());
+  const auto vectors = Json::parse(file);
+  ASSERT_GE(vectors.size(), 15u);
+  for (const auto & row : vectors) {
+    SCOPED_TRACE(row.at("name").get<std::string>());
+    if (row.at("valid").get<bool>()) {
+      EXPECT_NO_THROW(parseSource(row.at("source"), row.at("received").get<double>()));
+    } else {
+      EXPECT_THROW(parseSource(row.at("source"), row.at("received").get<double>()), std::exception);
+    }
+  }
+}

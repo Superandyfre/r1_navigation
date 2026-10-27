@@ -9,6 +9,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_motion_authorization test/test_motion_authorization.cpp)
   target_compile_features(test_motion_authorization PUBLIC cxx_std_17)
+  target_compile_definitions(test_motion_authorization PRIVATE
+    R1_SOURCE_VECTORS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/test/source_protocol_vectors.json")
   target_include_directories(test_motion_authorization PRIVATE include)
   target_link_libraries(test_motion_authorization nlohmann_json::nlohmann_json)
 endif()

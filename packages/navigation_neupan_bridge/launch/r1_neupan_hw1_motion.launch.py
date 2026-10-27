@@ -268,6 +268,8 @@ def _build(context):
                 "planner_context_topic": "/neupan_planner_context",
                 "bridge_status_topic": "/neupan_bridge_status",
                 "worker_recovery_enabled": False,
+                "require_execution_context": True,
+                "execution_context_topic": "/neupan_execution_context",
                 "worker_health_topic": "/neupan_worker_health",
                 "worker_health_period_sec": 0.10,
                 "torch_num_threads": 4,

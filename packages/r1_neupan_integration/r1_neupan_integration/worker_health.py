@@ -22,6 +22,7 @@ class FatalFault:
     goal_version: int
     failed_request_id: int
     occurrence_monotonic: float
+    navigation_attempt_id: str | None
 
 
 class WorkerHealth:
@@ -35,6 +36,7 @@ class WorkerHealth:
         self._path_version = -1
         self._goal_version = -1
         self._last_success = -1
+        self._attempt = None
 
     @property
     def fault(self) -> FatalFault | None:
@@ -47,6 +49,14 @@ class WorkerHealth:
                 self._generation = int(generation)
                 self._path_version = int(path_version)
                 self._goal_version = int(goal_version)
+
+    def bind_execution(self, attempt: str | None, generation: int, path: int, goal: int) -> None:
+        with self._lock:
+            if self._fault is None:
+                self._attempt = attempt
+                self._generation = generation
+                self._path_version = path
+                self._goal_version = goal
 
     def ready(self, generation: int) -> None:
         with self._lock:
@@ -65,6 +75,7 @@ class WorkerHealth:
                 self._fault = FatalFault(
                     str(uuid.uuid4()), str(code), int(generation),
                     self._path_version, self._goal_version, int(request_id), time.monotonic(),
+                    self._attempt,
                 )
                 self._state = 'FAULT_LATCHED'
             return self._fault
@@ -84,7 +95,7 @@ class WorkerHealth:
                 'boot_id': self.boot_id,
                 'sequence': self._sequence,
                 'state': self._state,
-                'navigation_attempt_id': None,
+                'navigation_attempt_id': fault.navigation_attempt_id if fault else self._attempt,
                 'worker_generation': fault.worker_generation if fault else self._generation,
                 'path_version': fault.path_version if fault else self._path_version,
                 'goal_version': fault.goal_version if fault else self._goal_version,

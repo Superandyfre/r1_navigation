@@ -477,7 +477,7 @@ class ProductionWholeCoreClient:
             "scan_callback_receive_monotonic": float(scan_callback_receive_monotonic),
             "scan_update_monotonic": float(scan_update_monotonic),
             "request_created_monotonic": float(request["request_created_monotonic"]),
-            "request_dispatched_monotonic": float(transport_send_finished),
+            "request_dispatched_monotonic": float(transport_send_started),
             "main_response_received_monotonic": float(transport_response_received),
         }
         semantic = dict(response.get("semantic", {}))

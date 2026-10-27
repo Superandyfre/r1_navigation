@@ -733,7 +733,8 @@ class N115Node(Node):
             self.dynamic_footprint_ready = bool(dynamic_ready)
         self._planner_input_updated()
 
-    def path_callback(self, message: Path) -> None:
+    def _prepare_path(self, message: Path):
+        """Prepare legacy path geometry without notifying the scheduler."""
         if not message.poses:
             return
         coordinates = []
@@ -762,6 +763,12 @@ class N115Node(Node):
                 "Collapsed inconsistent stationary prefix in NeuPAN input path: "
                 f"{matrix.shape[1]} -> {sanitized_matrix.shape[1]} poses")
         matrix = sanitized_matrix
+        return matrix
+
+    def path_callback(self, message: Path) -> None:
+        matrix = self._prepare_path(message)
+        if matrix is None:
+            return
         with self.state_lock:
             self._raw_path_matrix = matrix[:3, :].copy()
             # The Nav2 bridge publishes a path when its terminal goal changes
