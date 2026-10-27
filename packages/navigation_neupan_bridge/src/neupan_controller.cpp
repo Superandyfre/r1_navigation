@@ -1,3 +1,4 @@
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "navigation_neupan_bridge/neupan_controller.hpp"
 #include "navigation_neupan_bridge/path_replan_distance.hpp"
 #include "navigation_neupan_bridge/guard_recovery.hpp"
@@ -7,6 +8,8 @@
 #include <exception>
 #include <sstream>
 #include <utility>
+#include "tf2/utils.h"
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 #include <nlohmann/json.hpp>
 #include "nav2_core/exceptions.hpp"
@@ -117,6 +120,98 @@ void NeuPANController::configure(
   node_->get_parameter(plugin_name_ + ".localization_startup_timeout", localization_startup_timeout_sec_);
   node_->get_parameter(plugin_name_ + ".require_localization_ready", require_localization_ready_);
 
+  for (auto pair : {std::make_pair("worker_health_topic", &worker_health_topic_),
+    std::make_pair("execution_context_topic", &execution_context_topic_),
+    std::make_pair("motion_grant_topic", &motion_grant_topic_),
+    std::make_pair("motion_arm_service", &motion_arm_service_),
+    std::make_pair("arm_odom_frame", &arm_odom_frame_),
+    std::make_pair("arm_base_frame", &arm_base_frame_),
+    std::make_pair("odom_topic", &odom_topic_)})
+  {
+    declareIfMissing(node_, plugin_name_ + "." + pair.first, *pair.second);
+    node_->get_parameter(plugin_name_ + "." + pair.first, *pair.second);
+  }
+  r1_neupan_runtime::AuthorizationConfig runtime_config;
+  runtime_config.source_timeout = std::min(envelope_timeout_sec_, 0.5);
+  runtime_config.recovery_timeout = envelope_recovery_timeout_sec_;
+  for (auto pair : {std::make_pair("worker_health_timeout", &runtime_config.health_timeout),
+    std::make_pair("planner_input_timeout", &runtime_config.input_timeout),
+    std::make_pair("navigation_authority_timeout", &runtime_config.authority_timeout)})
+  {
+    declareIfMissing(node_, plugin_name_ + "." + pair.first, *pair.second);
+    node_->get_parameter(plugin_name_ + "." + pair.first, *pair.second);
+  }
+  // Freeze the plugin namespace. These values are read at configure time;
+  // accepting a live mutation would make the parameter server disagree with
+  // the retained authorization monitor (or change shadow/production mode).
+  std::map<std::string, rclcpp::ParameterValue> configuration;
+  for (const auto & parameter : node_->get_parameters(
+      node_->list_parameters({plugin_name_}, 0).names))
+  {configuration.emplace(parameter.get_name(), parameter.get_parameter_value());}
+  if (!configured_parameters_.empty() && configuration != configured_parameters_) {
+    if (execution_) {execution_->fail("immutable_configuration_changed");}
+    throw nav2_core::PlannerException("immutable_configuration_changed_require_process_restart");
+  }
+  configured_parameters_ = configuration;
+  parameter_guard_ = node_->add_on_set_parameters_callback(
+    [this](const std::vector<rclcpp::Parameter> & parameters) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      rcl_interfaces::msg::SetParametersResult result; result.successful = true;
+      const std::string prefix = plugin_name_ + ".";
+      for (const auto & parameter : parameters) {
+        if (parameter.get_name().compare(0, prefix.size(), prefix) != 0) {continue;}
+        const auto original = configured_parameters_.find(parameter.get_name());
+        if (original == configured_parameters_.end() ||
+          original->second != parameter.get_parameter_value())
+        {
+          result.successful = false;
+          result.reason = "NeuPAN plugin configuration is immutable; controlled process restart required";
+          break;
+        }
+      }
+      return result;
+    });
+  if (!execution_) {
+    execution_ = std::make_unique<r1_neupan_runtime::ControllerExecution>(
+      r1_neupan_runtime::newBootId(), runtime_config, envelope_startup_timeout_sec_);
+  }
+  execution_context_pub_ = node_->create_publisher<std_msgs::msg::String>(execution_context_topic_, 20);
+  motion_grant_pub_ = node_->create_publisher<std_msgs::msg::String>(motion_grant_topic_, 20);
+  worker_health_sub_ = node_->create_subscription<std_msgs::msg::String>(worker_health_topic_, 20,
+    [this](std_msgs::msg::String::SharedPtr msg) {
+      if (shadow_mode_) {return;}
+      std::lock_guard<std::mutex> lock(mutex_);
+      try {execution_->health(nlohmann::json::parse(msg->data), monotonicNow());}
+      catch (const std::exception &) {if (execution_->active()) {execution_->fail("invalid_worker_health");}}
+      if (execution_->faulted()) {envelope_ = Envelope{};}
+    });
+  odom_sub_ = node_->create_subscription<nav_msgs::msg::Odometry>(odom_topic_, 10,
+    [this](nav_msgs::msg::Odometry::SharedPtr msg) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000u) {
+        stopped_odometry_.reset(); return;
+      }
+      const auto & v = msg->twist.twist;
+      const std::int64_t stamp = static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL +
+        msg->header.stamp.nanosec;
+      stopped_odometry_.observe(stamp,
+        node_->now().nanoseconds(), monotonicNow(), msg->header.frame_id, msg->child_frame_id,
+        arm_odom_frame_, arm_base_frame_,
+        {v.linear.x, v.linear.y, v.linear.z, v.angular.x, v.angular.y, v.angular.z});
+    });
+  arm_service_ = node_->create_service<std_srvs::srv::Trigger>(motion_arm_service_,
+    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const double now = monotonicNow();
+      const bool stopped = stopped_odometry_.stopped(now, node_->now().nanoseconds());
+      response->success = active_ && !shadow_mode_ && execution_->arm(now, stopped);
+      response->message = response->success ? "run_armed_each_action_still_requires_grant" :
+        "arm_denied_require_idle_stopped_fresh_guard_and_no_fatal";
+    });
+  runtime_timer_ = node_->create_wall_timer(std::chrono::milliseconds(50),
+    std::bind(&NeuPANController::runtimeTick, this));
+
   path_pub_ = node_->create_publisher<nav_msgs::msg::Path>(path_topic_, rclcpp::QoS(1));
   goal_pub_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>(goal_topic_, rclcpp::QoS(1));
   diagnostics_pub_ = node_->create_publisher<std_msgs::msg::String>(diagnostics_topic_, rclcpp::QoS(20));
@@ -141,6 +236,9 @@ void NeuPANController::configure(
 void NeuPANController::cleanup()
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  endExecutionLocked("cleanup");
+  if (execution_) {execution_->disarm();}
+  stopped_odometry_.reset();
   active_ = false;
   plan_valid_ = false;
   path_published_ = false;
@@ -148,6 +246,12 @@ void NeuPANController::cleanup()
   localization_ready_observed_ = false;
   envelope_recovery_active_ = false;
   envelope_ = Envelope{};
+  runtime_timer_.reset();
+  arm_service_.reset();
+  worker_health_sub_.reset();
+  odom_sub_.reset();
+  execution_context_pub_.reset();
+  motion_grant_pub_.reset();
   path_pub_.reset();
   goal_pub_.reset();
   diagnostics_pub_.reset();
@@ -167,7 +271,95 @@ void NeuPANController::activate()
 void NeuPANController::deactivate()
 {
   std::lock_guard<std::mutex> lock(mutex_);
+  endExecutionLocked("deactivated");
+  if (execution_) {execution_->disarm();}
+  stopped_odometry_.reset();
   active_ = false;
+}
+
+void NeuPANController::beginExecution(const std::string & authority, const std::string & attempt)
+{
+  if (shadow_mode_) {return;}
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!active_) {throw nav2_core::PlannerException("controller_inactive");}
+  execution_->begin(authority, attempt, monotonicNow());
+  path_published_ = false; goal_published_ = false; plan_valid_ = false;
+  route_update_gate_.reset(); envelope_ = Envelope{};
+  envelope_recovery_active_ = false; guard_stop_active_ = false;
+}
+
+void NeuPANController::checkExecution(const std::string & authority, const std::string & attempt)
+{
+  if (shadow_mode_) {return;}
+  std::lock_guard<std::mutex> lock(mutex_);
+  execution_->check(authority, attempt, monotonicNow());
+}
+
+nlohmann::json NeuPANController::executionContextLocked(const char * state)
+{
+  nlohmann::json payload{{"schema", "r1_neupan_execution_context_v1"}, {"state", state},
+    {"authority_boot_id", execution_->authority()}, {"controller_boot_id", execution_->boot()},
+    {"navigation_attempt_id", execution_->attempt()}, {"path_version", path_version_},
+    {"goal_version", std::max(0, goal_version_)}, {"sequence", ++context_sequence_},
+    {"monotonic", monotonicNow()}, {"frame_id", navigation_frame_}};
+  auto coordinates = nlohmann::json::array();
+  for (const auto & pose : published_path_.poses) {
+    coordinates.push_back({pose.pose.position.x, pose.pose.position.y, tf2::getYaw(pose.pose.orientation)});
+  }
+  payload["path"] = coordinates;
+  if (!coordinates.empty()) {payload["goal"] = coordinates.back();}
+  return payload;
+}
+
+void NeuPANController::publishExecutionContextLocked(const char * state)
+{
+  if (!execution_context_pub_ || !execution_ || !execution_->active()) {return;}
+  std_msgs::msg::String message; message.data = executionContextLocked(state).dump();
+  execution_context_pub_->publish(message);
+}
+
+void NeuPANController::endExecutionLocked(const std::string & reason)
+{
+  if (shadow_mode_ || !execution_ || !execution_->active()) {return;}
+  auto end = executionContextLocked("END");
+  const auto revoke = execution_->end(monotonicNow());
+  envelope_ = Envelope{}; plan_valid_ = false;  // invalidate locally before any IO
+  if (execution_context_pub_) {
+    std_msgs::msg::String msg; msg.data = end.dump(); execution_context_pub_->publish(msg);
+  }
+  if (revoke && motion_grant_pub_) {
+    std_msgs::msg::String msg; msg.data = revoke->dump(); motion_grant_pub_->publish(msg);
+  }
+  publishDiagnostic("info", "execution_ended:" + reason);
+}
+
+void NeuPANController::endExecution(const std::string & authority, const std::string & attempt,
+  const std::string & reason) noexcept
+{
+  try {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (execution_ && execution_->authority() == authority && execution_->attempt() == attempt) {
+      endExecutionLocked(reason);
+    }
+  } catch (...) {
+    // Any publisher failure stops future grants; the final Guard's independent
+    // authority lease cannot be extended by an exception during teardown.
+    try {std::lock_guard<std::mutex> lock(mutex_); execution_->fail("execution_end_failed");}
+    catch (...) {}
+  }
+}
+
+void NeuPANController::runtimeTick()
+{
+  if (shadow_mode_) {return;}
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!active_ || !execution_ || !execution_->active()) {return;}
+  try {
+    const auto grant = execution_->tick(monotonicNow());
+    if (execution_->faulted()) {envelope_ = Envelope{}; endExecutionLocked(execution_->fault()); return;}
+    if (path_published_) {publishExecutionContextLocked("ACTIVE");}
+    if (grant) {std_msgs::msg::String msg; msg.data = grant->dump(); motion_grant_pub_->publish(msg);}
+  } catch (const std::exception &) {execution_->fail("execution_publish_failed"); envelope_ = Envelope{};}
 }
 
 void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
@@ -187,6 +379,10 @@ void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
       rejectPlan("mixed_path_frames");
       return;
     }
+    if (!finite(pose.pose.position.x) || !finite(pose.pose.position.y) ||
+      !finite(pose.pose.position.z) || !finite(pose.pose.orientation.x) ||
+      !finite(pose.pose.orientation.y) || !finite(pose.pose.orientation.z) ||
+      !finite(pose.pose.orientation.w)) {rejectPlan("nonfinite_path"); return;}
     pose.header.frame_id = navigation_frame_;
   }
 
@@ -195,6 +391,9 @@ void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
   bool publish_goal = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!shadow_mode_ && (!execution_->active() || execution_->faulted())) {
+      throw nav2_core::PlannerException("setPlan_without_current_execution");
+    }
     const auto now = std::chrono::steady_clock::now();
     // Moderate route shifts need repeated evidence before resetting the
     // asynchronous solver; a material new bend needs only one sample.
@@ -212,11 +411,20 @@ void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
       goal_published_ = true;
       publish_goal = true;
       envelope_ = Envelope{};
-      worker_generation_ = -1;
+      if (shadow_mode_) {worker_generation_ = -1;}
       localization_ready_observed_ = false;
       plan_published_at_ = std::chrono::steady_clock::now();
+      envelope_recovery_active_ = false;
+      if (!shadow_mode_) {
+        execution_->plan(path_version_, goal_version_, monotonicNow());
+        // Send route PREPARE synchronously, before publishing new Worker context.
+        // The Guard ACK, not local publication order, establishes invalidation.
+        const auto grant = execution_->tick(monotonicNow());
+        if (grant) {std_msgs::msg::String msg; msg.data = grant->dump(); motion_grant_pub_->publish(msg);}
+      }
     }
     plan_valid_ = true;
+    if (publish_path && !shadow_mode_) {publishExecutionContextLocked("ACTIVE");}
   }
   if (publish_path) {
     path_pub_->publish(navigation_path);
@@ -248,6 +456,10 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
     std::lock_guard<std::mutex> lock(mutex_);
     if (!active_) {
       throw nav2_core::PlannerException("NeuPAN controller inactive");
+    }
+    if (!shadow_mode_) {
+      if (execution_->faulted()) {throw nav2_core::PlannerException(execution_->fault());}
+      if (!execution_->active()) {throw nav2_core::PlannerException("execution_not_current");}
     }
     if (!plan_valid_) {
       throw nav2_core::PlannerException("NeuPAN path unavailable");
@@ -288,6 +500,15 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
     if (localization_health.state != "READY") {
       throw nav2_core::PlannerException(
               "R1 localization unavailable:" + localization_health.reason);
+    }
+  }
+  if (!shadow_mode_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const bool permitted = execution_->permitted(monotonicNow());
+    if (execution_->faulted()) {throw nav2_core::PlannerException(execution_->fault());}
+    if (!permitted) {
+      geometry_msgs::msg::TwistStamped zero; zero.header = pose.header; zero.header.stamp = node_->now();
+      return zero;
     }
   }
   if (!envelope.valid) {
@@ -476,6 +697,12 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
   command.header = pose.header;
   command.header.stamp = node_->now();
   if (!shadow_mode_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (execution_->faulted()) {throw nav2_core::PlannerException(execution_->fault());}
+    if (!execution_->permitted(monotonicNow()) || !plan_valid_ ||
+      path_version_ != expected_path || goal_version_ != expected_goal ||
+      !envelope_.valid || envelope_.planner_result_monotonic != envelope.planner_result_monotonic)
+    {return command;}
     command.twist.linear.x = bounded_linear;
     command.twist.angular.z = bounded_angular;
   }
@@ -490,6 +717,27 @@ void NeuPANController::setSpeedLimit(const double &, const bool &)
 
 void NeuPANController::envelopeCallback(const std_msgs::msg::String::SharedPtr message)
 {
+  if (!shadow_mode_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {
+      const auto payload = nlohmann::json::parse(message->data);
+      const double now = monotonicNow();
+      if (execution_->source(payload, now)) {
+        const auto source = r1_neupan_runtime::parseSource(payload, now);
+        if (!envelope_.valid || source.published != envelope_.planner_result_monotonic) {
+          envelope_.linear_x = source.linear; envelope_.angular_z = source.angular;
+          envelope_.planner_result_monotonic = source.published;
+          envelope_.worker_generation = source.context.generation;
+          envelope_.path_version = source.context.path; envelope_.goal_version = source.context.goal;
+          envelope_.valid = true; envelope_.received_at = std::chrono::steady_clock::now();
+        }
+      }
+      if (execution_->faulted()) {envelope_ = Envelope{};}
+    } catch (const std::exception &) {
+      if (execution_->active()) {execution_->fail("invalid_planner_source"); envelope_ = Envelope{};}
+    }
+    return;
+  }
   Envelope candidate;
   try {
     const auto payload = nlohmann::json::parse(message->data);
@@ -584,6 +832,11 @@ void NeuPANController::gateStatusCallback(const std_msgs::msg::String::SharedPtr
 
 void NeuPANController::guardStatusCallback(const std_msgs::msg::String::SharedPtr message)
 {
+  if (!shadow_mode_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    try {execution_->guard(nlohmann::json::parse(message->data), monotonicNow());}
+    catch (const std::exception &) {if (execution_->active()) {execution_->fail("invalid_guard_status");}}
+  }
   GuardStatus candidate;
   try {
     const auto payload = nlohmann::json::parse(message->data);
@@ -638,10 +891,8 @@ void NeuPANController::publishDiagnostic(const std::string & level, const std::s
     return;
   }
   std_msgs::msg::String message;
-  std::ostringstream stream;
-  stream << "{\"schema\":\"r1_neupan_controller_status_v1\",\"level\":\"" << level
-         << "\",\"reason\":\"" << reason << "\",\"monotonic\":" << monotonicNow() << "}";
-  message.data = stream.str();
+  message.data = nlohmann::json{{"schema", "r1_neupan_controller_status_v1"},
+    {"level", level}, {"reason", reason}, {"monotonic", monotonicNow()}}.dump();
   diagnostics_pub_->publish(message);
 }
 

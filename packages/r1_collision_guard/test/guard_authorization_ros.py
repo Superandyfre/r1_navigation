@@ -70,6 +70,7 @@ class GuardAuthorizationROS(unittest.TestCase):
         self.input_enabled=self.footprint_enabled=True
         self.input_age=.01
         self.nonfinite_command=False
+        self.command_value=0.
         self.old_source=None
         self.duplicate=False
         self.corrupt_duplicate=False
@@ -91,7 +92,7 @@ class GuardAuthorizationROS(unittest.TestCase):
     def context(self):
         return dict(authority_boot_id='authority-a', controller_boot_id='controller-a',
                     navigation_attempt_id='attempt-a', worker_boot_id=self.worker_boot,
-                    worker_generation=self.generation,path_version=1,goal_version=0)
+                    worker_generation=self.generation,path_version=getattr(self,'route',1),goal_version=getattr(self,'route',1)-1)
 
     def publish_json(self,key,payload):
         self.pubs[key].publish(String(data=json.dumps(payload, allow_nan=False)))
@@ -134,9 +135,9 @@ class GuardAuthorizationROS(unittest.TestCase):
             if self.grant_state:
                 self.grant_seq+=1
                 self.publish_json('grant',dict(self.context(),schema='r1_neupan_motion_grant_v1',
-                    guard_boot_id=self.guard_boot,grant_id='grant-a',sequence=self.grant_seq,
+                    guard_boot_id=self.guard_boot,grant_id=getattr(self,'grant_id','grant-a'),sequence=self.grant_seq,
                     state=self.grant_state,monotonic=now))
-            cmd=Twist();cmd.linear.x=.1
+            cmd=Twist();cmd.linear.x=self.command_value
             if self.nonfinite_command:cmd.linear.x=float('nan')
             if self.input_enabled:self.pubs['input'].publish(cmd)
             self.pubs['raw'].publish(cmd)
@@ -154,8 +155,11 @@ class GuardAuthorizationROS(unittest.TestCase):
         self.grant_state='PREPARE'
         self.until(lambda:self.statuses[-1]['authorization_state']=='PREPARED')
         self.assertFalse(any(abs(row[1])>1e-8 for row in self.outputs))
+        self.until(lambda:self.statuses[-1].get('command_barrier_ready',False))
         self.grant_state='COMMIT'
-        self.until(lambda:self.statuses[-1]['authorization_state']=='ARMED' and any(abs(row[1])>.05 for row in self.outputs))
+        self.until(lambda:self.statuses[-1]['authorization_state']=='ARMED')
+        self.command_value=.1
+        self.until(lambda:any(abs(row[1])>.05 for row in self.outputs))
         self.assertEqual(self.statuses[-1]['authorization_state'],'ARMED')
         self.assertFalse(any(name=='/cmd_vel' for name,_ in self.node.get_topic_names_and_types()))
 
@@ -171,6 +175,28 @@ class GuardAuthorizationROS(unittest.TestCase):
         self.assertTrue(all(abs(r[1])<1e-8 and abs(r[2])<1e-8 for r in rows), rows)
         print(json.dumps({'scenario':self._testMethodName,'stop_reason':reason,
                           'observed_window_sec':time.monotonic()-start,'continuous_zero_samples':len(rows)}))
+
+    def test_route_commit_cannot_reuse_nonzero_smoother_tail(self):
+        self.route=2
+        self.grant_id='grant-route-2'
+        self.grant_state='PREPARE'
+        self.until(lambda:self.statuses[-1].get('grant_id')==self.grant_id)
+        # Model an out-of-order/over-eager controller while both untagged
+        # command streams still contain the previous route's nonzero tail.
+        self.grant_state='COMMIT'
+        start=time.monotonic()
+        while time.monotonic()<start+.18:self.tick()
+        rows=[r for r in self.outputs if r[0]>start+.04]
+        self.assertTrue(rows)
+        self.assertTrue(all(abs(v)<1e-8 and abs(w)<1e-8 for _,v,w in rows),rows)
+        self.assertNotEqual(self.statuses[-1]['authorization_state'],'ARMED')
+        self.command_value=0.
+        self.until(lambda:self.statuses[-1]['authorization_state']=='ARMED')
+        cutoff=time.monotonic()
+        self.command_value=.1
+        self.until(lambda:any(t>cutoff and v>.05 for t,v,w in self.outputs))
+        self.assertEqual(self.statuses[-1]['path_version'],2)
+        self.assertEqual(self.statuses[-1]['grant_id'],self.grant_id)
 
     def test_source_freeze_stops_despite_fresh_raw_and_health_then_recovers(self):
         self.source_enabled=False

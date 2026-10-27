@@ -12,6 +12,7 @@
   <depend>behaviortree_cpp_v3</depend>
   <depend>geometry_msgs</depend>
   <depend>lifecycle_msgs</depend>
+  <depend>r1_neupan_runtime</depend>
   <depend>nav2_core</depend>
   <depend>nav2_behavior_tree</depend>
   <depend>nav2_costmap_2d</depend>
@@ -20,6 +21,7 @@
   <depend>nav_msgs</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
+  <depend>rcl_interfaces</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>std_srvs</depend>

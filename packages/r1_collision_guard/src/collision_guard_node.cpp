@@ -3,6 +3,7 @@
 
 #include "r1_collision_guard/guard_logic.hpp"
 #include "r1_neupan_runtime/motion_authorization.hpp"
+#include "r1_neupan_runtime/command_barrier.hpp"
 #include "r1_collision_guard/mesh_components.hpp"
 #include "r1_collision_guard/scan_filter.hpp"
 
@@ -232,8 +233,21 @@ public:
       motion_grant_topic, rclcpp::QoS(20), [this](std_msgs::msg::String::ConstSharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
         const auto previous_grant = authorization_->grantId();
-        authorization_->authorization(parseProtocol(msg->data), monotonicNow());
-        if (authorization_->grantId() != previous_grant) {
+        const bool was_committed = authorization_->committed();
+        auto request = parseProtocol(msg->data);
+        if (request.is_object() && request.contains("state") && request["state"] == "COMMIT" &&
+          !previous_grant.empty() && request.contains("grant_id") && request["grant_id"] == previous_grant &&
+          !was_committed &&
+          !command_barrier_.ready(monotonicNow(), source_command_timeout_sec_, command_timeout_sec_))
+        {
+          // Refresh the preparation lease, but never commit a queued old tail.
+          request["state"] = "PREPARE";
+        }
+        authorization_->authorization(request, monotonicNow());
+        if (authorization_->grantId() != previous_grant) {command_barrier_.reset();}
+        if (authorization_->grantId() != previous_grant ||
+          (!was_committed && authorization_->committed())) {
+          ++command_epoch_;
           // A newly prepared route/attempt cannot consume commands queued in
           // the smoother or guard for the previous grant. Wait for new input.
           command_available_ = false;
@@ -308,6 +322,9 @@ private:
   void commandCallback(const geometry_msgs::msg::Twist::SharedPtr message)
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    command_barrier_.observe(false,
+      {message->linear.x, message->linear.y, message->linear.z,
+        message->angular.x, message->angular.y, message->angular.z}, monotonicNow());
     command_ = *message;
     command_received_ = std::chrono::steady_clock::now();
     command_available_ = true;
@@ -316,6 +333,9 @@ private:
   void sourceCommandCallback(const geometry_msgs::msg::Twist::SharedPtr message)
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    command_barrier_.observe(true,
+      {message->linear.x, message->linear.y, message->linear.z,
+        message->angular.x, message->angular.y, message->angular.z}, monotonicNow());
     source_command_received_ = std::chrono::steady_clock::now();
     source_command_available_ = true;
     source_command_valid_ = std::isfinite(message->linear.x) && std::isfinite(message->angular.z);
@@ -612,6 +632,7 @@ private:
     SteadyTime command_received{};
     SteadyTime source_command_received{};
     SteadyTime scan_received{};
+    std::uint64_t command_epoch = 0;
     bool command_available = false;
     bool source_command_available = false;
     bool source_command_valid = false;
@@ -624,6 +645,7 @@ private:
     SteadyTime mesh_components_received{};
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      command_epoch = command_epoch_;
       command = command_;
       scan = scan_;
       scan_history = scan_history_;
@@ -775,6 +797,7 @@ private:
     // sensor checks, including when collision_check_enabled is false.
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      if (command_epoch != command_epoch_) {decision = stop("command_epoch_changed");}
       physical_safety_state_ = stateName(decision.state);
       authorization_decision_ = authorization_->evaluate(monotonicNow());
       if (!authorization_decision_.allowed) {
@@ -789,7 +812,7 @@ private:
     publishStatus(
       decision, command, scan, odom_history, localization_health, scan_history.size(),
       command_available, command_received, source_command_available, source_command_valid,
-      source_command_received, arm_state, dynamic_footprint, self_filtered_scan_points, steady_now);
+      source_command_received, arm_state, dynamic_footprint, self_filtered_scan_points, steady_now, command_epoch);
   }
 
   void publishStatus(const Decision & decision, const geometry_msgs::msg::Twist & command,
@@ -799,7 +822,7 @@ private:
     const bool source_command_available, const bool source_command_valid,
     const SteadyTime & source_command_received, const ArmState & arm_state,
     const DynamicFootprint & dynamic_footprint, const size_t self_filtered_scan_points,
-    const SteadyTime & steady_now)
+    const SteadyTime & steady_now, const std::uint64_t command_epoch)
   {
     std_msgs::msg::String message;
     const bool dynamic_footprint_ready = dynamic_footprint.available &&
@@ -848,18 +871,33 @@ private:
     }
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      // Do not acknowledge a new grant using an output decision from an old
+      // command snapshot. The next tick produces a coherent zero/status pair.
+      if (command_epoch != command_epoch_) {return;}
       payload.update(nlohmann::json{
         {"authorization_protocol", "r1_neupan_motion_grant_v1"},
         {"source_protocol", "r1_neupan_planner_source_v2"}, {"build_revision", R1_FAILSTOP_BUILD_REVISION},
+        {"command_barrier_ready", command_barrier_.ready(monotonicNow(),
+          source_command_timeout_sec_, command_timeout_sec_)},
+        {"sequence", ++status_sequence_}, {"monotonic", monotonicNow()},
         {"guard_boot_id", authorization_->bootId()}, {"authorization_state", authorization_decision_.state},
         {"authorization_reason", authorization_decision_.reason}, {"physical_safety_state", physical_safety_state_},
         {"grant_id", authorization_->grantId()}, {"navigation_attempt_id", authorization_->attemptId()}});
+      if (const auto & context = authorization_->grantContext()) {
+        payload.update(nlohmann::json{
+          {"authority_boot_id", context->authority_boot}, {"controller_boot_id", context->controller_boot},
+          {"worker_boot_id", context->worker_boot}, {"worker_generation", context->generation},
+          {"path_version", context->path}, {"goal_version", context->goal}});
+      }
     }
     message.data = payload.dump();
     status_pub_->publish(message);
   }
 
   std::unique_ptr<GuardLogic> logic_;
+  r1_neupan_runtime::CommandBarrier command_barrier_;
+  std::uint64_t command_epoch_{0};
+  std::int64_t status_sequence_{0};
   std::unique_ptr<r1_neupan_runtime::MotionAuthorization> authorization_;
   r1_neupan_runtime::AuthorizationDecision authorization_decision_;
   std::string physical_safety_state_;

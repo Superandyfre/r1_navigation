@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -13,6 +14,11 @@
 #include "nav2_core/controller.hpp"
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
 #include "nav_msgs/msg/path.hpp"
+#include "nav_msgs/msg/odometry.hpp"
+#include "std_srvs/srv/trigger.hpp"
+#include "r1_neupan_runtime/execution_observer.hpp"
+#include "r1_neupan_runtime/controller_execution.hpp"
+#include "r1_neupan_runtime/stopped_odometry.hpp"
 #include "navigation_neupan_bridge/route_update_gate.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
@@ -22,7 +28,7 @@
 namespace navigation_neupan_bridge
 {
 
-class NeuPANController : public nav2_core::Controller
+class NeuPANController : public nav2_core::Controller, public r1_neupan_runtime::ExecutionObserver
 {
 public:
   NeuPANController() = default;
@@ -42,7 +48,32 @@ public:
     nav2_core::GoalChecker * goal_checker) override;
   void setSpeedLimit(const double & speed_limit, const bool & percentage) override;
 
+  void beginExecution(const std::string & authority, const std::string & attempt) override;
+  void checkExecution(const std::string & authority, const std::string & attempt) override;
+  void endExecution(const std::string & authority, const std::string & attempt,
+    const std::string & reason) noexcept override;
+
 private:
+  void runtimeTick();
+  nlohmann::json executionContextLocked(const char * state);
+  void publishExecutionContextLocked(const char * state);
+  void endExecutionLocked(const std::string & reason);
+  std::unique_ptr<r1_neupan_runtime::ControllerExecution> execution_;
+  std::map<std::string, rclcpp::ParameterValue> configured_parameters_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_guard_;
+  std::string worker_health_topic_{"/neupan_worker_health"};
+  std::string execution_context_topic_{"/neupan_execution_context"};
+  std::string motion_grant_topic_{"/neupan_motion_grant"};
+  std::string motion_arm_service_{"/neupan_controller/arm"};
+  std::string odom_topic_{"/odom"};
+  std::int64_t context_sequence_{0};
+  r1_neupan_runtime::StoppedOdometry stopped_odometry_;
+  std::string arm_odom_frame_{"odom"}, arm_base_frame_{"base_link"};
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr execution_context_pub_, motion_grant_pub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr worker_health_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_service_;
+  rclcpp::TimerBase::SharedPtr runtime_timer_;
   struct Envelope
   {
     double linear_x{0.0};

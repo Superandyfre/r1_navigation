@@ -318,6 +318,8 @@ public:
   const std::string & faultReason() const {return fault_;}
   const std::string & bootId() const {return boot_;}
   const std::string & grantId() const {return grant_id_;}
+  bool committed() const {return committed_;}
+  const std::optional<Context> & grantContext() const {return grant_;}
   std::string attemptId() const {return grant_ ? grant_->attempt : "";}
   const std::optional<Source> & latestSource() const {return source_;}
   void latch(const std::string & reason) {if (fault_.empty()) {fault_ = reason;}}

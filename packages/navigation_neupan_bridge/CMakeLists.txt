@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.8)
 project(navigation_neupan_bridge)
 
 find_package(ament_cmake REQUIRED)
+find_package(r1_neupan_runtime REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(geometric_shapes REQUIRED)
@@ -14,6 +15,7 @@ find_package(nav2_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -34,6 +36,9 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(${PROJECT_NAME}
+  r1_neupan_runtime
+  rcl_interfaces
+  std_srvs
   geometry_msgs
   nav2_core
   nav2_costmap_2d
@@ -120,6 +125,11 @@ if(BUILD_TESTING)
     test/test_guard_aware_progress_checker.cpp)
   target_link_libraries(test_guard_aware_progress_checker ${PROJECT_NAME})
   ament_target_dependencies(test_guard_aware_progress_checker nav2_core pluginlib)
+  ament_add_gtest(test_neupan_execution_ros test/test_neupan_execution_ros.cpp)
+  target_compile_features(test_neupan_execution_ros PUBLIC cxx_std_17)
+  target_link_libraries(test_neupan_execution_ros ${PROJECT_NAME})
+  ament_target_dependencies(test_neupan_execution_ros
+    r1_neupan_runtime nav2_core nav2_costmap_2d nav_msgs rclcpp std_msgs std_srvs tf2_ros)
   ament_add_gtest(test_neupan_wait_condition_bt test/test_neupan_wait_condition_bt.cpp)
   target_compile_definitions(test_neupan_wait_condition_bt PRIVATE
     WAIT_PLUGIN_PATH="$<TARGET_FILE:neupan_wait_condition_bt_node>")
@@ -128,6 +138,7 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_dependencies(
+  r1_neupan_runtime rcl_interfaces
   geometric_shapes geometry_msgs lifecycle_msgs nav2_core nav2_costmap_2d nav2_util nav2_msgs nav_msgs pluginlib rclcpp
   std_msgs std_srvs tf2 tf2_geometry_msgs tf2_ros visualization_msgs
 )
