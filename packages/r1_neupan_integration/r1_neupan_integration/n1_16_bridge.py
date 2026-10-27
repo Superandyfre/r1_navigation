@@ -1,9 +1,10 @@
 """Production-grade single-flight bridge validation for N1.16.
 
 The worker entry point is shared with N1.15, but this client treats every
-response as an authenticated freshness envelope.  Any protocol or worker
+response as an identity-checked freshness envelope.  Any protocol or worker
 failure quarantines the worker and leaves the ROS side without a planner
-fallback.  Recovery/restart is intentionally outside this phase.
+fallback. A+ latches health before logging/cleanup; the preserved legacy
+recovery entry point cannot clear that latch or authorize a replacement.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from r1_neupan_integration.worker_health import WorkerHealth
 
 from r1_neupan_integration.n1_15_whole_core import (
     _json_safe,
@@ -46,7 +49,7 @@ class BridgeProtocolError(RuntimeError):
 
 
 class ProductionWholeCoreClient:
-    """One long-lived spawn worker with no automatic restart."""
+    """Single-flight worker; fatal run faults forbid legacy automatic recovery."""
 
     def __init__(
         self,
@@ -110,6 +113,9 @@ class ProductionWholeCoreClient:
         self.main_inventory_before = _main_inventory()
         self.worker_generation = (os.getpid() << 32) ^ time.time_ns()
         self._last_worker_sequence = -1
+        self.health = WorkerHealth()
+        self.health.update_context(self.worker_generation, -1, -1)
+        self.diagnostic_errors = 0
         self._closed = False
         self._quarantined = False
         self._finalized = False
@@ -122,7 +128,10 @@ class ProductionWholeCoreClient:
 
     def _event(self, code: str, message: str, **fields: Any) -> None:
         self.status_counts[code] = self.status_counts.get(code, 0) + 1
+        fault = self.health.fault
         event = {
+            "fault_id": fault.fault_id if fault else None,
+            "fault_occurrence_monotonic": fault.occurrence_monotonic if fault else None,
             "monotonic": time.monotonic(),
             "code": code,
             "status": "fail-safe",
@@ -132,6 +141,13 @@ class ProductionWholeCoreClient:
         self.events.append(event)
         with (self.output_dir / "bridge_events.jsonl").open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(_json_safe(event), sort_keys=True) + "\n")
+
+    def _safe_event(self, code: str, message: str, **fields: Any) -> None:
+        # Diagnostics must never prevent quarantine or replace the protocol fault.
+        try:
+            self._event(code, message, **fields)
+        except Exception:
+            self.diagnostic_errors += 1
 
     def _quarantine_worker(self, reason: str) -> None:
         """Make a failed pipe unusable and prevent late responses being read."""
@@ -150,12 +166,14 @@ class ProductionWholeCoreClient:
                     self.parent_conn.close()
                 except Exception:
                     pass
-        self._event("worker_quarantined", reason)
+        self._safe_event("worker_quarantined", reason)
 
     def _start(self, initial_path: np.ndarray, state: np.ndarray, points: np.ndarray,
                path_version: int, navigation_loop_mode: str = "cyclic",
                active_gear: int = DEFAULT_GEAR,
                ready_timeout_sec: float | None = None) -> None:
+        if self.health.fault is not None:
+            raise BridgeProtocolError("worker_fault_latched", "full controlled restart required")
         self.parent_conn, child_conn = self.context.Pipe(duplex=True)
         spec = {
             "config_path": self.config_path,
@@ -205,11 +223,16 @@ class ProductionWholeCoreClient:
                 raise BridgeProtocolError("worker_startup_failure", repr(self.ready))
             if int(self.ready.get("worker_generation", -1)) != int(self.worker_generation):
                 raise BridgeProtocolError("generation_mismatch", "READY generation mismatch")
+            self.health.ready(self.worker_generation)
         except Exception as exc:
             code = exc.code if isinstance(exc, BridgeProtocolError) else "worker_startup_failure"
+            self.health.latch(code, self.worker_generation, self.request_id)
             self.worker_failures += 1
-            self._event(code, str(exc))
-            self._quarantine_worker(code)
+            self._safe_event(code, str(exc))
+            try:
+                self._quarantine_worker(code)
+            except Exception as cleanup_error:
+                self._safe_event("worker_cleanup_failure", str(cleanup_error))
             raise
 
     def startup(self, initial_path: np.ndarray, state: np.ndarray,
@@ -238,6 +261,8 @@ class ProductionWholeCoreClient:
         cold start of the previous worker so a healthy restart is not aborted
         early, and falls back to the normal startup budget with no measurement.
         """
+        if self.health.fault is not None:
+            raise BridgeProtocolError("worker_fault_latched", "A+ requires a controlled full restart")
         if self._closed:
             raise BridgeProtocolError("bridge_closed", "bridge is closed")
         measured = (getattr(self, "startup_ms", None) or 0.0) / 1000.0
@@ -277,6 +302,7 @@ class ProductionWholeCoreClient:
         return self.ready
 
     def _fail(self, code: str, message: str, **fields: Any) -> None:
+        self.health.latch(code, self.worker_generation, int(fields.get("request_id", self.request_id)))
         self.worker_failures += 1
         if code == "nan_inf":
             self.nan_inf += 1
@@ -286,8 +312,11 @@ class ProductionWholeCoreClient:
             self.protocol_errors += 1
         if code == "stale_response":
             self.stale_responses += 1
-        self._event(code, message, **fields)
-        self._quarantine_worker(code)
+        self._safe_event(code, message, **fields)
+        try:
+            self._quarantine_worker(code)
+        except Exception as cleanup_error:
+            self._safe_event("worker_cleanup_failure", str(cleanup_error))
         raise BridgeProtocolError(code, message)
 
     def solve(
@@ -312,6 +341,8 @@ class ProductionWholeCoreClient:
         local_reference_id: int = 0,
         bypass_mode: bool = False,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+        if self.health.fault is not None:
+            raise BridgeProtocolError("worker_fault_latched", "full controlled restart required")
         if self._closed:
             self._fail("bridge_closed", "bridge is closed")
         if self._quarantined or self.process is None or not self.process.is_alive():
@@ -452,6 +483,7 @@ class ProductionWholeCoreClient:
         semantic = dict(response.get("semantic", {}))
         if isinstance(semantic.get("initial_path"), dict):
             semantic["initial_path"] = _unpack_array(semantic["initial_path"])
+        self.health.success(request_id)
         record = {
             "schema": N116_SCHEMA,
             "request_id": request_id,
@@ -554,6 +586,10 @@ class ProductionWholeCoreClient:
             "queue_depth_contract": "<=1",
             "nested_solver_process": False,
             "automatic_restart": False,
+            "fatal_recovery_policy": "controlled_full_restart",
+            "legacy_recovery_entry_present": True,
+            "diagnostic_errors": self.diagnostic_errors,
+            "worker_health": self.health.snapshot(),
             "worker_generation": int(self.worker_generation),
             "startup_ms": getattr(self, "startup_ms", None),
             "ready": self.ready,

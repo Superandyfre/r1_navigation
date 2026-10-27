@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import signal
 import threading
@@ -16,6 +17,7 @@ import yaml
 from geometry_msgs.msg import Twist
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray, String
 
@@ -131,10 +133,12 @@ class N116Node(N115Node):
         self.declare_parameter("obstacle_preview_m", 0.90)
         self.declare_parameter("local_detour_preview_m", 1.50)
         self.declare_parameter("obstacle_odom_timeout_sec", 0.50)
-        # Bounded worker recovery. A solve/IPC failure may restart the spawn
-        # worker from the latest valid task instead of latching the node dead;
-        # the budget is per goal/task and never unbounded.
-        self.declare_parameter("worker_recovery_enabled", True)
+        # Preserve legacy experiment parameters for audit, default disabled.
+        # A+ fatal faults cannot be cleared by this path even if configured on;
+        # automatic replacement needs the future explicit B authorization.
+        self.declare_parameter("worker_recovery_enabled", False)
+        self.declare_parameter("worker_health_topic", "/neupan_worker_health")
+        self.declare_parameter("worker_health_period_sec", 0.10)
         self.declare_parameter("worker_recovery_budget", 2)
         self.declare_parameter("worker_recovery_wait_sec", 5.0)
         # These stay disabled outside the dedicated HW0 shadow launch. The
@@ -166,6 +170,18 @@ class N116Node(N115Node):
         # scan callback and that timer compete in the same Python executor;
         # cancel it before spinning and solve from fresh input notifications.
         self.timer.cancel()
+        # Independent callback group: planner cleanup or input callbacks must not
+        # serialize the health timer behind the planner scheduler/state lock.
+        period = float(self.get_parameter("worker_health_period_sec").value)
+        if not math.isfinite(period) or period <= 0:
+            raise ValueError("worker_health_period_sec must be finite and positive")
+        self._health_publish_lock = threading.Lock()
+        self._health_callback_group = MutuallyExclusiveCallbackGroup()
+        self.worker_health_pub = self.create_publisher(
+            String, str(self.get_parameter("worker_health_topic").value), 10)
+        self._health_timer = self.create_timer(
+            period, self._publish_worker_health, callback_group=self._health_callback_group)
+        self._publish_worker_health()
         self._shutdown_requested = False
         self._bridge_failed = False
         # Latest task inputs, cached so a failed worker can be rebuilt from the
@@ -349,32 +365,36 @@ class N116Node(N115Node):
         self._scheduler_callback_started_monotonic = float(started_monotonic)
         self.run()
 
-    def _planner_scheduler_error(self, exc: BaseException) -> None:
-        """Terminal-safe scheduler failure path.
+    def _publish_worker_health(self) -> None:
+        # Fault state is set inside the client before logging/quarantine. This
+        # publisher never takes state_lock or waits for the scheduler thread.
+        # Timer and immediate fault/shutdown sends can race. Serialize snapshot
+        # allocation with publish so later sequences never overtake earlier ones.
+        with self._health_publish_lock:
+            message = String()
+            message.data = json.dumps(self.client.health.snapshot(), sort_keys=True, allow_nan=False)
+            try:
+                self.worker_health_pub.publish(message)
+            except Exception:
+                # Guard heartbeat/source watchdogs cover DDS failure independently.
+                pass
 
-        Order matters: the fail-safe stop is published *before* any logging or
-        status publish, so an exception in either cannot skip the stop. The old
-        code passed extra positional arguments to ``RcutilsLogger.error``, which
-        raises ``TypeError`` and therefore never reached ``_publish_failsafe_stop``
-        — the node died silently on the first exception.
-        """
-        self._scheduler_fault = "%s: %s" % (type(exc).__name__, exc)
+    def _handle_fatal_error(self, code: str, message: str) -> None:
+        self.client.health.latch(code, self.client.worker_generation)
+        self._bridge_failed = True
+        self._publish_worker_health()
         try:
             self._publish_failsafe_stop()
         except Exception:
             pass
         try:
-            self.get_logger().error(
-                "N1.16 latest-input scheduler failed: %s" % (self._scheduler_fault,)
-            )
+            self._status(code, message)
         except Exception:
             pass
-        try:
-            self._status("scheduler_exception", self._scheduler_fault)
-        except Exception:
-            pass
-        if not self._recover_worker_from_cached_inputs("scheduler_exception"):
-            self._bridge_failed = True
+
+    def _planner_scheduler_error(self, exc: BaseException) -> None:
+        self._scheduler_fault = "%s: %s" % (type(exc).__name__, exc)
+        self._handle_fatal_error("scheduler_exception", self._scheduler_fault)
 
     def _recover_worker_from_cached_inputs(self, code: str) -> bool:
         """Rebuild the spawn worker from the latest valid task. Bounded.
@@ -385,6 +405,9 @@ class N116Node(N115Node):
         latches as before. No command is reused: the caller has already
         published a zero Twist and no envelope is emitted for this cycle.
         """
+        if self.client.health.fault is not None:
+            self._worker_recovery_last_code = code + ":fatal_latched"
+            return False
         if not self._worker_recovery_enabled:
             self._worker_recovery_last_code = code + ":disabled"
             return False
@@ -622,7 +645,7 @@ class N116Node(N115Node):
         return True, "fresh"
 
     def run(self) -> None:
-        if self._shutdown_requested or self._bridge_failed:
+        if self._shutdown_requested or self._bridge_failed or self.client.health.fault is not None:
             return
         transition = self._consume_gear_transition()
         if transition is not None:
@@ -651,12 +674,10 @@ class N116Node(N115Node):
         try:
             cycle_start = time.monotonic()
             if self._shadow_force_robot_tf_failure:
-                self._bridge_failed = True
-                self._status(
+                self._handle_fatal_error(
                     "shadow_tf_fault_injected",
                     "shadow-only robot TF lookup failure injected; restart required",
                 )
-                self._publish_failsafe_stop()
                 return
             if not self._robot_transform():
                 self._trace_wait_state("map_to_base_tf")
@@ -778,6 +799,7 @@ class N116Node(N115Node):
                 path_version=path_version,
                 goal_version=goal_version,
             )
+            self.client.health.update_context(self.client.worker_generation, nav2_path_version, goal_version)
             try:
                 self.client.startup(
                     path, state, points, path_version,
@@ -812,28 +834,10 @@ class N116Node(N115Node):
                     bypass_mode=bypass_requested,
                 )
             except BridgeProtocolError as exc:
-                # Retract this cycle's motion output before anything else. A
-                # recoverable transport/solve failure rebuilds the worker from
-                # the cached task instead of latching the node dead; only an
-                # unavailable or exhausted recovery latches as before.
-                self._publish_failsafe_stop()
-                self._status(exc.code, str(exc), cycle_id=cycle_id, scan_counter=scan_counter)
-                if not self._recover_worker_from_cached_inputs(str(exc.code)):
-                    self._status(
-                        "worker_recovery_exhausted",
-                        self._worker_recovery_last_code,
-                        cycle_id=cycle_id,
-                        scan_counter=scan_counter,
-                    )
-                    self._bridge_failed = True
+                self._handle_fatal_error(exc.code, str(exc))
                 return
             except Exception as exc:
-                self._bridge_failed = True
-                self.client._event("bridge_exception", str(exc), cycle_id=cycle_id,
-                                   scan_counter=scan_counter)
-                self._status("bridge_exception", str(exc), cycle_id=cycle_id,
-                             scan_counter=scan_counter)
-                self._publish_failsafe_stop()
+                self._handle_fatal_error("bridge_exception", str(exc))
                 return
 
             fresh, reason = self._fresh_for_publish(record, scan_counter, path_version, goal_version)
@@ -1157,6 +1161,9 @@ class N116Node(N115Node):
                     obstacle_state = "WAIT"
                 else:
                     obstacle_state = "SLOW"
+            if self.client.health.fault is not None or self._shutdown_requested:
+                self._publish_failsafe_stop()
+                return
             cmd_publish_monotonic = time.monotonic()
             self.cmd_pub.publish(command)
             output_publish = time.monotonic()
@@ -1180,7 +1187,7 @@ class N116Node(N115Node):
             # stream.  The bridge, timing heartbeat, and relay input remain
             # alive so the safety gate must distinguish source staleness from
             # relay loss.  The default path is unchanged.
-            if not self._freeze_planner_result:
+            if not self._freeze_planner_result and self.client.health.fault is None and not self._shutdown_requested:
                 self.planner_result_pub.publish(planner_result_message)
                 planner_result_publish_monotonic = time.monotonic()
             else:
@@ -1432,6 +1439,8 @@ class N116Node(N115Node):
             return
         self._finalized = True
         self._shutdown_requested = True
+        self.client.health.shutting_down()
+        self._publish_worker_health()
         scheduler = getattr(self, "_planner_scheduler", None)
         if scheduler is not None:
             stopped = scheduler.stop(float(self.get_parameter("n115_timeout_sec").value) + 1.0)

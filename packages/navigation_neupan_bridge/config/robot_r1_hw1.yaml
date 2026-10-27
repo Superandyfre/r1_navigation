@@ -15,6 +15,10 @@ n1_16_production_bridge:
     goal_topic: '/neupan_goal'
     # One path publication is one context, regardless of companion goal order.
     goal_from_path_only: true
+    # A+ fatal recovery is an operator-controlled full runtime restart.
+    worker_recovery_enabled: false
+    worker_health_topic: /neupan_worker_health
+    worker_health_period_sec: 0.10
     odom_topic: '/odom'
     cmd_vel_topic: '/neupan_cmd_vel'
     plan_output_topic: '/neupan_plan'
