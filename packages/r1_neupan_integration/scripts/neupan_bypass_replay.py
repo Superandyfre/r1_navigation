@@ -14,10 +14,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
-NEUPAN_SOURCE = ROOT / "NeuPAN"
-if not NEUPAN_SOURCE.is_dir():
-    NEUPAN_SOURCE = ROOT.parent / "third_party/NeuPAN"
-sys.path.insert(0, str(NEUPAN_SOURCE))
+sys.path.insert(0, str(ROOT / "NeuPAN"))
 sys.path.insert(0, str(ROOT / "r1_neupan_integration"))
 
 from neupan.bypass import make_bypass_guide, signed_clearances  # noqa: E402

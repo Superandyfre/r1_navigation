@@ -96,6 +96,7 @@ class ProductionWholeCoreClient:
         self.requests_sent = 0
         self.requests_completed = 0
         self.worker_failures = 0
+        self.worker_recoveries = 0
         self.queue_depth_max = 0
         self.stale_responses = 0
         self.nan_inf = 0
@@ -153,7 +154,8 @@ class ProductionWholeCoreClient:
 
     def _start(self, initial_path: np.ndarray, state: np.ndarray, points: np.ndarray,
                path_version: int, navigation_loop_mode: str = "cyclic",
-               active_gear: int = DEFAULT_GEAR) -> None:
+               active_gear: int = DEFAULT_GEAR,
+               ready_timeout_sec: float | None = None) -> None:
         self.parent_conn, child_conn = self.context.Pipe(duplex=True)
         spec = {
             "config_path": self.config_path,
@@ -187,7 +189,11 @@ class ProductionWholeCoreClient:
         try:
             self.process.start()
             child_conn.close()
-            ready_timeout = max(15.0, self.timeout_sec * 6.0)
+            ready_timeout = (
+                max(15.0, self.timeout_sec * 6.0)
+                if ready_timeout_sec is None
+                else max(float(ready_timeout_sec), self.timeout_sec * 2.0)
+            )
             if not self.parent_conn.poll(ready_timeout):
                 raise BridgeProtocolError("worker_startup_timeout", "worker did not send READY")
             try:
@@ -215,6 +221,60 @@ class ProductionWholeCoreClient:
                 initial_path, state, points, path_version,
                 navigation_loop_mode, active_gear,
             )
+
+    def recover_worker(self, initial_path: np.ndarray, state: np.ndarray,
+                       points: np.ndarray, path_version: int,
+                       navigation_loop_mode: str = "cyclic",
+                       active_gear: int = DEFAULT_GEAR,
+                       wait_sec: float | None = None) -> dict:
+        """Rebuild the spawn worker from the current task, bounded in time.
+
+        Quarantines (terminates) the failed worker, clears the quarantine and
+        mints a new generation so every in-flight response of the old worker is
+        rejected by generation/sequence checks. The caller must have published a
+        zero command already: nothing here replays a previous result.
+
+        ``wait_sec`` is a ceiling, never a shortcut: it is raised to the measured
+        cold start of the previous worker so a healthy restart is not aborted
+        early, and falls back to the normal startup budget with no measurement.
+        """
+        if self._closed:
+            raise BridgeProtocolError("bridge_closed", "bridge is closed")
+        measured = (getattr(self, "startup_ms", None) or 0.0) / 1000.0
+        requested = 0.0 if wait_sec is None else max(0.0, float(wait_sec))
+        ready_timeout = max(requested, measured)
+        if ready_timeout <= 0.0:
+            ready_timeout = max(15.0, self.timeout_sec * 6.0)
+        previous_generation = int(self.worker_generation)
+        self.worker_recoveries += 1
+        self._event("worker_recovery_requested", "rebuilding worker from latest task",
+                    attempt=int(self.worker_recoveries),
+                    wait_sec=ready_timeout,
+                    previous_generation=previous_generation)
+        self._quarantine_worker("worker_recovery")
+        self._quarantined = False
+        self.parent_conn = None
+        self.process = None
+        self.ready = {}
+        self._last_worker_sequence = -1
+        self.worker_generation = ((os.getpid() & 0xFFFFFFFF) << 32) ^ time.time_ns()
+        try:
+            self._start(
+                initial_path, state, points, path_version,
+                navigation_loop_mode, active_gear,
+                ready_timeout_sec=ready_timeout,
+            )
+        except Exception as exc:
+            # _start already quarantined; the caller decides to latch.
+            self._event("worker_recovery_failed", str(exc),
+                        attempt=int(self.worker_recoveries),
+                        generation=int(self.worker_generation))
+            raise
+        self._event("worker_recovered", "worker handshake completed",
+                    attempt=int(self.worker_recoveries),
+                    generation=int(self.worker_generation),
+                    startup_ms=getattr(self, "startup_ms", None))
+        return self.ready
 
     def _fail(self, code: str, message: str, **fields: Any) -> None:
         self.worker_failures += 1
@@ -502,6 +562,7 @@ class ProductionWholeCoreClient:
             "requests_sent": self.requests_sent,
             "requests_completed": self.requests_completed,
             "worker_failures": self.worker_failures,
+            "worker_recoveries": self.worker_recoveries,
             "queue_depth_max": self.queue_depth_max,
             "scan_accounting": self.scan_accounting,
             "failure_counts": self.status_counts,

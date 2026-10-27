@@ -131,6 +131,12 @@ class N116Node(N115Node):
         self.declare_parameter("obstacle_preview_m", 0.90)
         self.declare_parameter("local_detour_preview_m", 1.50)
         self.declare_parameter("obstacle_odom_timeout_sec", 0.50)
+        # Bounded worker recovery. A solve/IPC failure may restart the spawn
+        # worker from the latest valid task instead of latching the node dead;
+        # the budget is per goal/task and never unbounded.
+        self.declare_parameter("worker_recovery_enabled", True)
+        self.declare_parameter("worker_recovery_budget", 2)
+        self.declare_parameter("worker_recovery_wait_sec", 5.0)
         # These stay disabled outside the dedicated HW0 shadow launch. The
         # force flag is runtime-settable only when that launch explicitly
         # allows it, and a triggered fault requires a process restart.
@@ -162,6 +168,26 @@ class N116Node(N115Node):
         self.timer.cancel()
         self._shutdown_requested = False
         self._bridge_failed = False
+        # Latest task inputs, cached so a failed worker can be rebuilt from the
+        # current task instead of a replayed command. References only: each
+        # cycle rebuilds these arrays, so nothing is mutated in place.
+        self._last_inputs: dict[str, Any] | None = None
+        self._scheduler_fault = ""
+        self._worker_recovery_enabled = bool(
+            self.get_parameter("worker_recovery_enabled").value
+        )
+        self._worker_recovery_budget = max(
+            0, int(self.get_parameter("worker_recovery_budget").value)
+        )
+        self._worker_recovery_wait_sec = max(
+            0.0, float(self.get_parameter("worker_recovery_wait_sec").value)
+        )
+        self._worker_recovery_used = 0
+        self._worker_recovery_goal_version = None
+        self._worker_recovery_last_code = ""
+        # Optional context ledger: inert unless N116_CTX_LEDGER names a file.
+        self._ctx_ledger_path = os.environ.get("N116_CTX_LEDGER", "").strip()
+        self._ctx_ledger_restore()
         self._shadow_tf_fault_injection_allowed = bool(
             self.get_parameter("shadow_tf_fault_injection_allowed").value
         )
@@ -324,11 +350,99 @@ class N116Node(N115Node):
         self.run()
 
     def _planner_scheduler_error(self, exc: BaseException) -> None:
-        self._bridge_failed = True
-        self.get_logger().error(
-            "N1.16 latest-input scheduler failed: %s: %s", type(exc).__name__, exc
-        )
-        self._publish_failsafe_stop()
+        """Terminal-safe scheduler failure path.
+
+        Order matters: the fail-safe stop is published *before* any logging or
+        status publish, so an exception in either cannot skip the stop. The old
+        code passed extra positional arguments to ``RcutilsLogger.error``, which
+        raises ``TypeError`` and therefore never reached ``_publish_failsafe_stop``
+        — the node died silently on the first exception.
+        """
+        self._scheduler_fault = "%s: %s" % (type(exc).__name__, exc)
+        try:
+            self._publish_failsafe_stop()
+        except Exception:
+            pass
+        try:
+            self.get_logger().error(
+                "N1.16 latest-input scheduler failed: %s" % (self._scheduler_fault,)
+            )
+        except Exception:
+            pass
+        try:
+            self._status("scheduler_exception", self._scheduler_fault)
+        except Exception:
+            pass
+        if not self._recover_worker_from_cached_inputs("scheduler_exception"):
+            self._bridge_failed = True
+
+    def _recover_worker_from_cached_inputs(self, code: str) -> bool:
+        """Rebuild the spawn worker from the latest valid task. Bounded.
+
+        Returns True when a fresh worker handshake succeeded, so the caller must
+        *not* latch ``_bridge_failed``. Returns False when recovery is disabled,
+        unavailable, or the per-task budget is exhausted — the caller then
+        latches as before. No command is reused: the caller has already
+        published a zero Twist and no envelope is emitted for this cycle.
+        """
+        if not self._worker_recovery_enabled:
+            self._worker_recovery_last_code = code + ":disabled"
+            return False
+        inputs = self._last_inputs
+        if inputs is None:
+            self._worker_recovery_last_code = code + ":no_latest_task"
+            return False
+        goal_version = inputs.get("goal_version")
+        if goal_version != self._worker_recovery_goal_version:
+            # A new task starts a new recovery budget.
+            self._worker_recovery_goal_version = goal_version
+            self._worker_recovery_used = 0
+        if self._worker_recovery_used >= self._worker_recovery_budget:
+            self._worker_recovery_last_code = code + ":budget_exhausted"
+            return False
+        self._worker_recovery_used += 1
+        self._worker_recovery_last_code = code
+        started = time.monotonic()
+        try:
+            self.client.recover_worker(
+                inputs["path"],
+                inputs["state"],
+                inputs["points"],
+                inputs["path_version"],
+                navigation_loop_mode=inputs["navigation_loop_mode"],
+                active_gear=inputs["active_gear"],
+                wait_sec=self._worker_recovery_wait_sec,
+            )
+        except Exception as exc:
+            self._worker_recovery_last_code = (
+                code + ":recovery_failed:" + type(exc).__name__ + ":" + str(exc)
+            )
+            try:
+                self.get_logger().error(
+                    "N1.16 worker recovery failed: %s" % (self._worker_recovery_last_code,)
+                )
+            except Exception:
+                pass
+            try:
+                self._publish_failsafe_stop()
+            except Exception:
+                pass
+            return False
+        elapsed = time.monotonic() - started
+        try:
+            self.get_logger().warn(
+                "N1.16 worker recovered from %s in %.3fs (attempt %d/%d)"
+                % (code, elapsed, self._worker_recovery_used, self._worker_recovery_budget)
+            )
+        except Exception:
+            pass
+        try:
+            self._publish_failsafe_stop()
+        except Exception:
+            pass
+        # Schedule a fresh solve from the latest scan; never replay a command.
+        self._planner_input_updated()
+        return True
 
     def _trace_wait_state(self, stage: str, **fields: Any) -> None:
         """Expose the first unsatisfied live input without flooding the log."""
@@ -379,13 +493,79 @@ class N116Node(N115Node):
         message.data = json.dumps(context, sort_keys=True, allow_nan=False)
         self.planner_context_pub.publish(message)
 
+    # ------------------------------------------------------------------
+    # Optional context ledger (additive; inert unless N116_CTX_LEDGER is set).
+    #
+    # nav2_path_version/goal_version are local counters that must match the
+    # controller's path_version_/goal_version_ exactly. They start at (0, -1)
+    # in N1.15, so every restart of this process silently moves the origin and
+    # the controller then discards every envelope as
+    # "discarded_envelope_context_mismatch" while this side never learns why.
+    #
+    # Persisting the counters makes a restart lossless: the controller only
+    # advances them when it publishes a path, and it publishes no path while
+    # no goal is active, so restarting this process with the goal idle leaves
+    # the controller's counters untouched.
+    #
+    # Both helpers swallow every error: a broken ledger must never affect
+    # planning or navigation, only emit a warning.
+    # ------------------------------------------------------------------
+    def _ctx_ledger_restore(self) -> None:
+        path = self._ctx_ledger_path
+        if not path:
+            return
+        current = (self.nav2_path_version, self.goal_version)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            path_version = int(payload["path_version"])
+            goal_version = int(payload["goal_version"])
+        except FileNotFoundError:
+            self.get_logger().warn(
+                f"N1.16 context ledger absent at {path}; "
+                f"counters stay at {current}"
+            )
+            return
+        except Exception as exc:
+            self.get_logger().warn(
+                f"N1.16 context ledger unreadable at {path} ({exc}); "
+                f"counters stay at {current}"
+            )
+            return
+        self.nav2_path_version = path_version
+        self.goal_version = goal_version
+        self.get_logger().warn(
+            f"N1.16 context ledger restored {current} -> "
+            f"({path_version}, {goal_version}) from {path}"
+        )
+
+    def _ctx_ledger_persist(self) -> None:
+        path = self._ctx_ledger_path
+        if not path:
+            return
+        try:
+            payload = {
+                "path_version": int(self.nav2_path_version),
+                "goal_version": int(self.goal_version),
+                "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "pid": os.getpid(),
+            }
+            tmp = f"{path}.tmp{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, sort_keys=True)
+            os.replace(tmp, path)
+        except Exception as exc:
+            self.get_logger().warn(f"N1.16 context ledger persist failed: {exc}")
+
     def path_callback(self, message) -> None:
         super().path_callback(message)
         self._publish_context()
+        self._ctx_ledger_persist()
 
     def goal_callback(self, message) -> None:
         super().goal_callback(message)
         self._publish_context()
+        self._ctx_ledger_persist()
 
     def _status(self, code: str, message: str, **fields: Any) -> None:
         payload = {"schema": N116_SCHEMA, "status": "fail-safe", "code": code,
@@ -534,6 +714,19 @@ class N116Node(N115Node):
                 gear_transition_pending = self.pending_gear is not None
                 previous_scan = int(self.last_processed_scan)
                 self.last_processed_scan = scan_counter
+            # Cache the exact task a rebuilt worker must resume. These arrays
+            # are rebuilt every cycle and never mutated in place, so keeping
+            # references is safe and costs nothing per cycle.
+            self._last_inputs = {
+                "path": path,
+                "state": state,
+                "points": points,
+                "path_version": path_version,
+                "goal_version": goal_version,
+                "navigation_loop_mode": self.navigation_mode,
+                "active_gear": active_gear,
+                "at_monotonic": time.monotonic(),
+            }
             motion_decision = None
             route_decision = None
             local_detour = None
@@ -619,9 +812,20 @@ class N116Node(N115Node):
                     bypass_mode=bypass_requested,
                 )
             except BridgeProtocolError as exc:
-                self._bridge_failed = True
-                self._status(exc.code, str(exc), cycle_id=cycle_id, scan_counter=scan_counter)
+                # Retract this cycle's motion output before anything else. A
+                # recoverable transport/solve failure rebuilds the worker from
+                # the cached task instead of latching the node dead; only an
+                # unavailable or exhausted recovery latches as before.
                 self._publish_failsafe_stop()
+                self._status(exc.code, str(exc), cycle_id=cycle_id, scan_counter=scan_counter)
+                if not self._recover_worker_from_cached_inputs(str(exc.code)):
+                    self._status(
+                        "worker_recovery_exhausted",
+                        self._worker_recovery_last_code,
+                        cycle_id=cycle_id,
+                        scan_counter=scan_counter,
+                    )
+                    self._bridge_failed = True
                 return
             except Exception as exc:
                 self._bridge_failed = True
@@ -638,6 +842,35 @@ class N116Node(N115Node):
                 self.client.mark_stale_response(reason, record)
                 self._status("stale_response", reason, request_id=record["request_id"],
                              cycle_id=cycle_id, scan_counter=scan_counter)
+                self._publish_failsafe_stop()
+                return
+
+            # Classify the trajectory before any geometry runs. On a normal
+            # arrive the core packs an empty opt_state; the >=3-state collision
+            # helpers raise on that, and the exception used to escape run() and
+            # kill the node through the scheduler error path.
+            opt_state = outputs["opt_state"]
+            plan_usable = bool(
+                isinstance(opt_state, np.ndarray)
+                and opt_state.ndim == 2
+                and opt_state.shape[0] >= 3
+                and opt_state.shape[1] >= 1
+                and bool(np.isfinite(opt_state).all())
+            )
+            arrived = bool(record.get("info", {}).get("arrive"))
+            if not plan_usable and not arrived:
+                # Empty/invalid plan without an arrival is a solve-side fault,
+                # not a stop: hold the fail-safe output and stay alive so the
+                # next valid scan can produce a plan.
+                self._status(
+                    "invalid_trajectory",
+                    "core returned an unusable opt_state: ndim=%s shape=%s"
+                    % (getattr(opt_state, "ndim", None),
+                       getattr(opt_state, "shape", None)),
+                    request_id=record["request_id"],
+                    cycle_id=cycle_id,
+                    scan_counter=scan_counter,
+                )
                 self._publish_failsafe_stop()
                 return
 
@@ -667,19 +900,20 @@ class N116Node(N115Node):
             action = outputs["action"]
             command = Twist()
             optimized_free_distance = float("inf")
-            if motion_decision is not None:
+            if motion_decision is not None and plan_usable:
                 optimized_free_distance = min(
                     first_swept_collision_distance(
-                        state, outputs["opt_state"], raw_points,
+                        state, opt_state, raw_points,
                         self.obstacle_motion_config,
                     ),
                     first_swept_collision_distance(
-                        state, outputs["opt_state"], points,
+                        state, opt_state, points,
                         self.obstacle_motion_config,
                     ),
                 )
             verified_neupan_bypass = (
-                bypass_requested
+                plan_usable
+                and bypass_requested
                 and bool(record.get("info", {}).get("bypass_valid", False))
                 and np.isinf(optimized_free_distance)
             )
@@ -704,8 +938,12 @@ class N116Node(N115Node):
                 verified_local_detour = True
                 path_deviation_blocked = False
                 self.path_deviation_guard.reset()
-            elif (self.local_detour_enabled and motion_decision is not None
+            elif (self.local_detour_enabled and plan_usable
+                  and motion_decision is not None
                   and motion_decision.route_blocked):
+                # plan_usable already proved ndim == 2, shape[0] >= 3 and
+                # shape[1] >= 1, so predicted[:2, -1] below cannot index past
+                # the end of a normal-arrive empty trajectory.
                 predicted = outputs["opt_state"]
                 route_vector = path[:2, -1] - state[:2, 0]
                 route_norm = float(np.linalg.norm(route_vector))
