@@ -641,7 +641,7 @@ class N115Node(Node):
                         path_tangent=path_tangent_base,
                         **self.planner_base_extents,
                     )
-                elif dynamic_ready:
+                elif dynamic_ready and self.dynamic_footprint_enabled:
                     local_points, dynamic_displacement = inflate_obstacles_for_dynamic_footprint(
                         local_points, dynamic_footprint,
                         clearance_m=self.dynamic_footprint_clearance_m,
