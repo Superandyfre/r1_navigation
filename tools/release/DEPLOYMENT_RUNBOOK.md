@@ -1,7 +1,9 @@
 # A+ 整套部署、故障处理与回滚操作书（待演练）
 
 状态：DRAFT / NOT_DEPLOYABLE。本文是待审核的操作顺序，不是现场执行批准。
-截至候选03/bundle02，生产UI7未切换。测试使用合成scan/TF/odom、独立domain192；
+候选05首轮全30项因验收Python SIGSEGV中断；Action显式清理修正后的重跑仍待结论。
+本表只是未批准版本的定位记录，不代表可接受的回滚目标。
+截至候选05/bundle04，生产UI7未切换。测试使用合成scan/TF/odom、独立domain192；
 不能用其零速记录证明底盘停车。没有完成验收的“上一套A+已知可靠版本”。
 保留的旧生产版本和bundle01只可作审计/比较对象，不能标为安全回滚目标。
 
@@ -11,14 +13,14 @@
 |---|---|
 | 生产UI7 | /home/rpp/r1_navigation/tools/starterbutton/start_navigation_high_sampling_neupan.sh |
 | 开发源码 | /home/rpp/neupan_failstop_ws/src/r1_navigation |
-| 候选03 | /home/rpp/neupan_failstop_ws/release_candidates/20261029-a-plus-03 |
-| bundle02 | /home/rpp/neupan_failstop_ws/release_bundles/20261029-a-plus-02 |
-| 候选03构建SHA | df1dc6f2ab911b70fe7307ad44ce344c29a8f407 |
-| 候选清单 | candidate03根目录/candidate-inventory.json |
-| bundle清单 | bundle02根目录/releases/a-plus/manifest.json |
+| 候选05 | /home/rpp/neupan_failstop_ws/release_candidates/20261029-a-plus-05 |
+| bundle04 | /home/rpp/neupan_failstop_ws/release_bundles/20261029-a-plus-04 |
+| 候选05构建SHA | 824adfd43426621e2de30b9fd1cb8c8d7438dd2d |
+| 候选清单 | candidate05根目录/candidate-inventory.json |
+| bundle清单 | bundle04根目录/releases/a-plus/manifest.json |
 | 验收证据 | /home/rpp/neupan_failstop_ws/reports/neupan_failstop_20261027 |
 
-上表路径中的candidate03/bundle02简称只用于说明；命令使用下列绝对路径。
+上表路径中的candidate05/bundle04简称只用于说明；命令使用下列绝对路径。
 记录构建SHA、工具SHA、清单SHA和批准人/时间；原有日志、源码改动、ledger、
 旧候选目录均保留。新版本写入新目录。审批清单由独立审核方保管，不能通过
 重算哈希或自行改deployment_approved绕过未完成的验收。
@@ -49,10 +51,10 @@ planner、launch、入口脚本、CogNav协调器、NeuPAN源码及外部运行�
 只读兼容诊断命令（不启动节点、不授予运动许可）：
 
 ```bash
-source /home/rpp/neupan_failstop_ws/release_bundles/20261029-a-plus-02/install/setup.bash
+source /home/rpp/neupan_failstop_ws/release_bundles/20261029-a-plus-04/install/setup.bash
 export PYTHONDONTWRITEBYTECODE=1
-/usr/bin/python3 /home/rpp/neupan_failstop_ws/release_bundles/20261029-a-plus-02/tools/release/preflight.py \
-  --manifest /home/rpp/neupan_failstop_ws/release_bundles/20261029-a-plus-02/releases/a-plus/manifest.json \
+/usr/bin/python3 /home/rpp/neupan_failstop_ws/release_bundles/20261029-a-plus-04/tools/release/preflight.py \
+  --manifest /home/rpp/neupan_failstop_ws/release_bundles/20261029-a-plus-04/releases/a-plus/manifest.json \
   --compatibility-only
 ```
 

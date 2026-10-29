@@ -98,6 +98,12 @@ def finish_bridge(node, executor, ros, signum=None, timeout=1., clock=time.monot
             attempt('remove_node', lambda: executor.remove_node(node))
         attempt('executor_shutdown', lambda: executor.shutdown(timeout_sec=.5))
     if node is not None:
+        # Humble Node.destroy_node() does not finalize Action waitables.
+        # Drain and stop the executor first, then release the Action handle
+        # while its node and ROS context still exist.
+        client = getattr(node, 'client', None)
+        if client is not None:
+            attempt('destroy_action_client', client.destroy)
         attempt('destroy_node', node.destroy_node)
     if context_ok():
         attempt('context_shutdown', ros.shutdown)
