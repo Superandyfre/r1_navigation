@@ -112,3 +112,27 @@ preserved external Nav2/smoother/solver environment remain dependencies. CogNav
 uses the protected source integration, not a full packaged driver/vision stack.
 These are bounded-scope acceptance tests, not production startup or hardware
 acceptance; running them never approves deployment. Preserve raw logs and traces.
+
+## Review bundle (unapproved)
+
+`package_candidate.py --candidate /absolute/candidate --destination /absolute/new-bundle`
+verifies the saved install inventory and copies it into `bundle/install`. It
+archives committed startup/release tools, third_party/NeuPAN and the protected
+CogNav integration from the clean tooling tree into the same root. The build SHA
+and tooling SHA are separate facts. The generated `releases/a-plus/manifest.json`
+pins all payload files and core roles with relocated paths; all deployment gates
+and approval remain false. Refuse existing destinations; never overwrite a
+previous bundle. Run packaging before collecting additional test scripts in the
+source tree, or commit those changes first.
+
+`preflight.py` verifies a supplied full inventory in both modes and requires one
+in deployment mode. The manifest itself must be independently reviewed/protected;
+it cannot establish its own trust. This bundle still depends on preserved ROS,
+venv, calibration, drivers and other external artifacts, and is not a complete
+validated release/rollback kit. The relocated environment/import check and
+inhibited full startup control-flow test do not constitute production startup.
+
+When re-running preflight tests on another candidate, set
+`NEUPAN_PREFLIGHT_REPORT_DIR` to a fresh evidence directory to preserve earlier
+snapshot pins and analysis. No production path or button registration is changed
+by packaging or these tests.

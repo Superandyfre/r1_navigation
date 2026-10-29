@@ -12,7 +12,8 @@ import unittest
 import preflight
 
 WS=Path('/home/rpp/neupan_failstop_ws')
-REPORT=WS/'reports/neupan_failstop_20261027/tests'
+REPORT=Path(os.environ.get('NEUPAN_PREFLIGHT_REPORT_DIR', str(WS/'reports/neupan_failstop_20261027/tests')))
+REPORT.mkdir(parents=True,exist_ok=True)
 
 class Preflight(unittest.TestCase):
     @classmethod
