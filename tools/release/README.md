@@ -92,3 +92,23 @@ script never starts ROS nodes or approves deployment. Acceptance still needs to
 use the new artifacts, and a candidate install alone does not contain a complete
 UI7 release layout, third-party solver snapshot, runtime/driver inventory or
 rollback bundle.
+
+## Candidate no-motion acceptance
+
+After sourcing the candidate's setup.bash, set the exact isolated flags
+`ROS_DOMAIN_ID=192 ROS_LOCALHOST_ONLY=1 NEUPAN_ISOLATED_ROS_TEST=1`
+and `NEUPAN_CHAIN_WORKER=actual-solver`, then run:
+
+```
+/usr/bin/python3 tools/release/accept_candidate_ros.py --candidate /absolute/candidate --suite navigator
+```
+
+Suites: chain, navigator, cognav, restart, or all (sequential). Never run multiple
+suites concurrently in domain192. The runner verifies the entire saved install
+inventory, testing-off caches recorded in it, and absence of the test adapter;
+it selects candidate C++ executables/libraries, installed Python, planner/model
+and BT XMLs. Existing synthetic sensors/global planner/test configurations and
+preserved external Nav2/smoother/solver environment remain dependencies. CogNav
+uses the protected source integration, not a full packaged driver/vision stack.
+These are bounded-scope acceptance tests, not production startup or hardware
+acceptance; running them never approves deployment. Preserve raw logs and traces.

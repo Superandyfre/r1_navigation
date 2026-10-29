@@ -116,9 +116,9 @@ class FailstopChainROS(unittest.TestCase):
         path=self.report/'params.yaml';path.write_text(yaml.safe_dump(config))
         if self.real_node:
             packages=WS/'src/r1_navigation/packages'
-            parameters=dict(robot_config_dir=str(packages/'navigation_neupan_bridge/config'),
+            parameters=dict(robot_config_dir=str(getattr(self,'candidate_configdir',packages/'navigation_neupan_bridge/config')),
                 planner_config_file='planner_r1_hw1.yaml',
-                dune_checkpoint_file=str(packages/'r1_neupan_integration/config/models/dune_model_5000.pth'),
+                dune_checkpoint_file=str(getattr(self,'candidate_checkpoint',packages/'r1_neupan_integration/config/models/dune_model_5000.pth')),
                 n115_output_dir=str(self.report/'worker'),map_frame='map',
                 execution_context_topic=PREFIX+'context',worker_health_topic=PREFIX+'health',
                 planner_result_topic=PREFIX+'source',cmd_vel_topic=PREFIX+'worker_diagnostic_cmd',
@@ -162,8 +162,8 @@ class FailstopChainROS(unittest.TestCase):
         for path in sorted(loaded):
             self.artifacts.append(dict(loaded_library=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
         if self.real_node:
-            for path in [WS/'src/r1_navigation/packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml',
-                         WS/'src/r1_navigation/packages/r1_neupan_integration/config/models/dune_model_5000.pth']:
+            for path in [Path(getattr(self,'candidate_configdir',WS/'src/r1_navigation/packages/navigation_neupan_bridge/config'))/'planner_r1_hw1.yaml',
+                         Path(getattr(self,'candidate_checkpoint',WS/'src/r1_navigation/packages/r1_neupan_integration/config/models/dune_model_5000.pth'))]:
                 self.artifacts.append(dict(planner_input=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
             for name in ('n1_15_node.py','n1_16_node.py','execution_protocol.py'):
                 root=getattr(self,'worker_source_root',WS/'src/r1_navigation/packages/r1_neupan_integration/r1_neupan_integration')

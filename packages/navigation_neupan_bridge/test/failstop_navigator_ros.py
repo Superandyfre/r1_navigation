@@ -35,7 +35,7 @@ class NavigatorFailstop(chain.FailstopChainROS):
             handle.succeed(); return result
         self.planners = [ActionServer(self.node, ComputePathToPose, '/compute_path_to_pose', compute),
                          ActionServer(self.node, ComputePathThroughPoses, '/compute_path_through_poses', compute)]
-        configdir = chain.WS/'src/r1_navigation/packages/navigation_neupan_bridge/config'
+        configdir = Path(getattr(self, 'candidate_configdir', chain.WS/'src/r1_navigation/packages/navigation_neupan_bridge/config'))
         params = {'bt_navigator': {'ros__parameters': dict(use_sim_time=False, global_frame='map',
             robot_base_frame='base_link', odom_topic=chain.PREFIX+'odom', bt_loop_duration=10,
             default_server_timeout=1000, wait_for_service_timeout=1000,
@@ -55,7 +55,7 @@ class NavigatorFailstop(chain.FailstopChainROS):
         self.lifecycle('bt_navigator',1);self.lifecycle('bt_navigator',3)
         maps=(Path('/proc')/str(self.procs[-1].pid)/'maps').read_text()
         (self.report/'navigator-maps.txt').write_text(maps)
-        self.assertTrue(any('neupan_failstop_ws' in line and 'libneupan_wait_condition_bt_node.so' in line
+        self.assertTrue(any(getattr(self, 'expected_bt_root', 'neupan_failstop_ws') in line and 'libneupan_wait_condition_bt_node.so' in line
                             for line in maps.splitlines()), 'Navigator loaded wrong retry plugin')
         loaded=set()
         for line in maps.splitlines():
