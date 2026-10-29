@@ -103,7 +103,8 @@ and `NEUPAN_CHAIN_WORKER=actual-solver`, then run:
 /usr/bin/python3 tools/release/accept_candidate_ros.py --candidate /absolute/candidate --suite navigator
 ```
 
-Suites: chain, navigator, cognav, restart, or all (sequential). Never run multiple
+Suites: chain, navigator, cognav, restart, startup-tf, revoke-loss,
+handshake-loss, source-recovery, or all (26 cases, sequential). Never run multiple
 suites concurrently in domain192. The runner verifies the entire saved install
 inventory, testing-off caches recorded in it, and absence of the test adapter;
 it selects candidate C++ executables/libraries, installed Python, planner/model
@@ -112,6 +113,11 @@ preserved external Nav2/smoother/solver environment remain dependencies. CogNav
 uses the protected source integration, not a full packaged driver/vision stack.
 These are bounded-scope acceptance tests, not production startup or hardware
 acceptance; running them never approves deployment. Preserve raw logs and traces.
+
+The Chinese [deployment and rollback runbook](DEPLOYMENT_RUNBOOK.md) describes
+the proposed complete-version switch, required operator evidence, refusal
+conditions, and rollback sequence. It is a draft awaiting rehearsal. There is
+currently no accepted prior A+ release to use as a safe rollback target.
 
 ## Review bundle (unapproved)
 
