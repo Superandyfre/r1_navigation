@@ -1,8 +1,8 @@
 {
   "name": "7.双雷达NeuPAN导航",
   "type": "QToolButton",
-  "Introduction": "统一分支固定提交 dc5c6a7 的导航发布包；A+、collision=false；未完成实机验收。",
-  "bash_url": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
+  "Introduction": "双雷达 NeuPAN 导航；就绪后自动启用；已修复 NumPy 语义消息序列化异常。",
+  "bash_url": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-02/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
   "background_url": "navigation.png",
   "Additional_environment_variables": "RPP_NEUPAN_SCAN_SOURCE=dual RPP_NEUPAN_USE_MESH_SELF_FILTER=true RPP_NEUPAN_COLLISION_CHECK_DEFAULT=false",
   "show_shell": "true"

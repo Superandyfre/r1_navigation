@@ -4,9 +4,11 @@
 
 适用对象：CogNav 决策与 ROS 2 接口维护人员、导航系统维护人员
 
-适用版本：`codex/navigation-environment-snapshots` 分支；UI7 发布包 `20261029-unified-01`
+适用版本：`codex/navigation-environment-snapshots` 分支；UI7 发布包 `20261029-unified-02`
 
 ## 1. 系统状态与适用范围
+
+当前版本同时修复了 NumPy 布尔值进入语义 JSON 消息时导致调度异常的问题；这项修复不改变规划器数值、命令或故障判据。
 
 当前导航端已实现 NeuPAN 求解进程故障隔离、执行身份绑定、上游任务有效性确认、控制授权以及故障/超时停车机制，并形成可构建的独立发布包。CogNav 生产程序尚未完成与这些机制的适配，完整 CogNav—导航—底盘链路尚未联调通过。
 
@@ -15,7 +17,7 @@
 | 项目 | 当前状态 | 对接含义 |
 | --- | --- | --- |
 | 导航端代码与发布包 | 已实现并构建；发布包使用固定源码版本 | CogNav 应按本文协议适配，不应混用旧控制组件 |
-| UI7 | 已配置为新版发布包入口；本次未通过 UI7 启动运动验证 | 入口配置完成不代表新版已通过现场验收 |
+| UI7 | 新版发布包已启动，定位与 Guard 就绪后自动启用；未完成目标运动验收 | 入口配置完成不代表新版已通过现场验收 |
 | UI8 | 旧版导航独立入口 | 不属于本次新版联调对象；联调时需避免两套导航争用底盘 |
 | CogNav 生产适配 | 尚未完成 | 现有 `/follow_path` 调用不能直接视为兼容新版 |
 | 隔离验证 | 有组件、协议和局部 ROS 2 链路验证证据 | 仅支持对应机制在所测条件下的行为结论 |
@@ -229,8 +231,8 @@ UI7 当前不以发布验收批准作为启动前置条件，且启动就绪后�
 | 主仓库 | `https://github.com/Superandyfre/r1_navigation.git` |
 | 协作分支 | `codex/navigation-environment-snapshots` |
 | 机器人主源码 | `/home/rpp/r1_navigation` |
-| UI7 发布包 | `/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01` |
-| 发布包构建源码 | `dc5c6a736efdbfb86772910563e9d24317d6ed28` |
+| UI7 发布包 | `/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-02` |
+| 发布包构建源码 | `2787aa3f0ed88890a3bf0a6bddbf1c068512c0b4` |
 | 发布清单 | 发布包内 `releases/a-plus/manifest.json` |
 | 版本定位记录 | `docs/UI7_UNIFIED_VERSION_20261029.json` |
 | 执行归属协议 | `packages/navigation_neupan_bridge/EXECUTION_OWNERSHIP.md` |

@@ -1,41 +1,29 @@
 {
-  "time": "2026-10-29T22:49:02.084845+08:00",
-  "branch": "codex/navigation-environment-snapshots",
-  "build_source_sha": "dc5c6a736efdbfb86772910563e9d24317d6ed28",
-  "tooling_source_sha": "dc5c6a736efdbfb86772910563e9d24317d6ed28",
-  "bundle": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01",
-  "manifest": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01/releases/a-plus/manifest.json",
-  "manifest_sha256": "94cdae1b1708c73e7554e3d8dbb6a756cbbaa3f4c4331e615e65008448566eba",
-  "inventory_files": 666,
-  "previous_ui7_script": "/home/rpp/r1_navigation/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
-  "ui7_script": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
-  "navigation_launched_by_this_task": false,
-  "physical_acceptance_run": false,
-  "deployment_approved": false,
-  "build_packages": 8,
-  "checks": {
-    "bundle_inventory": true,
-    "compatibility_only": true,
-    "worker_failstop": 16,
-    "execution_context": 18,
-    "collisionoff_profile": 2,
-    "snapshot_restore": 3
-  },
-  "initial_check_limitations": [
-    "preflight unit fixture requires historical development overlay; not applicable to new path; new bundle compatibility CLI passed",
-    "initial Worker import path wrong; explicit source check passed",
-    "initial context check lacked pytest in venv; system test dependency path check passed"
+  "previous_ui7_script": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
+  "ui7_script": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-02/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
+  "build_source_sha": "2787aa3f0ed88890a3bf0a6bddbf1c068512c0b4",
+  "manifest_sha256": "1d01c59abe8880ae36cd5859868024a2dd3d2f2dd0e13eace1ca5a00db9a1869",
+  "new_script_pid": 555056,
+  "old_navigation_pids_exited": [
+    541244,
+    541787,
+    541805,
+    541816
   ],
-  "uncommitted_solver_changes_deployed": false,
-  "current_processes_preserved": {
-    "prefix": "/home/rpp/nav_restore_20261016",
-    "observed_pids": [
-      532094,
-      532112,
-      532114
-    ],
-    "not_using_new_release": true,
-    "ui_button": "UI8 (confirmed by user)"
+  "goals_sent_by_this_task": false,
+  "motion_validation": false,
+  "auto_arm_on_ready": true,
+  "branch": "codex/navigation-environment-snapshots",
+  "bundle": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-02",
+  "deployment_approved": false,
+  "checks": {
+    "build_packages": 8,
+    "controller_execution_unit": 18,
+    "semantic_regression": 2,
+    "worker_failstop": 16,
+    "isolated_auto_arm_actual_solver": 1,
+    "solver_provenance_errors": []
   },
-  "activation": "UI7 registration selected; not launched by this task; UI8 old-version processes left unchanged"
+  "navigation_started": true,
+  "physical_navigation_validated": false
 }
