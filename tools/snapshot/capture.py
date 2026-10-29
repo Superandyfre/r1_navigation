@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 ROOT = Path(__file__).resolve().parents[2]
-SECRET_NAME = re.compile(r'(^\.env($|\.)|credentials|(^|[-_])(password|secret|token)([-_.]|$)|^id_(rsa|ed25519)|\.(pem|key)$)', re.I)
+SECRET_NAME = re.compile(r'(^\.env($|\.)|^credentials(\.[^.]+)?$|^id_(rsa|ed25519)(\.pub)?$|\.(pem|key)$|^(password|secret|token)\.(json|yaml|yml|txt|ini|cfg)$)', re.I)
 SECRET_TEXT = re.compile(rb'(?im)^\s*(?:export\s+)?[\w-]*(?:password|passwd|access_token|api_key|secret_key)\s*[:=]\s*[\x22\x27]?[^\s\x22\x27]{3,}')
 SKIP = {'.git', '__pycache__', 'node_modules', '.pytest_cache', '.venv'}
 
@@ -40,7 +40,7 @@ def repositories(base):
 
 def safe_file(p):
     if SECRET_NAME.search(p.name): return False
-    if p.is_file() and not p.is_symlink() and p.stat().st_size < 2 * 1024 * 1024:
+    if p.suffix.lower() in {'.json','.yaml','.yml','.ini','.cfg','.sh','.bash','.config'} and p.is_file() and not p.is_symlink() and p.stat().st_size < 2 * 1024 * 1024:
         if SECRET_TEXT.search(p.read_bytes()): return False
     return True
 
@@ -169,6 +169,10 @@ def main():
              'Absolute paths, external symlinks and native/CUDA system dependencies need restore-host verification.']
     if excluded: gaps.append('Some credential/cache files excluded; inspect environment/excluded.json.')
     if any(x['changed_during_capture'] for x in artifacts): gaps.append('Files changed during capture; not an atomic snapshot.')
+    failed_parameters = [p.name for p in (dest/'runtime').glob('parameters-*.json') if json.loads(p.read_text())['result']['returncode'] != 0]
+    if failed_parameters: gaps.append('Runtime parameter queries incomplete: '+', '.join(failed_parameters))
+    unresolved = [x for x in links if not x['target_exists']]
+    if unresolved: gaps.append(str(len(unresolved))+' source symlinks have missing targets; recorded, not silently restored.')
     manifest=dict(schema='r1_navigation_snapshot_v1',id=a.id,created_at=datetime.datetime.now().astimezone().isoformat(),
         main_source_commit=repos[0]['commit'],ui7_release_build_commit=json.loads(source_manifest.read_text()).get('build_source_sha') if source_manifest.exists() else None,
         status=dict(captured=True,built=False,restored=False,navigation_validated=False,offline_complete=False),

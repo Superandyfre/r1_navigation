@@ -28,3 +28,13 @@ class RestoreChecks(unittest.TestCase):
             with self.assertRaises(ValueError):stage(root,m,'payload.tar.gz',root/'stage')
             self.assertFalse((root/'stage').exists())
 if __name__=='__main__':unittest.main()
+
+class SourceCredentialFilter(unittest.TestCase):
+    def test_library_code_is_not_mistaken_for_credential_data(self):
+        sys.path.insert(0,str(Path(__file__).resolve().parent))
+        from capture import safe_file
+        with tempfile.TemporaryDirectory() as d:
+            p=Path(d)/'token.py';p.write_text('password = self.password\n')
+            self.assertTrue(safe_file(p))
+            p=Path(d)/'.env';p.write_text('API_KEY=private-value\n')
+            self.assertFalse(safe_file(p))
