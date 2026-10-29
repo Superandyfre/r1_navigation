@@ -117,20 +117,47 @@ and `NEUPAN_CHAIN_WORKER=actual-solver`, then run:
 /usr/bin/python3 tools/release/accept_candidate_ros.py --candidate /absolute/candidate --suite navigator
 ```
 
-Suites: chain, navigator, cognav, restart, startup-tf, revoke-loss,
-handshake-loss, source-recovery, owner-loss, owner-protocol, cognav-owner,
-navigator-owner, navigator-freeze, pending-halt, ack-delay, or all (43 cases,
-sequential). Never run multiple
+Suites: chain, navigator, restart, startup-tf, revoke-loss,
+handshake-loss, source-recovery, owner-loss, owner-protocol,
+navigator-owner, navigator-freeze, pending-halt, ack-delay, or all (39 cases,
+sequential). CogNav is excluded by user instruction; its historical fixtures
+and evidence remain archived. New bundles omit integrations/cognav. Never run multiple
 suites concurrently in domain192. The runner verifies the entire saved install
 inventory, testing-off caches recorded in it, and absence of the test adapter;
 it selects candidate C++ executables/libraries, installed Python, planner/model
 and BT XMLs. Existing synthetic sensors/global planner/test configurations and
-preserved external Nav2/smoother/solver environment remain dependencies. CogNav
-uses the protected source integration, not a full packaged driver/vision stack.
+preserved external Nav2/smoother/solver environment remain dependencies.
 These are bounded-scope acceptance tests, not production startup or hardware
 acceptance; running them never approves deployment. Preserve raw logs and traces.
 
-The separate `--suite navigator-tick-loss` is not part of standard `all43`: it
+`--suite effective-parameters` is a separate, one-scene check of the installed
+Controller/Guard/smoother/actual Worker parameter services before the fixture's
+arm request. It checks pinned fixture launch values, rejects a wrong shadow-mode
+pin, then verifies normal solver output and cancel. It does not certify the
+production UI7 overrides or runtime remaps and is not in the default 39 cases.
+
+`effective_parameters.py --pins /absolute/reviewed-pins.json --output
+/absolute/new-report.json` reads ListParameters/GetParameters without setting
+parameters, arming, or launching nodes. Pin format:
+
+```json
+{"schema":"r1_neupan_parameter_pins_v1","nodes":{"/controller_server":{
+  "parameters":{"FollowPath.shadow_mode":{"type":1,"value":false}}
+}}}
+```
+
+ROS parameter types are bool=1, integer=2, double=3, string=4, byte array=5,
+bool/integer/double/string arrays=6/7/8/9. Types and values must both match;
+non-finite values, unavailable services, absent parameters and duplicate node
+names reject. Optional `closed_prefixes:["FollowPath"]` additionally rejects
+unreviewed names in that namespace; all names there must be pinned. The example
+above is a format example only, not a complete approved production contract.
+Pins must come from independently reviewed effective launch inputs, not a live
+snapshot being checked against itself. The tool proves the named values only
+during a bounded interval, not PID ownership, topic remaps, code identity or
+physical readiness. It is not yet connected to the production arm gate.
+
+The separate `--suite navigator-tick-loss` is not part of standard `all`: it
 requires a deliberately test-only BT decorator, never installed in a candidate.
 Compile `packages/navigation_neupan_bridge/test/pause_tick_bt_node.cpp` outside
 the source/build/install/release trees using `g++ -shared -fPIC -std=c++17

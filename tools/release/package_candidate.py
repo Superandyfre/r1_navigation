@@ -26,7 +26,7 @@ def package(candidate, destination, repo):
         if list((candidate/'install').rglob(pattern)):raise ValueError('test_adapter_in_release')
     if subprocess.check_output(['git','status','--porcelain'],cwd=repo,text=True).strip():raise ValueError('dirty_tooling_tree')
     tooling_sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip()
-    archive=subprocess.check_output(['git','archive',tooling_sha,'tools','third_party','integrations'],cwd=repo)
+    archive=subprocess.check_output(['git','archive',tooling_sha,'tools','third_party'],cwd=repo)
     destination.mkdir(parents=True)
     # Only our own committed Git archive; additionally refuse path escapes/links.
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
@@ -38,6 +38,7 @@ def package(candidate, destination, repo):
     shutil.copytree(candidate/'install',destination/'install')
     manifest=dict(schema='r1_neupan_release_v1',protocol_set='A+context1-source2-grant1-health1-owner1',
         build_source_sha=inv['source_sha'],tooling_source_sha=tooling_sha,build_testing=False,
+        excluded_components=['cognav'],
         deployment_approved=False,gates=dict(full_no_motion_acceptance=False,
         physical_stop_acceptance=False,rollback_rehearsal=False),artifacts={})
     for role,(kind,relative) in preflight.ROLES.items():
