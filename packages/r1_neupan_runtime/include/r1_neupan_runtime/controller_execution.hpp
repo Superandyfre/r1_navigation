@@ -221,6 +221,14 @@ public:
       fault_ = reason; armed_ = false; monitor_.latch(reason);
     }
   }
+  bool retryAllowed(double now)
+  {
+    // Readiness only: never arm, clear a fault, or allocate an execution/grant.
+    syncFault();
+    return !active_ && armed_ && !faulted() && freshGuard(now) &&
+           health_time_ > 0 && now >= health_time_ && now - health_time_ <= config_.health_timeout &&
+           health_payload_.value("state", "") == "RUNNING" && !worker_boot_.empty();
+  }
   void disarm() {armed_ = false;}
   bool faulted() const {return !fault_.empty();}
   bool active() const {return active_;}

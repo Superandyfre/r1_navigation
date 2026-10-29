@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <thread>
 
@@ -11,6 +12,7 @@
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 TEST(NeuPANWaitBehaviorTree, KeepsAcceptedPathWhenCandidateFails)
 {
@@ -73,6 +75,65 @@ TEST(NeuPANWaitBehaviorTree, KeepsAcceptedPathWhenCandidateFails)
     goal.pose.position.x = 3.0;
     blackboard->set("goal", goal);
     EXPECT_EQ(wait.tickRoot(), BT::NodeStatus::FAILURE);
+  }
+  rclcpp::shutdown();
+}
+
+// Real Nav2 RecoveryNode plus the loaded production retry plugin. The fake
+// Follow action fails once; count whether recovery creates a second attempt.
+TEST(NeuPANRetryBehaviorTree, FreshAuthorityResponseControlsRetry) {
+  if (!std::getenv("NEUPAN_ISOLATED_ROS_TEST")) {GTEST_SKIP();}
+  rclcpp::init(0, nullptr);
+  {
+    auto node = std::make_shared<rclcpp::Node>("test_retry_authority");
+    bool permit = false;
+    std::string reply = "neupan_retry_denied";
+    auto server = node->create_service<std_srvs::srv::Trigger>("/test_retry_authority",
+      [&](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        response->success = permit; response->message = reply;
+      });
+    BT::BehaviorTreeFactory factory;
+    factory.registerFromPlugin(WAIT_PLUGIN_PATH);
+    factory.registerFromPlugin(RECOVERY_PLUGIN_PATH);
+    int follows = 0, replans = 0;
+    factory.registerSimpleAction("TestFollow", [&](BT::TreeNode &) {
+      return ++follows == 1 ? BT::NodeStatus::FAILURE : BT::NodeStatus::SUCCESS;
+    });
+    factory.registerSimpleAction("TestReplan", [&](BT::TreeNode &) {
+      ++replans; return BT::NodeStatus::SUCCESS;
+    });
+    auto bb = BT::Blackboard::create(); bb->set("node", node);
+    // Freeze ROS time: the retry timeout must still terminate using steady time.
+    node->set_parameter(rclcpp::Parameter("use_sim_time", true));
+    for (int scene = 0; scene < 6; ++scene) {
+      permit = scene != 0;
+      reply = scene == 1 ? "wrong_reply" : "neupan_retry_permitted";
+      follows = 0; replans = 0;
+      auto tree = factory.createTreeFromText(R"(
+        <root main_tree_to_execute="Main"><BehaviorTree ID="Main">
+          <RecoveryNode number_of_retries="1"><TestFollow/>
+            <Sequence><CanRetryNeuPANExecution service_name="/test_retry_authority" timeout_sec="0.15"/>
+              <TestReplan/></Sequence>
+          </RecoveryNode>
+        </BehaviorTree></root>)", bb);
+      // Allow DDS discovery before the first query; no motion publishers exist.
+      auto client = node->create_client<std_srvs::srv::Trigger>("/test_retry_authority");
+      ASSERT_TRUE(client->wait_for_service(std::chrono::seconds(2)));
+      if (scene == 5) {server.reset(); std::this_thread::sleep_for(std::chrono::milliseconds(100));}
+      auto status = tree.tickRoot();
+      if (scene == 4) {tree.haltTree(); EXPECT_EQ(replans, 0); continue;}
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (status == BT::NodeStatus::RUNNING && std::chrono::steady_clock::now() < deadline) {
+        if (scene != 3) {rclcpp::spin_some(node);}
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        status = tree.tickRoot();
+      }
+      const bool allowed = scene == 2;
+      EXPECT_EQ(status, allowed ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE) << scene;
+      EXPECT_EQ(follows, allowed ? 2 : 1) << scene;
+      EXPECT_EQ(replans, allowed ? 1 : 0) << scene;
+    }
   }
   rclcpp::shutdown();
 }

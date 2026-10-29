@@ -14,7 +14,10 @@
         </RateController>
         <FollowPath path="{path}" controller_id="FollowPath"/>
       </PipelineSequence>
-      <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+      <Sequence name="RetryOnlyWhenRuntimePermits">
+        <CanRetryNeuPANExecution/>
+        <ComputePathThroughPoses goals="{goals}" path="{path}" planner_id="GridBased"/>
+      </Sequence>
     </RecoveryNode>
   </BehaviorTree>
 </root>

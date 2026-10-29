@@ -189,3 +189,27 @@ TEST_F(Execution, DuplicateSourceNeverExtendsStaleRecoveryDeadline) {
   EXPECT_EQ(runtime.fault(), "planner_result_recovery_timeout");
 }
 }  // namespace
+
+TEST_F(Execution, RetryQueryRequiresEndedHealthyArmedRuntime) {
+  EXPECT_FALSE(runtime.retryAllowed(100.));
+  armed();
+  EXPECT_FALSE(runtime.retryAllowed(100.02));
+  runtime.end(100.03);
+  EXPECT_TRUE(runtime.retryAllowed(100.03));
+  EXPECT_FALSE(runtime.retryAllowed(110.));
+  runtime.disarm();
+  EXPECT_FALSE(runtime.retryAllowed(100.04));
+}
+TEST_F(Execution, RetryQueryNeverClearsFatalLatch) {
+  armed();
+  auto fatal = health(100.03, 2);
+  fatal["state"] = "FAULT_LATCHED";
+  fatal["fault_id"] = "fatal-a"; fatal["fault_code"] = "worker_timeout";
+  runtime.health(fatal, 100.03); runtime.end(100.04);
+  EXPECT_FALSE(runtime.retryAllowed(100.04));
+  runtime.health(health(100.05, 3), 100.05);
+  runtime.guard(guard(100.05, 4), 100.05);
+  EXPECT_FALSE(runtime.retryAllowed(100.05));
+  EXPECT_TRUE(runtime.faulted());
+  EXPECT_FALSE(runtime.arm(100.05, true));
+}

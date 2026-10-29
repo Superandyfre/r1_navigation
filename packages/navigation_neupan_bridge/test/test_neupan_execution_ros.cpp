@@ -35,7 +35,7 @@ TEST(NeuPANExecutionROS, RealCallbacksHandshakeThenFatalRetiresContext)
   for (const auto & name : {"path_topic", "goal_topic", "envelope_topic", "gate_command_topic",
       "gate_status_topic", "guard_status_topic", "localization_health_topic", "diagnostics_topic",
       "worker_health_topic", "execution_context_topic", "motion_grant_topic", "motion_arm_service",
-      "odom_topic"})
+      "odom_topic", "motion_retry_service"})
   {
     params.emplace_back(std::string("FollowPath.") + name, prefix + name);
   }
@@ -64,6 +64,16 @@ TEST(NeuPANExecutionROS, RealCallbacksHandshakeThenFatalRetiresContext)
     prefix + "motion_grant_topic", 20,
     [&](std_msgs::msg::String::SharedPtr msg) {grant = Json::parse(msg->data);});
   auto client = peer->create_client<std_srvs::srv::Trigger>(prefix + "motion_arm_service");
+  auto retry_client = peer->create_client<std_srvs::srv::Trigger>(prefix + "motion_retry_service");
+  auto query_retry = [&]() {
+      auto request = retry_client->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+      const auto deadline = std::chrono::steady_clock::now() + 1s;
+      while (request.wait_for(0s) != std::future_status::ready && std::chrono::steady_clock::now() < deadline) {
+        executor.spin_some(); std::this_thread::sleep_for(5ms);
+      }
+      EXPECT_EQ(request.wait_for(0s), std::future_status::ready);
+      return request.wait_for(0s) == std::future_status::ready && request.get()->success;
+    };
   auto publish = [](const auto & pub, const Json & j) {
       std_msgs::msg::String msg; msg.data = j.dump(); pub->publish(msg);
     };
@@ -166,6 +176,12 @@ TEST(NeuPANExecutionROS, RealCallbacksHandshakeThenFatalRetiresContext)
   nav_msgs::msg::Path path; path.header.frame_id = "map";
   geometry_msgs::msg::PoseStamped pose; pose.header = path.header; pose.pose.orientation.w = 1.;
   path.poses.push_back(pose); pose.pose.position.x = 1.; path.poses.push_back(pose);
+  for (double w : {0., 2., 1e308}) {
+    auto invalid_path = path;
+    for (auto & point : invalid_path.poses) {point.pose.orientation.w = w;}
+    plugin.setPlan(invalid_path);
+    EXPECT_THROW(plugin.computeVelocityCommands(pose, geometry_msgs::msg::Twist(), nullptr), std::exception);
+  }
   plugin.setPlan(path);
   auto zero = plugin.computeVelocityCommands(pose, geometry_msgs::msg::Twist(), nullptr);
   EXPECT_DOUBLE_EQ(zero.twist.linear.x, 0.);
@@ -198,6 +214,7 @@ TEST(NeuPANExecutionROS, RealCallbacksHandshakeThenFatalRetiresContext)
       contexts.begin(), contexts.end(), [](const Json & j) {
         return j.at("state") == "END";
       }));
+  EXPECT_FALSE(query_retry());
   EXPECT_THROW(plugin.beginExecution("test-authority", "another-attempt"), std::exception);
   plugin.deactivate(); parent->deactivate(); plugin.cleanup();
   EXPECT_FALSE(parent->set_parameter(rclcpp::Parameter("FollowPath.shadow_mode", true)).successful);

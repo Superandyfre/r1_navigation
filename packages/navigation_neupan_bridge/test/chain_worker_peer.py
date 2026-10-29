@@ -40,9 +40,16 @@ def main():
             cycle_id=kwargs['cycle_id'],scan_counter=scan,info={},timings=dict(
             request_dispatched_monotonic=dispatched,worker_solve_end_monotonic=time.monotonic()))
         return outputs,record
-    node.client.startup=startup
-    node.client.solve=solve
-    sub=node.create_subscription(String,'/test_failstop_chain/inject',lambda msg:fatal.set(),20)
+    real_solver=os.environ.get('NEUPAN_CHAIN_WORKER')=='actual-solver'
+    if not real_solver:
+        node.client.startup=startup
+        node.client.solve=solve
+    def inject(msg):
+        if real_solver:
+            process=node.client.process
+            if process is not None and process.is_alive():process.kill()
+        else:fatal.set()
+    sub=node.create_subscription(String,'/test_failstop_chain/inject',inject,20)
     executor=MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
     stopping=threading.Event()

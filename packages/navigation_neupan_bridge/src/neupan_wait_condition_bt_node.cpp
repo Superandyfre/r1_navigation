@@ -5,6 +5,9 @@
 #include <cmath>
 #include <cstddef>
 #include <memory>
+#include <future>
+#include <stdexcept>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -15,6 +18,7 @@
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/trigger.hpp"
 
 namespace navigation_neupan_bridge
 {
@@ -84,6 +88,69 @@ public:
     setOutput("path", candidate);
     return BT::NodeStatus::SUCCESS;
   }
+};
+
+// A fresh request to the authority gates recovery. Topic delivery timing cannot
+// turn an already latched runtime fault into a BT retry permission.
+class CanRetryNeuPANExecution : public BT::StatefulActionNode
+{
+public:
+  CanRetryNeuPANExecution(const std::string & name, const BT::NodeConfiguration & config)
+  : BT::StatefulActionNode(name, config)
+  {
+    node_ = config.blackboard->get<rclcpp::Node::SharedPtr>("node");
+    callback_group_ = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
+    executor_.add_callback_group(callback_group_, node_->get_node_base_interface());
+    std::string service;
+    getInput("service_name", service);
+    client_ = node_->create_client<std_srvs::srv::Trigger>(
+      service, rmw_qos_profile_services_default, callback_group_);
+    getInput("timeout_sec", timeout_);
+    if (!std::isfinite(timeout_) || timeout_ <= 0.) {throw std::invalid_argument("invalid_retry_query_timeout");}
+  }
+  static BT::PortsList providedPorts()
+  {
+    return {BT::InputPort<std::string>("service_name", "/neupan_controller/can_retry", "Read-only authority query"),
+      BT::InputPort<double>("timeout_sec", .5, "Steady-clock response deadline")};
+  }
+  BT::NodeStatus onStart() override
+  {
+    clear();
+    try {
+      if (!client_->service_is_ready()) {return BT::NodeStatus::FAILURE;}
+      started_ = std::chrono::steady_clock::now();
+      pending_.emplace(client_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>()));
+      return BT::NodeStatus::RUNNING;
+    } catch (const std::exception &) {
+      clear(); return BT::NodeStatus::FAILURE;
+    }
+  }
+  BT::NodeStatus onRunning() override
+  {
+    try {
+      executor_.spin_some();
+      if (!pending_ || std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count() > timeout_) {
+        clear(); return BT::NodeStatus::FAILURE;
+      }
+      if (pending_->wait_for(std::chrono::seconds(0)) != std::future_status::ready) {return BT::NodeStatus::RUNNING;}
+      const auto response = pending_->get(); pending_.reset();
+      return response->success && response->message == "neupan_retry_permitted" ?
+             BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+    } catch (const std::exception &) {
+      clear(); return BT::NodeStatus::FAILURE;
+    }
+  }
+  void onHalted() override {clear();}
+  ~CanRetryNeuPANExecution() override {clear();}
+private:
+  void clear() {if (pending_) {client_->remove_pending_request(pending_->request_id); pending_.reset();}}
+  rclcpp::Node::SharedPtr node_;
+  rclcpp::CallbackGroup::SharedPtr callback_group_;
+  rclcpp::executors::SingleThreadedExecutor executor_;
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr client_;
+  std::optional<rclcpp::Client<std_srvs::srv::Trigger>::FutureAndRequestId> pending_;
+  std::chrono::steady_clock::time_point started_;
+  double timeout_{.5};
 };
 
 class IsNeuPANWaiting : public BT::ConditionNode
@@ -177,4 +244,5 @@ BT_REGISTER_NODES(factory)
 {
   factory.registerNodeType<navigation_neupan_bridge::AcceptNeuPANPath>("AcceptNeuPANPath");
   factory.registerNodeType<navigation_neupan_bridge::IsNeuPANWaiting>("IsNeuPANWaiting");
+  factory.registerNodeType<navigation_neupan_bridge::CanRetryNeuPANExecution>("CanRetryNeuPANExecution");
 }

@@ -50,9 +50,12 @@ class FailstopChainROS(unittest.TestCase):
         self.artifacts=[]
         self.context = None
         self.statuses, self.outputs, self.raw, self.smooth, self.contexts = [], [], [], [], []
+        self.sources=[]
+        self.healths=[]
         self.sequence = 0
         self.next_pulse = 0.
-        self.real_node=os.environ.get('NEUPAN_CHAIN_WORKER')=='actual-node-fake-ipc'
+        self.worker_mode=os.environ.get('NEUPAN_CHAIN_WORKER','synthetic')
+        self.real_node=self.worker_mode in ('actual-node-fake-ipc','actual-solver')
         self.fatal = False
         self.source_enabled = True
         self.position = 0.
@@ -61,15 +64,18 @@ class FailstopChainROS(unittest.TestCase):
         def context(msg):
             self.context=json.loads(msg.data)
             self.contexts.append((time.monotonic(),self.context))
-        self.subs = [self.node.create_subscription(String,PREFIX+'context',context,20),
+        self.subs = [self.node.create_subscription(String,PREFIX+'health',lambda m:self.healths.append((time.monotonic(),json.loads(m.data))),20),
+                     self.node.create_subscription(String,PREFIX+'source',lambda m:self.sources.append((time.monotonic(),json.loads(m.data))),20),
+                     self.node.create_subscription(String,PREFIX+'context',context,20),
                      self.node.create_subscription(String,PREFIX+'status',lambda m:self.statuses.append((time.monotonic(),json.loads(m.data))),20)]
         for name, rows in [('output',self.outputs),('raw',self.raw),('smooth',self.smooth)]:
             self.subs.append(self.node.create_subscription(Twist,PREFIX+name,
                 lambda m,rows=rows:rows.append((time.monotonic(),m.linear.x,m.angular.z)),20))
         plugin = dict(plugin='navigation_neupan_bridge/NeuPANController',shadow_mode=False,
             require_localization_ready=False,require_gate_match=False,navigation_frame='map',
+            max_linear=.20,max_reverse=.20,max_angular=.40,
             worker_health_timeout=.5,navigation_authority_timeout=.5,planner_input_timeout=.75,
-            envelope_timeout=.5,envelope_recovery_timeout=1.,envelope_startup_timeout=5.,
+            envelope_timeout=.5,envelope_recovery_timeout=1.,envelope_startup_timeout=40.,
             arm_odom_frame='odom',arm_base_frame='base_link')
         for key,topic in dict(path_topic='path',goal_topic='goal',envelope_topic='source',
             guard_status_topic='status',worker_health_topic='health',execution_context_topic='context',
@@ -82,7 +88,7 @@ class FailstopChainROS(unittest.TestCase):
             failure_tolerance=0.,runtime_costmap_wait_timeout_sec=2.,odom_topic=PREFIX+'odom',
             controller_plugins=['FollowPath'],progress_checker_plugin='progress_checker',
             goal_checker_plugins=['goal_checker'],
-            progress_checker={'plugin':'nav2_controller::SimpleProgressChecker','movement_time_allowance':20.},
+            progress_checker={'plugin':'nav2_controller::SimpleProgressChecker','movement_time_allowance':60.},
             goal_checker={'plugin':'nav2_controller::SimpleGoalChecker','xy_goal_tolerance':.1,'yaw_goal_tolerance':.1},
             FollowPath=plugin)},
           'local_costmap':{'local_costmap':{'ros__parameters':dict(use_sim_time=False,
@@ -115,7 +121,8 @@ class FailstopChainROS(unittest.TestCase):
                 forward_only_enabled=False,command_stabilizer_enabled=False,
                 auto_gear_transition_enabled=False,obstacle_motion_enabled=False)
             helper=Path(__file__).with_name('chain_worker_peer.py')
-            args=['/usr/bin/python3',str(helper),'--ros-args']
+            python='/home/rpp/venvs/neupan_ros_humble/bin/python' if self.worker_mode=='actual-solver' else '/usr/bin/python3'
+            args=[python,str(helper),'--ros-args']
             for key,value in parameters.items():
                 args+=['-p',key+':='+str(value).lower() if isinstance(value,bool) else key+':='+str(value)]
             log=open(self.report/'actual_worker_node.log','w');self.logs.append(log)
@@ -152,6 +159,9 @@ class FailstopChainROS(unittest.TestCase):
         for path in sorted(loaded):
             self.artifacts.append(dict(loaded_library=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
         if self.real_node:
+            for path in [WS/'src/r1_navigation/packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml',
+                         WS/'src/r1_navigation/packages/r1_neupan_integration/config/models/dune_model_5000.pth']:
+                self.artifacts.append(dict(planner_input=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
             for name in ('n1_15_node.py','n1_16_node.py','execution_protocol.py'):
                 path=WS/'src/r1_navigation/packages/r1_neupan_integration/r1_neupan_integration'/name
                 self.artifacts.append(dict(worker_source=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
@@ -177,7 +187,7 @@ class FailstopChainROS(unittest.TestCase):
                 except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=3)
         for log in self.logs:log.close()
         (self.report/'trace.json').write_text(json.dumps(dict(status=self.statuses,output=self.outputs,
-            raw=self.raw,smooth=self.smooth,context=self.contexts),indent=2))
+            raw=self.raw,smooth=self.smooth,context=self.contexts,source=self.sources,health=self.healths),indent=2))
         self.node.destroy_node();rclpy.shutdown()
 
     def publish(self,key,payload):
@@ -247,7 +257,9 @@ class FailstopChainROS(unittest.TestCase):
 
     def exercise(self,mode):
         handle=self.goal();result=handle.get_result_async()
-        self.until(lambda:any(v>.04 for _,v,_ in self.outputs))
+        self.until(lambda:any(v>.04 for _,v,_ in self.outputs) or result.done(),50)
+        self.assertTrue(any(v>.04 for _,v,_ in self.outputs),
+            'Action ended before any final nonzero, see '+str(self.report))
         self.assertEqual(self.context['navigation_attempt_id'],bytes(handle.goal_id.uuid).hex())
         self.assertFalse(result.done())
         marker=time.monotonic()
@@ -277,12 +289,38 @@ class FailstopChainROS(unittest.TestCase):
         record=dict(scenario=mode,result_status=terminal.status,terminal_sec=terminal_at-marker,
             final_zero_observed_sec=first_zero-marker,last_nonzero_after_injection_sec=last_nonzero-marker,
             continuous_zero_samples=len(rows),report=str(self.report),real_components=['ControllerServer','NeuPANController','velocity_smoother','CollisionGuard'],
-            worker='actual N116Node with fake IPC solver' if self.real_node else 'synthetic',physical_motion=False)
+            worker=self.worker_mode,physical_motion=False)
+        (self.report/'result.json').write_text(json.dumps(record,indent=2));print(json.dumps(record))
+
+    def test_real_solver_observation_window(self):
+        if self.worker_mode!='actual-solver':self.skipTest('actual solver only')
+        handle=self.goal();result=handle.get_result_async()
+        self.until(lambda:any(v>.04 for _,v,_ in self.outputs) or result.done(),50)
+        self.assertFalse(result.done())
+        marker=time.monotonic()
+        duration=30.
+        while time.monotonic()<marker+duration:
+            self.tick()
+            self.assertFalse(result.done(),'unexpected terminal during steady observation')
+        rows=[r for r in self.outputs if r[0]>=marker]
+        self.assertGreater(len(rows),duration*30)
+        nonzero=sum(abs(v)>.04 for _,v,w in rows)
+        self.assertGreater(nonzero/len(rows),.8)
+        sources=[s for t,s in self.sources if t>=marker]
+        self.assertGreater(len(sources),30)
+        age=sorted(s['planner_result_monotonic']-s['scan_receive_monotonic'] for s in sources)
+        self.assertTrue(all(v>=0 for v in age))
+        self.future(handle.cancel_goal_async())
+        self.assertEqual(self.future(result).status,GoalStatus.STATUS_CANCELED)
+        record=dict(scenario='real_solver_30sec',worker=self.worker_mode,physical_motion=False,
+            duration_sec=duration,final_samples=len(rows),nonzero_fraction=nonzero/len(rows),
+            source_count=len(sources),input_age_p95_sec=age[int(.95*(len(age)-1))],
+            input_age_max_sec=max(age),report=str(self.report))
         (self.report/'result.json').write_text(json.dumps(record,indent=2));print(json.dumps(record))
 
     def test_same_path_uuid_preemption(self):
         first=self.goal();first_result=first.get_result_async()
-        self.until(lambda:any(v>.04 for _,v,_ in self.outputs))
+        self.until(lambda:any(v>.04 for _,v,_ in self.outputs),50)
         old_id=bytes(first.goal_id.uuid).hex()
         second=self.goal();second_id=bytes(second.goal_id.uuid).hex()
         self.assertNotEqual(old_id,second_id)
@@ -296,7 +334,7 @@ class FailstopChainROS(unittest.TestCase):
         ends={c['navigation_attempt_id'] for _,c in self.contexts if c['state']=='END'}
         self.assertTrue({old_id,second_id}.issubset(ends))
         record=dict(scenario='same_path_uuid_preemption',old_attempt=old_id,new_attempt=second_id,
-            worker='actual N116Node with fake IPC solver' if self.real_node else 'synthetic',
+            worker=self.worker_mode,
             report=str(self.report),physical_motion=False)
         (self.report/'result.json').write_text(json.dumps(record,indent=2));print(json.dumps(record))
 

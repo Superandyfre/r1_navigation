@@ -88,6 +88,7 @@ controller_server:
       execution_context_topic: /neupan_execution_context
       motion_grant_topic: /neupan_motion_grant
       motion_arm_service: /neupan_controller/arm
+      motion_retry_service: /neupan_controller/can_retry
       arm_odom_frame: odom
       arm_base_frame: base_link
       odom_topic: /odom

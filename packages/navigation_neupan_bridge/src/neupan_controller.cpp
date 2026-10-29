@@ -124,6 +124,7 @@ void NeuPANController::configure(
     std::make_pair("execution_context_topic", &execution_context_topic_),
     std::make_pair("motion_grant_topic", &motion_grant_topic_),
     std::make_pair("motion_arm_service", &motion_arm_service_),
+    std::make_pair("motion_retry_service", &motion_retry_service_),
     std::make_pair("arm_odom_frame", &arm_odom_frame_),
     std::make_pair("arm_base_frame", &arm_base_frame_),
     std::make_pair("odom_topic", &odom_topic_)})
@@ -209,6 +210,13 @@ void NeuPANController::configure(
       response->message = response->success ? "run_armed_each_action_still_requires_grant" :
         "arm_denied_require_idle_stopped_fresh_guard_and_no_fatal";
     });
+  retry_service_ = node_->create_service<std_srvs::srv::Trigger>(motion_retry_service_,
+    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      response->success = active_ && !shadow_mode_ && execution_->retryAllowed(monotonicNow());
+      response->message = response->success ? "neupan_retry_permitted" : "neupan_retry_denied";
+    });
   runtime_timer_ = node_->create_wall_timer(std::chrono::milliseconds(50),
     std::bind(&NeuPANController::runtimeTick, this));
 
@@ -248,6 +256,7 @@ void NeuPANController::cleanup()
   envelope_ = Envelope{};
   runtime_timer_.reset();
   arm_service_.reset();
+  retry_service_.reset();
   worker_health_sub_.reset();
   odom_sub_.reset();
   execution_context_pub_.reset();
@@ -383,6 +392,11 @@ void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
       !finite(pose.pose.position.z) || !finite(pose.pose.orientation.x) ||
       !finite(pose.pose.orientation.y) || !finite(pose.pose.orientation.z) ||
       !finite(pose.pose.orientation.w)) {rejectPlan("nonfinite_path"); return;}
+    const auto & q = pose.pose.orientation;
+    const double norm = std::hypot(std::hypot(q.x, q.y), std::hypot(q.z, q.w));
+    if (!finite(norm) || std::abs(norm - 1.) > 1e-3 || !finite(tf2::getYaw(q))) {
+      rejectPlan("invalid_path_quaternion"); return;
+    }
     pose.header.frame_id = navigation_frame_;
   }
 

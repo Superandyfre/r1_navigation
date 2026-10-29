@@ -57,7 +57,7 @@ add_library(neupan_wait_condition_bt_node SHARED src/neupan_wait_condition_bt_no
 target_compile_features(neupan_wait_condition_bt_node PUBLIC cxx_std_17)
 target_compile_definitions(neupan_wait_condition_bt_node PRIVATE BT_PLUGIN_EXPORT)
 ament_target_dependencies(neupan_wait_condition_bt_node
-  behaviortree_cpp_v3 nav2_behavior_tree nav_msgs rclcpp std_msgs)
+  behaviortree_cpp_v3 nav2_behavior_tree nav_msgs rclcpp std_msgs std_srvs)
 
 add_executable(r1_localization_monitor src/r1_localization_monitor.cpp)
 target_compile_features(r1_localization_monitor PUBLIC cxx_std_17)
@@ -130,11 +130,14 @@ if(BUILD_TESTING)
   target_link_libraries(test_neupan_execution_ros ${PROJECT_NAME})
   ament_target_dependencies(test_neupan_execution_ros
     r1_neupan_runtime nav2_core nav2_costmap_2d nav_msgs rclcpp std_msgs std_srvs tf2_ros)
+  find_library(NAV2_RECOVERY_BT_LIBRARY nav2_recovery_node_bt_node
+    PATHS "${nav2_behavior_tree_DIR}/../../../lib" REQUIRED)
   ament_add_gtest(test_neupan_wait_condition_bt test/test_neupan_wait_condition_bt.cpp)
   target_compile_definitions(test_neupan_wait_condition_bt PRIVATE
-    WAIT_PLUGIN_PATH="$<TARGET_FILE:neupan_wait_condition_bt_node>")
+    WAIT_PLUGIN_PATH="$<TARGET_FILE:neupan_wait_condition_bt_node>"
+    RECOVERY_PLUGIN_PATH="${NAV2_RECOVERY_BT_LIBRARY}")
   ament_target_dependencies(test_neupan_wait_condition_bt
-    behaviortree_cpp_v3 geometry_msgs nav_msgs rclcpp std_msgs)
+    behaviortree_cpp_v3 geometry_msgs nav_msgs rclcpp std_msgs std_srvs)
 endif()
 
 ament_export_dependencies(
