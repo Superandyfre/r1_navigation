@@ -118,7 +118,9 @@ and `NEUPAN_CHAIN_WORKER=actual-solver`, then run:
 ```
 
 Suites: chain, navigator, cognav, restart, startup-tf, revoke-loss,
-handshake-loss, source-recovery, owner-loss, owner-protocol, cognav-owner, navigator-owner, pending-halt, ack-delay, or all (42 cases, sequential). Never run multiple
+handshake-loss, source-recovery, owner-loss, owner-protocol, cognav-owner,
+navigator-owner, navigator-freeze, pending-halt, ack-delay, or all (43 cases,
+sequential). Never run multiple
 suites concurrently in domain192. The runner verifies the entire saved install
 inventory, testing-off caches recorded in it, and absence of the test adapter;
 it selects candidate C++ executables/libraries, installed Python, planner/model
@@ -145,6 +147,14 @@ requires an independent trace with no ACTIVE context, Source or COMMIT, and
 nonempty all-zero output. This proves pre-execution denial only, not solver
 provenance. Failed setup or a test without that result still fails missing-source
 checks. When a solver starts, every observed source must resolve inside the bundle.
+
+The ACK-delay proxy writes `ack-peer/ready.json` only after its actual downstream
+send-goal client reports the service ready. Tests wait for this preparation before
+launching Navigator; synthetic inputs keep running. This separates discovery
+preparation from the injected two-second response hold and leaves runtime
+deadlines unchanged. Each event records `service_ready_on_receive`. Readiness is
+local discovery evidence, not proof of server reverse matching; an actual RMW
+response timeout remains a failure. Proxy JSON records are replaced atomically.
 
 The Chinese [deployment and rollback runbook](DEPLOYMENT_RUNBOOK.md) describes
 the proposed complete-version switch, required operator evidence, refusal

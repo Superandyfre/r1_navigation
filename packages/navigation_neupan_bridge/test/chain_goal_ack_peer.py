@@ -6,6 +6,7 @@ from pathlib import Path
 import signal
 import sys
 import time
+import threading
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -18,14 +19,25 @@ report=Path(sys.argv[1]);report.mkdir(exist_ok=False)
 rclpy.init();node=Node('test_delayed_follow_path_ack')
 group=ReentrantCallbackGroup();events=[]
 client=node.create_client(FollowPath.Impl.SendGoalService,'/follow_path/_action/send_goal',callback_group=group)
-def save(): (report/'events.json').write_text(json.dumps(events,indent=2)+'\n')
+save_lock=threading.Lock()
+def atomic_json(name,value):
+    temporary=report/(name+'.tmp')
+    temporary.write_text(json.dumps(value,indent=2)+'\n')
+    temporary.replace(report/name)
+def save():
+    with save_lock:atomic_json('events.json',events)
 def forward(request,response):
     event=dict(received=time.monotonic(),uuid=bytes(request.goal_id.uuid).hex());events.append(event);save()
-    if not client.wait_for_service(timeout_sec=3.):raise RuntimeError('actual FollowPath unavailable')
+    event['service_ready_on_receive']=client.service_is_ready();save()
+    if not client.wait_for_service(timeout_sec=3.):
+        event['error']='actual FollowPath unavailable';save()
+        raise RuntimeError(event['error'])
     future=client.call_async(request)
     deadline=time.monotonic()+4.
     while not future.done() and time.monotonic()<deadline:time.sleep(.005)
-    if not future.done():raise RuntimeError('actual send_goal response timeout')
+    if not future.done():
+        event['error']='actual send_goal response timeout';save()
+        raise RuntimeError(event['error'])
     actual=future.result();event['actual_response']=time.monotonic();event['accepted']=actual.accepted;save()
     time.sleep(2.)
     event['delayed_response']=time.monotonic();save()
@@ -37,6 +49,12 @@ def stop(*unused):
     stopping=True
 signal.signal(signal.SIGINT,stop);signal.signal(signal.SIGTERM,stop)
 try:
-    while not stopping:executor.spin_once(timeout_sec=.05)
+    ready=False
+    while not stopping:
+        executor.spin_once(timeout_sec=.05)
+        if not ready and client.service_is_ready():
+            atomic_json('ready.json',dict(monotonic=time.monotonic(),service='/follow_path/_action/send_goal',
+                                         locally_ready=True))
+            ready=True
 finally:
     executor.shutdown(timeout_sec=5.);save();node.destroy_node();rclpy.shutdown()

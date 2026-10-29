@@ -38,6 +38,8 @@ class PendingHalt(NavigatorAckDelay):
         events=json.loads(eventfile.read_text());first=events[0]
         self.assertIn('accepted',first,'ACK proxy did not observe downstream response: '+str(first))
         self.assertTrue(first['accepted'])
+        self.assertTrue(first['service_ready_on_receive'])
+        self.assertIn('delayed_response',first,'ACK response hold not completed: '+str(first))
         self.assertLess(marker,first['delayed_response'])
         self.assertGreater(first['delayed_response']-first['actual_response'],1.9)
         self.assertFalse(any(v!=0. or w!=0. for _,v,w in self.outputs))

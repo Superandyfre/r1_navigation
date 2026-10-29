@@ -32,7 +32,8 @@ rmw_ret_t __rmw_send_response(const char * id, const rmw_service_t * service,
   for (const auto & handle:handles) {actual_match |= eprosima::fastrtps::rtps::iHandle2GUID(handle)==reader;}
   if (ret!=0) {fprintf(stderr,"RMW_WRITER_MATCHES ret=%u count=%zu target_present=%d\n",rc(),handles.size(),actual_match);}
   std::ostringstream guid;guid<<reader;
-  fprintf(stderr,"RMW_RESPONSE_OBSERVE pid=%d service=%s sequence=%ld reader=%s matched_before=%d matched_after=%d ret=%d seconds=%.6f\n",getpid(),service->service_name,header->sequence_number,guid.str().c_str(),before,after,ret,elapsed);
+  const auto monotonic=std::chrono::duration<double>(start.time_since_epoch()).count();
+  fprintf(stderr,"RMW_RESPONSE_OBSERVE pid=%d monotonic=%.9f service=%s sequence=%ld reader=%s matched_before=%d matched_after=%d ret=%d seconds=%.6f\n",getpid(),monotonic,service->service_name,header->sequence_number,guid.str().c_str(),before,after,ret,elapsed);
   return ret;
 }
 rmw_ret_t __rmw_send_request(const char * id, const rmw_client_t * client,
@@ -44,10 +45,14 @@ rmw_ret_t __rmw_send_request(const char * id, const rmw_client_t * client,
   if (!domain || std::string(domain)!="192" || !opt || std::string(opt)!="1") {
     return original(id,client,request,sequence);
   }
+  const auto start=std::chrono::steady_clock::now();
+  const auto request_before=static_cast<CustomClientInfo*>(client->data)->request_publisher_matched_count_.load();
+  const auto response_before=static_cast<CustomClientInfo*>(client->data)->response_subscriber_matched_count_.load();
   const auto ret=original(id,client,request,sequence);
   auto * info=static_cast<CustomClientInfo*>(client->data);
   std::ostringstream cached,actual;cached<<info->reader_guid_;actual<<info->response_reader_->guid();
-  fprintf(stderr,"RMW_REQUEST_OBSERVE pid=%d service=%s seq=%ld cached_reader=%s actual_reader=%s request_matches=%zu response_matches=%zu ret=%d\n",getpid(),client->service_name,*sequence,cached.str().c_str(),actual.str().c_str(),info->request_publisher_matched_count_.load(),info->response_subscriber_matched_count_.load(),ret);
+  const auto monotonic=std::chrono::duration<double>(start.time_since_epoch()).count();
+  fprintf(stderr,"RMW_REQUEST_OBSERVE pid=%d monotonic=%.9f service=%s seq=%ld cached_reader=%s actual_reader=%s request_before=%zu response_before=%zu request_matches=%zu response_matches=%zu ret=%d\n",getpid(),monotonic,client->service_name,*sequence,cached.str().c_str(),actual.str().c_str(),request_before,response_before,info->request_publisher_matched_count_.load(),info->response_subscriber_matched_count_.load(),ret);
   return ret;
 }
 

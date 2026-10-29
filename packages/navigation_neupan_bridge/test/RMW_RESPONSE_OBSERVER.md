@@ -37,6 +37,12 @@ before/after, original return value and original call duration. On failure,
 the API result must be checked before interpreting that list. Client request
 logs include cached/actual response-reader GUID and local match counts. These
 are observations, not a fix or proof of the global discovery root cause.
+Request records also include match counts immediately before the original send,
+and both records include the same-host steady-clock timestamp, so the two
+directions can be correlated by reader GUID, service and sequence. The response
+timestamp is the call start; `seconds` includes the observer's initial listener
+query and the original call. A client-side match is not proof that the server's
+reverse discovery state is already complete.
 
 The test harness also accepts `NEUPAN_LIFECYCLE_CLIENT_MODE=precreated` for a
 bounded A/B experiment: create persistent ChangeState clients before launching

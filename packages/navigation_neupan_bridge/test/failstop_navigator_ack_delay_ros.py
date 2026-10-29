@@ -18,6 +18,10 @@ class NavigatorAckDelay(nav.NavigatorFailstop):
             helper=Path(__file__).with_name('chain_goal_ack_peer.py')
             log=open(self.report/'goal-ack-peer.log','w');self.logs.append(log)
             self.procs.append(subprocess.Popen([sys.executable,str(helper),str(self.report/'ack-peer')],stdout=log,stderr=subprocess.STDOUT))
+            # The injected delay is the response hold, not late service discovery
+            # inside the proxy. Keep synthetic inputs alive while preparing it;
+            # do not extend any BT/Controller/Guard runtime deadline.
+            self.until(lambda:(self.report/'ack-peer/ready.json').is_file(),5.)
             remaps=[*remaps,'/follow_path/_action/send_goal:=/test_failstop_ack/follow_path/_action/send_goal']
             if self._testMethodName=='test_ack_timeout_revoke_unavailable':
                 remaps.append('/neupan_controller/revoke_uncertain_execution:=/test_failstop_ack/missing_revoke')
@@ -35,6 +39,7 @@ class NavigatorAckDelay(nav.NavigatorFailstop):
         self.until(lambda:time.monotonic()>terminal+6.,7.)
         events=json.loads((self.report/'ack-peer/events.json').read_text())
         self.assertTrue(events and events[0]['accepted'])
+        self.assertTrue(events[0]['service_ready_on_receive'])
         self.assertGreater(events[0]['delayed_response']-events[0]['actual_response'],1.9)
         context_observed=any(j['navigation_attempt_id']==events[0]['uuid'] for _,j in self.contexts)
         # The deny-only RPC can arrive before Controller begins the late goal.
