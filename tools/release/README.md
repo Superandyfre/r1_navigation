@@ -201,6 +201,26 @@ mistakenly treated as runtime configuration. Default pins cover221 explicit
 runtime inputs (including82 Worker parameters); missing safety defaults still
 require independent review.
 
+`ui7_control_contract.py --bundle /absolute/bundle --calibration
+/absolute/calibration.json --environment /absolute/options.json --output
+/absolute/new-ui7-draft.json` traces installed selector and intermediate launch
+argument forwarding before deriving control pins. Options JSON accepts only
+`RPP_NEUPAN_SCAN_SOURCE`, `RPP_NEUPAN_USE_MESH_SELF_FILTER`,
+`RPP_NEUPAN_COLLISION_CHECK_ENABLED` and `RPP_NEUPAN_COLLISION_CHECK_DEFAULT`;
+empty values follow the button's Bash fallback semantics. Unknown options
+reject. Registered `Additional_environment_variables` are loaded first; supplied
+JSON is an explicitly reviewed effective override after external startup config,
+not a claim about the UI application's environment merge order. The current
+registration sets `RPP_NEUPAN_COLLISION_CHECK_DEFAULT=false`; an empty override
+JSON therefore produces collision checking disabled, unlike a bare script run.
+Its `bash_url` still points to the preserved production tree, not the bundle;
+the draft records this and does not change registration. The arm-gate success
+callback is evaluated with a synthetic success
+event solely to construct control include descriptions; no arm state probe,
+Node/LaunchService or hardware driver is executed. The tool does not source
+`.rpprc` or certify hardware admission. Review the selected environment and
+external shell configuration separately; a draft never grants motion.
+
 The separate `--suite navigator-tick-loss` is not part of standard `all`: it
 requires a deliberately test-only BT decorator, never installed in a candidate.
 Compile `packages/navigation_neupan_bridge/test/pause_tick_bt_node.cpp` outside

@@ -47,7 +47,7 @@ def select_parameters(document, name):
     return flatten(selected.get('ros__parameters', {}))
 
 
-def compile_contract(bundle, calibration, profile='smoothed', mesh=True, collision=True):
+def compile_contract(bundle, calibration, profile='smoothed', mesh=True, collision=True, scan_source='dual'):
     from ament_index_python.packages import get_package_share_directory
     from launch import LaunchContext
     from launch.actions import DeclareLaunchArgument
@@ -81,7 +81,7 @@ def compile_contract(bundle, calibration, profile='smoothed', mesh=True, collisi
     record(calibration)
     for filename, wanted, overrides in [
         ('r1_neupan_hw1_motion.launch.py', {'n1_16_production_bridge', 'r1_collision_guard'},
-         dict(calibration_record=str(calibration.resolve(strict=True)), scan_source='dual',
+         dict(calibration_record=str(calibration.resolve(strict=True)), scan_source=scan_source,
               command_profile=profile, use_mesh_self_filter=str(mesh).lower(),
               collision_check_enabled=str(collision).lower())),
         ('navigation_neupan.launch.py', {'controller_server', 'neupan_velocity_smoother', 'bt_navigator'},
@@ -140,7 +140,7 @@ def compile_contract(bundle, calibration, profile='smoothed', mesh=True, collisi
     record(description)
     return dict(pins=pins, remappings=remaps, topology=control_contract(pins, remaps), inputs=evidence,
                 informational_launch_inputs=informational_inputs,
-                launch_arguments=dict(scan_source='dual', command_profile=profile,
+                launch_arguments=dict(scan_source=scan_source, command_profile=profile,
                                       use_mesh_self_filter=mesh, collision_check_enabled=collision),
                 build_source_sha=manifest['build_source_sha'], tooling_source_sha=manifest['tooling_source_sha'],
                 review_complete=False, motion_authorized=False,
