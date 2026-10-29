@@ -114,6 +114,17 @@ uses the protected source integration, not a full packaged driver/vision stack.
 These are bounded-scope acceptance tests, not production startup or hardware
 acceptance; running them never approves deployment. Preserve raw logs and traces.
 
+To test a relocated review bundle, source its `install/local_setup.bash` after
+the required external ROS overlay and add `--bundle /absolute/bundle` alongside
+`--candidate /absolute/original-candidate`. The runner verifies the bundle's
+complete payload inventory, build SHA and installed file hashes against the
+candidate inventory. C++ components, installed Worker/config/model/BT, CogNav
+integration and child solver PYTHONPATH then select the bundle. Test adapters
+and synthetic sensor/planner helpers still come from the development test tree.
+Retain maps, imported CogNav source paths and Worker summary
+`neupan_source_root` records to verify actual loading. This is an isolated test
+entry; it does not invoke or validate the full production UI7 startup script.
+
 The Chinese [deployment and rollback runbook](DEPLOYMENT_RUNBOOK.md) describes
 the proposed complete-version switch, required operator evidence, refusal
 conditions, and rollback sequence. It is a draft awaiting rehearsal. There is

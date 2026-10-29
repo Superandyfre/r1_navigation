@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Actual protected CogNav Bridge + actual failstop chain, no camera/driver."""
 import argparse
+import importlib
 import hashlib
 import json
 from pathlib import Path
@@ -12,7 +13,8 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from std_msgs.msg import String
 import failstop_chain_ros as chain
-sys.path.insert(0,str(chain.WS/'src/r1_navigation/integrations/cognav'))
+COGNAV_ROOT=Path(getattr(chain.FailstopChainROS,'cognav_source_root',chain.WS/'src/r1_navigation/integrations/cognav'))
+sys.path.insert(0,str(COGNAV_ROOT))
 from robot_live.cognav_bridge import Bridge
 from robot_live.protocol import SCHEMA, write_json
 
@@ -35,7 +37,8 @@ class CogNavFailstop(chain.FailstopChainROS):
         self.until(lambda:not self.bridge.neupan.reason(time.monotonic()) and
                    getattr(self.bridge,'motion_payload',{}).get('inputs_valid') is True,seconds=8)
         for name in ['cognav_bridge.py','protocol.py','shutdown.py','neupan_failstop.py']:
-            p=chain.WS/'src/r1_navigation/integrations/cognav/robot_live'/name
+            p=Path(importlib.import_module('robot_live.'+Path(name).stem).__file__).resolve()
+            self.assertTrue(p.is_relative_to(COGNAV_ROOT.resolve()),str(p))
             self.artifacts.append(dict(cognav_source=str(p),sha256=hashlib.sha256(p.read_bytes()).hexdigest()))
         (self.report/'binaries.json').write_text(json.dumps(self.artifacts,indent=2))
 

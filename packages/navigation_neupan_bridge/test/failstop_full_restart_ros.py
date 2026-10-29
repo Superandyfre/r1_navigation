@@ -21,7 +21,9 @@ class FullRestart(PartialRestart):
         import tempfile
         self.ledger_dir = Path(tempfile.mkdtemp(prefix='neupan-restart-ledger-'))
         self.ledger = self.ledger_dir/'context.json'
-        self.worker_environment = dict(os.environ)
+        # Preserve a release bundle's pinned solver path while varying only
+        # the ledger input. Replacing this environment selects external NeuPAN.
+        self.worker_environment = dict(getattr(self,'worker_environment',os.environ))
         self.worker_environment.pop('N116_CTX_LEDGER', None)
         mode = self._testMethodName.removeprefix('test_')
         if mode != 'disabled':

@@ -14,9 +14,43 @@ import sys
 import unittest
 
 
+def nested_values(value, key):
+    if isinstance(value,dict):
+        if key in value:yield value[key]
+        for child in value.values():yield from nested_values(child,key)
+    elif isinstance(value,list):
+        for child in value:yield from nested_values(child,key)
+
+
+def verify_solver_provenance(report, bundle):
+    """Check actual parent/child summaries, including restarted Workers."""
+    roots=[];errors=[]
+    for summary in report.glob('**/summary.json'):
+        data=json.loads(summary.read_text())
+        for value in nested_values(data,'neupan_source_root'):
+            roots.append(value)
+            if Path(value).resolve()!=bundle/'third_party/NeuPAN':
+                errors.append('wrong_solver:'+str(summary)+':'+value)
+        for value in nested_values(data,'integration_source'):
+            if not Path(value).resolve().is_relative_to(bundle/'install'):
+                errors.append('wrong_worker:'+str(summary)+':'+value)
+    if not roots:errors.append('missing_solver_provenance:'+str(report))
+    return errors
+
+
+class AcceptanceResult(unittest.TextTestResult):
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs);self.reports=[]
+
+    def stopTest(self,test):
+        if hasattr(test,'report'):self.reports.append(test.report)
+        super().stopTest(test)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate',required=True,type=Path)
+    parser.add_argument('--bundle',type=Path,help='Verify and run the relocated bundle instead of candidate/install')
     parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','ack-delay','all'],default='all')
     args=parser.parse_args()
     assert os.environ.get('ROS_DOMAIN_ID')=='192'
@@ -25,6 +59,17 @@ def main():
     assert os.environ.get('NEUPAN_CHAIN_WORKER')=='actual-solver'
     candidate=args.candidate.resolve(strict=True);install=candidate/'install'
     inventory=json.loads((candidate/'candidate-inventory.json').read_text())
+    bundle=args.bundle.resolve(strict=True) if args.bundle else None
+    if bundle:
+        manifest=json.loads((bundle/'releases/a-plus/manifest.json').read_text())
+        assert manifest['build_source_sha']==inventory['source_sha']
+        assert Path(manifest['inventory_root']).resolve()==bundle
+        assert manifest['inventory'] and manifest['build_testing'] is False
+        for row in manifest['inventory']:
+            path=(bundle/row['path']).resolve(strict=True)
+            assert path.is_relative_to(bundle),path
+            assert hashlib.sha256(path.read_bytes()).hexdigest()==row['sha256'],path
+        install=bundle/'install'
     for row in inventory['files']:
         path=install/row['path']
         assert path.resolve().is_relative_to(install),path
@@ -44,9 +89,14 @@ def main():
     base.worker_source_root=install/'r1_neupan_integration/lib/python3.10/site-packages/r1_neupan_integration'
     base.candidate_configdir=install/'navigation_neupan_bridge/share/navigation_neupan_bridge/config'
     base.candidate_checkpoint=install/'r1_neupan_integration/share/r1_neupan_integration/config/models/dune_model_5000.pth'
+    if bundle:
+        base.cognav_source_root=bundle/'integrations/cognav'
+        base.worker_environment=dict(os.environ)
+        base.worker_environment['PYTHONPATH']=str(bundle/'third_party/NeuPAN')+os.pathsep+os.environ.get('PYTHONPATH','')
     import r1_neupan_integration.n1_16_node as worker
     assert Path(worker.__file__).resolve().is_relative_to(install),worker.__file__
     print(json.dumps(dict(candidate=str(candidate),build_source_sha=inventory['source_sha'],
+        bundle=str(bundle) if bundle else None,
         worker_import=worker.__file__,inventory_verified_files=len(inventory['files']),suite=args.suite)),flush=True)
     modules=dict(chain='failstop_chain_ros',navigator='failstop_navigator_ros',
                  cognav='failstop_cognav_ros',restart='failstop_full_restart_ros',
@@ -56,6 +106,13 @@ def main():
                     'owner-loss':'failstop_owner_loss_ros','ack-delay':'failstop_navigator_ack_delay_ros'})
     selected=list(modules) if args.suite=='all' else [args.suite]
     suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromModule(importlib.import_module(modules[name])) for name in selected)
-    return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
+    result=unittest.TextTestRunner(verbosity=2,resultclass=AcceptanceResult).run(suite)
+    provenance_errors=[]
+    if bundle:
+        for report in result.reports:
+            provenance_errors.extend(verify_solver_provenance(report,bundle))
+        print(json.dumps(dict(bundle_provenance_errors=provenance_errors,
+                              scenes_checked=len(result.reports))),flush=True)
+    return 0 if result.wasSuccessful() and not provenance_errors else 1
 
 if __name__=='__main__':sys.exit(main())
