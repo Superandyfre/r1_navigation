@@ -93,6 +93,7 @@ void NeuPANController::configure(
   declareIfMissing(node_, plugin_name_ + ".localization_health_timeout", localization_health_timeout_sec_);
   declareIfMissing(node_, plugin_name_ + ".localization_startup_timeout", localization_startup_timeout_sec_);
   declareIfMissing(node_, plugin_name_ + ".require_localization_ready", require_localization_ready_);
+  declareIfMissing(node_, plugin_name_ + ".auto_arm_on_ready", auto_arm_on_ready_);
 
   node_->get_parameter(plugin_name_ + ".navigation_frame", navigation_frame_);
   node_->get_parameter(plugin_name_ + ".path_topic", path_topic_);
@@ -119,6 +120,7 @@ void NeuPANController::configure(
   node_->get_parameter(plugin_name_ + ".localization_health_timeout", localization_health_timeout_sec_);
   node_->get_parameter(plugin_name_ + ".localization_startup_timeout", localization_startup_timeout_sec_);
   node_->get_parameter(plugin_name_ + ".require_localization_ready", require_localization_ready_);
+  node_->get_parameter(plugin_name_ + ".auto_arm_on_ready", auto_arm_on_ready_);
 
   for (auto pair : {std::make_pair("worker_health_topic", &worker_health_topic_),
     std::make_pair("execution_context_topic", &execution_context_topic_),
@@ -395,6 +397,23 @@ void NeuPANController::runtimeTick()
   if (shadow_mode_) {return;}
   std::lock_guard<std::mutex> lock(mutex_);
   if (!execution_) {return;}
+  // HW1 normal startup: enable an idle run once the existing stopped/Guard
+  // checks and localization readiness pass. Never clear or auto-recover FATAL.
+  if (auto_arm_on_ready_ && active_ && !execution_->armed() &&
+    !execution_->active() && !execution_->faulted())
+  {
+    const auto now = std::chrono::steady_clock::now();
+    const bool localization_ready = !require_localization_ready_ ||
+      (localization_health_.valid && localization_health_.state == "READY" &&
+      std::chrono::duration<double>(now - localization_health_.received_at).count() <=
+      localization_health_timeout_sec_);
+    const double stamp = monotonicNow();
+    if (localization_ready && execution_->arm(stamp,
+      stopped_odometry_.stopped(stamp, node_->now().nanoseconds())))
+    {
+      RCLCPP_INFO(node_->get_logger(), "NeuPAN navigation enabled automatically; ready for a new goal");
+    }
+  }
   // Periodic, read-only state remains visible after an Action has ended. It
   // never grants motion; consumers must still pass the normal grant protocol.
   if (diagnostics_pub_) {
@@ -403,6 +422,7 @@ void NeuPANController::runtimeTick()
       {"controller_boot_id", execution_->boot()}, {"sequence", ++runtime_status_sequence_},
       {"authority_boot_id", execution_->authority()},
       {"monotonic", monotonicNow()}, {"plugin_active", active_},
+      {"run_armed", execution_->armed()},
       {"execution_active", execution_->active()}, {"fault_latched", execution_->faulted()},
       {"fault_reason", execution_->fault()}, {"navigation_attempt_id", execution_->attempt()}}.dump();
     try {diagnostics_pub_->publish(status);}

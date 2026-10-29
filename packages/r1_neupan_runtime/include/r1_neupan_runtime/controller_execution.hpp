@@ -232,6 +232,7 @@ public:
   void disarm() {armed_ = false;}
   bool faulted() const {return !fault_.empty();}
   bool active() const {return active_;}
+  bool armed() const {return armed_ && !faulted();}
   const std::string & fault() const {return fault_;}
   const std::string & boot() const {return boot_;}
   const std::string & authority() const {return authority_;}

@@ -164,6 +164,7 @@ private:
   double localization_startup_timeout_sec_{10.0};
   bool require_localization_ready_{true};
   bool active_{false};
+  bool auto_arm_on_ready_{false};
   bool plan_valid_{false};
   bool localization_ready_observed_{false};
   int path_version_{0};

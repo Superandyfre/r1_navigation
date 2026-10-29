@@ -58,7 +58,7 @@ HW1 已移除最终 Guard 中额外的障碍几何检查，`collision_check_enab
 
 ### 3.1 Action 接受与运动许可分离
 
-FollowPath 返回 accepted，仅表示导航端接受了该目标请求。允许非零速度还需要满足显式启用、上游执行归属确认、当前求解结果有效、定位/里程计有效以及 Guard 授权等条件。
+FollowPath 返回 accepted，仅表示导航端接受了该目标请求。允许非零速度还需要满足运行启用、上游执行归属确认、当前求解结果有效、定位/里程计有效以及 Guard 授权等条件。
 
 因此，“Action 已接受但机器人不动”不能直接判断为求解器卡死。需联合检查执行状态、首故障、owner 确认、求解结果及 Guard 停止原因。
 
@@ -117,6 +117,7 @@ Controller 状态关键字段为：
 | `navigation_attempt_id` | 当前实际 FollowPath UUID |
 | `sequence`、`monotonic` | 消息序列与同机单调时钟时间 |
 | `plugin_active`、`execution_active` | 插件是否激活、是否存在活动执行 |
+| `run_armed` | 当前运行是否已启用；UI7 就绪后自动设为 true |
 | `fault_latched`、`fault_reason` | 是否锁存故障及其原因 |
 
 状态话题只提供观察信息，不授予运动权限。同一话题可能含其他 schema 的诊断消息；不能将任意消息到达都当作目标状态刷新。组件启动身份或 Worker 代次意外变化时，应中止旧执行关联，重新确认系统状态。
@@ -161,7 +162,7 @@ bridge 从新鲜 Controller 状态取得与该 UUID 对应的两个 boot ID 后�
 
 | 服务 | 类型 | 语义与调用边界 |
 | --- | --- | --- |
-| `/neupan_controller/arm` | `std_srvs/srv/Trigger` | 显式启用当前运行周期；要求空闲、停止证据及有效状态且无致命故障。由现场/导航端管理，CogNav 不自动调用 |
+| `/neupan_controller/arm` | `std_srvs/srv/Trigger` | 启用当前运行周期；UI7 在空闲、停止证据及定位/Guard 状态有效且无致命故障时自动完成，无需单独操作。此服务保留供诊断使用，CogNav 不重复调用 |
 | `/neupan_controller/can_retry` | `std_srvs/srv/Trigger` | 只查询当前重试许可；不是启用命令，也不是永久许可 |
 | `/neupan_controller/revoke_uncertain_execution` | `std_srvs/srv/Trigger` | 执行归属不确定时撤销当前运行周期。具有 run-wide 锁存效应，可能终止更新的目标；不能替代日常 cancel |
 
@@ -196,7 +197,7 @@ CogNav 不应发布导航内部的 `/neupan_execution_context`、`/neupan_planne
 
 当前平滑模式内部速度话题为 `/neupan_nav2_raw_cmd_vel`、`/neupan_nav2_smoothed_cmd_vel`，最终输出为 `/cmd_vel`；其他 profile 以实际映射为准。CogNav 不发布这些速度。RViz/Nav2 BT、CogNav 和 UI8 旧导航之间必须明确任务独占关系，避免同时控制同一底盘。
 
-UI7 当前不以发布验收批准作为启动前置条件，但运行时 arm、owner、授权握手和故障停车仍有效。**允许启动不代表验收通过，也不代表允许旁路运行时检查。**
+UI7 当前不以发布验收批准作为启动前置条件，且启动就绪后自动 arm；owner、授权握手和故障停车仍有效。**允许启动不代表验收通过，也不代表允许旁路运行时检查。**
 
 ## 7. 联调与实机验证要求
 
