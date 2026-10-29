@@ -77,6 +77,8 @@ class NavigatorFailstop(chain.FailstopChainROS):
         handle=self.future(client.send_goal_async(goal));self.assertTrue(handle.accepted)
         result=handle.get_result_async()
         self.until(lambda:any(v>.04 for _,v,_ in self.outputs) or result.done(),seconds=45)
+        if result.done() and not any(v>.04 for _,v,_ in self.outputs):
+            self.observe_early_top_terminal(result.result().status)
         self.assertTrue(any(v>.04 for _,v,_ in self.outputs),'no initial output: '+str(self.report))
         marker=time.monotonic();self.fatal=True;self.publish('inject',{'fault':'worker_crash'})
         self.assertEqual(self.future(result).status,GoalStatus.STATUS_ABORTED)
@@ -94,6 +96,18 @@ class NavigatorFailstop(chain.FailstopChainROS):
             fatal_to_terminal_sec=settled-marker,physical_motion=False,worker=self.worker_mode),indent=2))
         client.destroy()
 
+    def observe_early_top_terminal(self,status):
+        # Diagnostic only: keep synthetic inputs alive after top-level failure,
+        # so immediate teardown cannot conceal a late accepted FollowPath.
+        ended=time.monotonic()
+        self.until(lambda:time.monotonic()>ended+5.,6.)
+        rows=[r for r in self.outputs if r[0]>ended]
+        (self.report/'early-top-terminal.json').write_text(json.dumps(dict(
+            top_status=status,terminal_observed=ended,observation_seconds=5.,
+            later_nonzero_samples=sum(v!=0. or w!=0. for _,v,w in rows),
+            later_active_contexts=[j for t,j in self.contexts if t>ended and j['state']=='ACTIVE'],
+            physical_motion=False),indent=2))
+
     def test_ordinary_failure_retries_once(self):
         client=ActionClient(self.node,NavigateToPose,'/navigate_to_pose')
         self.until(client.server_is_ready)
@@ -102,6 +116,8 @@ class NavigatorFailstop(chain.FailstopChainROS):
         handle=self.future(client.send_goal_async(goal));self.assertTrue(handle.accepted)
         result=self.future(handle.get_result_async(),seconds=30)
         self.assertEqual(result.status,GoalStatus.STATUS_ABORTED)
+        if not any(v>.04 for _,v,_ in self.outputs):
+            self.observe_early_top_terminal(result.status)
         attempts={j['navigation_attempt_id'] for t,j in self.contexts if j['state']=='ACTIVE'}
         self.assertEqual(len(attempts),2,'ordinary progress failure should retain exactly one retry')
         self.assertTrue(any(v>.04 for _,v,_ in self.outputs))
