@@ -53,6 +53,27 @@ goals require fresh ownership. Ownership is only one necessary permission:
 explicit run arm, Worker health/Source, matching Guard handshake, command barrier,
 fresh physical-safety inputs and final permission checks still apply.
 
+UI7's `NeuPANFollowPath` now revises routes through `/update_follow_path`
+(`r1_neupan_runtime/srv/UpdatePath`) while holding the acknowledged action handle.
+The request supplies the exact `authority_boot_id`, `navigation_attempt_id` and
+`nav_msgs/Path`. The server rejects inactive/retired/wrong identities, invalid
+geometry and changed terminals. Acceptance means queued, not motion authorized;
+only the action loop applies the newest queued route. Route PREPARE/COMMIT,
+Worker/source version checks, ownership expiry and cancellation remain effective.
+BT waits at most 0.5 seconds for the service response and revokes on uncertainty.
+Material revisions are repeated until the published path version advances,
+allowing the existing route debounce to collect consistent observations.
+Timestamp-only route changes are ignored. Goal checker state survives revisions.
+
+UI7 supplies the accepted parent pose/poses with the corresponding path; a
+changed parent, terminal or controller/checker creates a fresh FollowPath UUID.
+An identical parent request with identical pose headers is not distinguishable
+from continuation through these BT ports. Clients requiring distinct executions
+for repeated identical destinations must cancel and await termination before
+resubmission, or supply a fresh stamped parent request. CogNav is unchanged and
+need not use the optional route service; normal FollowPath preemption retains
+the original fresh-UUID semantics.
+
 Action outcome, final zero Twist and actual robot stopping are distinct evidence.
 Tests use isolated domain192, synthetic inputs and no driver. Physical stopping,
 full startup reliability, complete races and release/rollback acceptance remain
