@@ -29,6 +29,10 @@ class HandshakeLoss(RevokeLoss):
         handle=self.goal();result=handle.get_result_async()
         self.until(lambda:any(e['dropped'] for e in self.relay_events) or result.done(),50)
         self.assertFalse(result.done(),'ended before intended handshake loss')
+        # PREPARE may precede first Source: DDS callbacks are independent.
+        # Observe actual Source arrival instead of assuming callback order.
+        self.until(lambda:bool(self.sources) or result.done(),50)
+        self.assertFalse(result.done(),'ended before first actual Source')
         self.assertTrue(self.sources)
         marker=time.monotonic()
         self.until(lambda:time.monotonic()>marker+.8)
