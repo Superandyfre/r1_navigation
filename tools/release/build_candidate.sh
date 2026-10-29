@@ -30,9 +30,9 @@ colcon --log-base "${candidate_root}/log" build \
   --install-base "${candidate_root}/install" \
   --parallel-workers 2 \
   --packages-select r1_neupan_runtime nav2_controller navigation_neupan_bridge \
-    r1_collision_guard r1_neupan_integration navigation_2d r1_lidar_preprocess \
+    r1_collision_guard r1_neupan_integration neupan_ros2 navigation_2d r1_lidar_preprocess \
   --allow-overriding nav2_controller navigation_neupan_bridge r1_collision_guard \
-    r1_neupan_integration navigation_2d r1_lidar_preprocess \
+    r1_neupan_integration neupan_ros2 navigation_2d r1_lidar_preprocess \
   --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DPython3_EXECUTABLE=/usr/bin/python3 \
     -Dfmt_DIR=/usr/lib/x86_64-linux-gnu/cmake/fmt
