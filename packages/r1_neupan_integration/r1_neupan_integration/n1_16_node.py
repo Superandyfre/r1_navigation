@@ -493,9 +493,24 @@ class N116Node(N115Node):
 
     def _shadow_fault_parameter_callback(self, parameters) -> SetParametersResult:
         """Permit the one-shot TF fault only in the explicit shadow launch."""
+        # These values construct publishers/subscriptions, watchdog timers or
+        # cached protocol/recovery state at startup. Accepting parameter-service
+        # writes would advertise a configuration the running objects do not use.
+        # Validate the entire batch before the shadow fault hook has side effects.
+        immutable = {
+            "worker_recovery_enabled", "worker_recovery_budget", "worker_recovery_wait_sec",
+            "require_execution_context", "worker_health_period_sec", "n115_timeout_sec",
+            "use_sim_time", "control_frequency", "map_frame", "base_frame", "lidar_frame",
+            "shadow_tf_fault_injection_allowed",
+        }
+        if any(parameter.name in immutable or parameter.name.endswith("_topic")
+               for parameter in parameters):
+            return SetParametersResult(
+                successful=False,
+                reason="Worker protocol, transport and timing configuration requires controlled restart",
+            )
+        force_tf_fault = self._shadow_force_robot_tf_failure
         for parameter in parameters:
-            if parameter.name in ("require_execution_context", "execution_context_topic"):
-                return SetParametersResult(successful=False, reason="execution protocol requires controlled restart")
             if parameter.name == "shadow_tf_fault_injection_allowed":
                 return SetParametersResult(
                     successful=False,
@@ -513,12 +528,13 @@ class N116Node(N115Node):
                     successful=False,
                     reason="shadow_force_robot_tf_failure must be boolean",
                 )
-            if self._shadow_force_robot_tf_failure and not parameter.value:
+            if force_tf_fault and not parameter.value:
                 return SetParametersResult(
                     successful=False,
                     reason="TF fault is latched; restart the shadow launch to reset",
                 )
-            self._shadow_force_robot_tf_failure = bool(parameter.value)
+            force_tf_fault = bool(parameter.value)
+        self._shadow_force_robot_tf_failure = force_tf_fault
         return SetParametersResult(successful=True)
 
     def _freeze_planner_result_signal(self, _signum, _frame) -> None:

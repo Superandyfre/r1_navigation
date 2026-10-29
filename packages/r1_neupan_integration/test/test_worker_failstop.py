@@ -206,6 +206,22 @@ class NodeMethodTests(unittest.TestCase):
         config = yaml.safe_load((packages / 'navigation_neupan_bridge/config/robot_r1_hw1.yaml').read_text())
         self.assertFalse(next(iter(config.values()))['ros__parameters']['worker_recovery_enabled'])
 
+    def test_immutable_parameter_batch_cannot_partially_trigger_shadow_fault(self):
+        node = SimpleNamespace(_shadow_tf_fault_injection_allowed=True, _shadow_force_robot_tf_failure=False)
+        force = SimpleNamespace(name='shadow_force_robot_tf_failure', value=True)
+        immutable = SimpleNamespace(name='worker_health_topic', value='/wrong_health')
+        for parameters in ([force, immutable], [immutable, force]):
+            result = N116Node._shadow_fault_parameter_callback(node, parameters)
+            self.assertFalse(result.successful)
+            self.assertFalse(node._shadow_force_robot_tf_failure)
+        off = SimpleNamespace(name='shadow_force_robot_tf_failure', value=False)
+        result = N116Node._shadow_fault_parameter_callback(node, [force, off])
+        self.assertFalse(result.successful)
+        self.assertFalse(node._shadow_force_robot_tf_failure)
+        self.assertTrue(N116Node._shadow_fault_parameter_callback(node, [force]).successful)
+        self.assertTrue(node._shadow_force_robot_tf_failure)
+        self.assertFalse(N116Node._shadow_fault_parameter_callback(node, [off]).successful)
+
 
 if __name__ == '__main__':
     unittest.main()
