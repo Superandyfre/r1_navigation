@@ -79,3 +79,16 @@ candidate integration only. Its eventual release still needs a complete reviewed
 inventory, Worker interpreter/import checks, effective configuration and runtime
 map checks before arm, plus release/rollback and operator-approved hardware
 acceptance. Static preflight alone does not establish these facts.
+
+## Candidate build
+
+`bash tools/release/build_candidate.sh /absolute/new-directory` builds all eight
+repository ROS packages in an isolated prefix with `BUILD_TESTING=OFF`, no
+symlink-install, and two parallel package jobs. It refuses an existing output
+directory or dirty source tree and verifies the Git snapshot did not change
+while building. It sources preserved rpp_ws for external dependencies; this is
+not a fully hermetic toolchain. Build logs and source SHA are retained. The
+script never starts ROS nodes or approves deployment. Acceptance still needs to
+use the new artifacts, and a candidate install alone does not contain a complete
+UI7 release layout, third-party solver snapshot, runtime/driver inventory or
+rollback bundle.
