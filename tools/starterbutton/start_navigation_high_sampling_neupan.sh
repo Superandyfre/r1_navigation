@@ -14,6 +14,8 @@ fi
 source "${navigation_repo}/install/local_setup.bash"
 # NeuPAN is a Python library, not a ROS package. Pin it to the same source tree.
 export PYTHONPATH="${navigation_repo}/third_party/NeuPAN:${PYTHONPATH:-}"
+# Record raw ECOS statuses and failure inputs in all spawned workers.
+source "${navigation_repo}/tools/ecos_diagnostics/enable.bash" || exit 1
 
 for navigation_package in navigation_2d navigation_neupan_bridge \
   r1_neupan_integration r1_lidar_preprocess r1_collision_guard; do
@@ -48,7 +50,7 @@ arm_local_ip="${RPP_ARM_LOCAL_IP:-192.168.11.11}"
 # may still override these values explicitly for a diagnostic session.
 scan_source="${RPP_NEUPAN_SCAN_SOURCE:-dual}"
 mesh_self_filter="${RPP_NEUPAN_USE_MESH_SELF_FILTER:-true}"
-collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-true}}"
+collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-false}}"
 
 if [[ "${scan_source}" != "livox_only" && "${scan_source}" != "dual" ]]; then
   echo "RPP_NEUPAN_SCAN_SOURCE must be livox_only or dual" >&2
