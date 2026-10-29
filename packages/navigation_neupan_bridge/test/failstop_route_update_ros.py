@@ -1,5 +1,6 @@
 """Actual Navigator/Controller route revisions in isolated domain 192, no driver."""
 import copy
+import json
 import time
 import unittest
 from action_msgs.msg import GoalStatus
@@ -14,6 +15,7 @@ from failstop_navigator_owner_ros import NavigatorOwner
 class RouteUpdateNavigator(NavigatorOwner):
     def setUp(self):
         super().setUp()
+        self.allow_bend = False
         self.planners[0].destroy()
         def compute(handle):
             self.planner_calls.append(time.monotonic())
@@ -21,7 +23,7 @@ class RouteUpdateNavigator(NavigatorOwner):
             result.path.header.frame_id = 'map'
             result.path.header.stamp = self.node.get_clock().now().to_msg()
             target = handle.request.goal
-            for x, y in [(0., 0.), (1., .25 if len(self.planner_calls) >= 5 else 0.),
+            for x, y in [(0., 0.), (1., .25 if self.allow_bend else 0.),
                          (2., 0.), (target.pose.position.x, 0.)]:
                 pose = PoseStamped(); pose.header = result.path.header
                 pose.pose.position.x = x; pose.pose.position.y = y; pose.pose.orientation.w = 1.
@@ -34,18 +36,24 @@ class RouteUpdateNavigator(NavigatorOwner):
         client, handle, result = self.send_top()
         attempt = self.moving_attempt(result)
         marker = time.monotonic()
-        self.until(lambda: len(self.planner_calls) >= 4 or result.done(), 8.)
+        self.until(lambda: time.monotonic() >= marker+3.2 or result.done(), 8.)
         self.assertFalse(result.done())
         steady = [(v, w) for t, v, w in self.outputs if marker+.2 < t < time.monotonic()-.1]
         self.assertGreater(len(steady), 20)
         self.assertLess(sum(abs(v) < .005 and abs(w) < .005 for v, w in steady)/len(steady), .05)
         initial_path = self.context['path_version']
+        self.allow_bend = True
         self.until(lambda: self.context['path_version'] > initial_path or result.done(), 8.)
         self.assertFalse(result.done())
         attempts = {j['navigation_attempt_id'] for _, j in self.contexts if j['state'] == 'ACTIVE'}
         self.assertEqual(attempts, {attempt})
         self.assertFalse(any(j['state'] == 'END' for _, j in self.contexts))
         self.assertFalse(any(j.get('fault_latched') for _, j in self.runtime_statuses))
+        (self.report/'route-update-result.json').write_text(json.dumps(dict(
+            attempt=attempt, planner_calls=len(self.planner_calls),
+            zero_fraction=sum(abs(v)<.005 and abs(w)<.005 for v,w in steady)/len(steady),
+            initial_path_version=initial_path, final_path_version=self.context['path_version'],
+            worker=self.worker_mode, physical_motion=False), indent=2))
         self.cancel_top(handle, result)
         client.destroy()
 
