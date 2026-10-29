@@ -42,6 +42,15 @@ The installed Fast DDS matched-subscriptions list API returns UNSUPPORTED(2),
 so an empty list from that API does not prove no reader was matched. Match-status
 counts are aggregate; even a supported count alone cannot identify every reader.
 
+Do not infer UDP-only operation from a participant XML profile alone under
+Humble rmw_fastrtps6.2.10 with `ROS_LOCALHOST_ONLY=1`: its participant creation
+code appends a localhost UDP transport and an SHM transport after loading XML.
+The diagnostic XML A/B/A retained SHM maps in every role and did not isolate
+SHM from UDP. Existing user transports are also retained; any future diagnostic
+XML must explicitly whitelist loopback on its own UDP descriptor. No transport
+profile from this diagnostic is a production recommendation. Inspect effective
+participant transport QoS and maps before claiming a transport was disabled.
+
 `RMW_RESPONSE_OBSERVE` records the response target GUID, local listener match
 before/after, original return value and original call duration. On failure,
 `RMW_WRITER_MATCHES` additionally queries actual writer matched subscriptions;
