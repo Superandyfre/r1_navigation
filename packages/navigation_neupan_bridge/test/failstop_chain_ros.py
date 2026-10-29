@@ -126,13 +126,13 @@ class FailstopChainROS(unittest.TestCase):
                 plan_input_topic=PREFIX+'path',goal_topic=PREFIX+'goal',
                 forward_only_enabled=False,command_stabilizer_enabled=False,
                 auto_gear_transition_enabled=False,obstacle_motion_enabled=False)
-            helper=Path(__file__).with_name('chain_worker_peer.py')
+            helper=getattr(self,'worker_helper',Path(__file__).with_name('chain_worker_peer.py'))
             python='/home/rpp/venvs/neupan_ros_humble/bin/python' if self.worker_mode=='actual-solver' else '/usr/bin/python3'
             args=[python,str(helper),'--ros-args']
             for key,value in parameters.items():
                 args+=['-p',key+':='+str(value).lower() if isinstance(value,bool) else key+':='+str(value)]
             log=open(self.report/'actual_worker_node.log','w');self.logs.append(log)
-            self.procs.append(subprocess.Popen(args,stdout=log,stderr=subprocess.STDOUT))
+            self.procs.append(subprocess.Popen(args,env=getattr(self,'worker_environment',None),stdout=log,stderr=subprocess.STDOUT))
         self.start(GUARD,path,[])
         self.start(SMOOTHER,path,['cmd_vel:='+PREFIX+'raw','cmd_vel_smoothed:='+PREFIX+'smooth'])
         self.start(CONTROLLER,path,['cmd_vel:='+PREFIX+'raw'])
@@ -145,6 +145,36 @@ class FailstopChainROS(unittest.TestCase):
         self.until(lambda:len(self.statuses)>0)
         self.until(lambda:len(self.outputs)>0)
         self.until(lambda:time.monotonic()-self.statuses[0][0]>.35)
+        self.arm_runtime()
+        self.action=ActionClient(self.node,FollowPath,'/follow_path')
+        self.until(self.action.server_is_ready)
+        self.assertFalse(any(name=='/cmd_vel' for name,_ in self.node.get_topic_names_and_types()))
+        loaded=set()
+        for proc in self.procs:
+            maps=Path('/proc')/str(proc.pid)/'maps'
+            content=maps.read_text()
+            (self.report/('maps-'+str(proc.pid)+'.txt')).write_text(content)
+            for line in content.splitlines():
+                candidate=line.split()[-1]
+                if candidate.startswith(str(WS)) or 'libvelocity_smoother_core.so' in candidate or 'libnavigation_neupan_bridge.so' in candidate:
+                    path=Path(candidate)
+                    if path.is_file():loaded.add(path.resolve())
+        for path in sorted(loaded):
+            self.artifacts.append(dict(loaded_library=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+        if self.real_node:
+            for path in [WS/'src/r1_navigation/packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml',
+                         WS/'src/r1_navigation/packages/r1_neupan_integration/config/models/dune_model_5000.pth']:
+                self.artifacts.append(dict(planner_input=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+            for name in ('n1_15_node.py','n1_16_node.py','execution_protocol.py'):
+                root=getattr(self,'worker_source_root',WS/'src/r1_navigation/packages/r1_neupan_integration/r1_neupan_integration')
+                path=root/name
+                if not path.is_file():continue
+                self.artifacts.append(dict(worker_source=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
+        self.assertTrue(any(getattr(self,'expected_plugin_root','neupan_failstop_ws') in p and 'libnavigation_neupan_bridge.so' in p
+            for proc in self.procs for p in (Path('/proc')/str(proc.pid)/'maps').read_text().splitlines()))
+        (self.report/'binaries.json').write_text(json.dumps(self.artifacts,indent=2))
+
+    def arm_runtime(self):
         client=self.node.create_client(Trigger,PREFIX+'arm')
         self.until(client.service_is_ready)
         # DDS discovery and the stopped-odom dwell are asynchronous. Test
@@ -160,31 +190,6 @@ class FailstopChainROS(unittest.TestCase):
             resume=time.monotonic()+.05
             self.until(lambda:time.monotonic()>=resume)
         self.assertTrue(response.success,response.message)
-        self.action=ActionClient(self.node,FollowPath,'/follow_path')
-        self.until(self.action.server_is_ready)
-        self.assertFalse(any(name=='/cmd_vel' for name,_ in self.node.get_topic_names_and_types()))
-        loaded=set()
-        for proc in self.procs:
-            maps=Path('/proc')/str(proc.pid)/'maps'
-            content=maps.read_text()
-            (self.report/('maps-'+str(proc.pid)+'.txt')).write_text(content)
-            for line in content.splitlines():
-                candidate=line.split()[-1]
-                if candidate.startswith(str(WS)) or 'libvelocity_smoother_core.so' in candidate:
-                    path=Path(candidate)
-                    if path.is_file():loaded.add(path.resolve())
-        for path in sorted(loaded):
-            self.artifacts.append(dict(loaded_library=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
-        if self.real_node:
-            for path in [WS/'src/r1_navigation/packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml',
-                         WS/'src/r1_navigation/packages/r1_neupan_integration/config/models/dune_model_5000.pth']:
-                self.artifacts.append(dict(planner_input=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
-            for name in ('n1_15_node.py','n1_16_node.py','execution_protocol.py'):
-                path=WS/'src/r1_navigation/packages/r1_neupan_integration/r1_neupan_integration'/name
-                self.artifacts.append(dict(worker_source=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
-        self.assertTrue(any('neupan_failstop_ws' in p and 'libnavigation_neupan_bridge.so' in p
-            for proc in self.procs for p in (Path('/proc')/str(proc.pid)/'maps').read_text().splitlines()))
-        (self.report/'binaries.json').write_text(json.dumps(self.artifacts,indent=2))
 
     def start(self,exe,params,remaps):
         self.assertTrue(exe.is_file(),str(exe))
