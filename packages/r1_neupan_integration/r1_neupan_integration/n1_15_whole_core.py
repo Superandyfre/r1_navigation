@@ -892,6 +892,23 @@ def _finite_packed(records: dict[str, dict[str, Any]]) -> bool:
     return all(bool(np.isfinite(_unpack_array(record)).all()) for record in records.values())
 
 
+
+try:  # optional read-only diagnostic; its absence must never break the worker
+    from .ecos_failure_sampler import install_from_env as _install_ecos_sampler_raw
+except Exception:  # pragma: no cover - defensive
+    _install_ecos_sampler_raw = None
+
+
+def _install_ecos_sampler():
+    """Install the ECOS sampler when COGNAV_ECOS_SAMPLER_DIR is set."""
+    if _install_ecos_sampler_raw is None:
+        return None
+    try:
+        return _install_ecos_sampler_raw()
+    except Exception:
+        return None
+
+
 def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
     """Spawn target; all NeuPAN imports and planner objects stay here."""
     try:
@@ -910,6 +927,9 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
         _set_navigation_loop(planner, loop)
         _set_path(planner, _unpack_array(spec["initial_path"]))
         timing = _WorkerTiming(planner)
+        ecos_sampler = _install_ecos_sampler()
+        if ecos_sampler is not None:
+            ecos_sampler.set_phase("warmup")
         import torch
 
         warmup_rows = []
@@ -927,6 +947,8 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                 "wall_ms": (time.perf_counter_ns() - started_wall) / 1_000_000.0,
                 "cpu_ms": (time.process_time_ns() - started_cpu) / 1_000_000.0,
             })
+        if ecos_sampler is not None:
+            ecos_sampler.set_phase("online")
         _reset_planner_state(planner)
         recorder = _ExactCaptureRecorder(
             str(spec.get("exact_capture_dir", "")),
@@ -990,6 +1012,11 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                 }, protocol=pickle.HIGHEST_PROTOCOL))
                 continue
             request_id = int(request["request_id"])
+            if ecos_sampler is not None:
+                ecos_sampler.set_context(
+                    request_id=request_id,
+                    worker_generation=worker_generation,
+                )
             loop = bool(request.get("navigation_loop", loop))
             active_gear = validate_gear(request.get("active_gear", active_gear))
             _set_navigation_loop(planner, loop)

@@ -12,9 +12,12 @@
             <IsNeuPANWaiting path="{path}" goal="{goal}" accepted_goal="{accepted_goal}"/>
           </Fallback>
         </RateController>
-        <FollowPath path="{path}" controller_id="FollowPath"/>
+        <NeuPANFollowPath path="{path}" controller_id="FollowPath"/>
       </PipelineSequence>
-      <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+      <Sequence name="RetryOnlyWhenRuntimePermits">
+        <CanRetryNeuPANExecution/>
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+      </Sequence>
     </RecoveryNode>
   </BehaviorTree>
 </root>

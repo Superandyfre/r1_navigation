@@ -214,6 +214,8 @@ def _build(context):
             parameters=[
                 os.path.join(config_dir, 'robot.yaml'),
                 {
+                    # Legacy Gazebo/benchmark path; not the HW1 motion launch.
+                    'require_execution_context': False,
                     'robot_config_dir': config_dir,
                     'scan_topic': scan_topic,
                     'control_frequency': control_frequency,

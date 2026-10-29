@@ -128,6 +128,7 @@ def _build(context):
                 "latest_scan_only": True,
                 "navigation_mode": "terminal",
                 "planner_result_topic": "/neupan_planner_result",
+                "require_execution_context": False,
                 "planner_context_topic": "/neupan_planner_context",
                 "bridge_status_topic": "/neupan_bridge_status",
                 "torch_num_threads": 8,

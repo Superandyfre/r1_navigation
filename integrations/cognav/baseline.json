@@ -1,0 +1,22 @@
+[
+  {
+    "source": "/home/rpp/cognav_ws/objnav_live_round3/robot_live/__init__.py",
+    "copy": "integrations/cognav/robot_live/__init__.py",
+    "sha256": "e26365646feb99e763694c16bca95d43f2d57a3cbcfac2f33ef55f02c1cfeb93"
+  },
+  {
+    "source": "/home/rpp/cognav_ws/objnav_live_round3/robot_live/protocol.py",
+    "copy": "integrations/cognav/robot_live/protocol.py",
+    "sha256": "842511d1c2d2565afd5a8feb7d8b2c67ad33c2b63086bacd26f0347662bcf7a2"
+  },
+  {
+    "source": "/home/rpp/cognav_ws/objnav_live_round3/robot_live/shutdown.py",
+    "copy": "integrations/cognav/robot_live/shutdown.py",
+    "sha256": "76387154571a18059f2ecbafdd364746f70dce66df5c715ef9e036363bf536b1"
+  },
+  {
+    "source": "/home/rpp/cognav_ws/objnav_live_round3/robot_live/cognav_bridge.py",
+    "copy": "integrations/cognav/robot_live/cognav_bridge.py",
+    "sha256": "bf1103f1457e6029dcb67464a42289707b61e97dffa33705d268b1c4b1cf605a"
+  }
+]

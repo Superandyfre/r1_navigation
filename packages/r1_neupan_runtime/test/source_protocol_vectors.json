@@ -1,0 +1,407 @@
+[
+  {
+    "name": "python_generated_valid_source",
+    "valid": true,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "float_request",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1.0,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "bool_request",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": true,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "overflow_request",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 9223372036854775808,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "string_request",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": "1",
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "zero_generation",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 0,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "negative_version",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": -1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "null_attempt",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": null,
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "empty_boot",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "old_schema",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_n2_3_command_envelope_v1",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "false_finite",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": false,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "future_publish",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.1,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "input_after_solve",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 100.0,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "missing_solve",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": null,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": 0.1,
+        "angular_z": 0.2
+      }
+    }
+  },
+  {
+    "name": "null_command_nonfinite_json",
+    "valid": false,
+    "received": 100.0,
+    "source": {
+      "authority_boot_id": "authority-a",
+      "controller_boot_id": "controller-a",
+      "navigation_attempt_id": "attempt-a",
+      "path_version": 1,
+      "goal_version": 0,
+      "schema": "r1_neupan_planner_source_v2",
+      "worker_boot_id": "worker-a",
+      "worker_generation": 7,
+      "request_id": 1,
+      "cycle_id": 2,
+      "scan_counter": 3,
+      "finite": true,
+      "scan_receive_monotonic": 99.9,
+      "request_dispatched_monotonic": 99.92,
+      "worker_solve_end_monotonic": 99.98,
+      "planner_result_monotonic": 100.0,
+      "command": {
+        "linear_x": null,
+        "angular_z": 0.2
+      }
+    }
+  }
+]

@@ -17,7 +17,7 @@ export PYTHONPATH="${navigation_repo}/third_party/NeuPAN:${PYTHONPATH:-}"
 # Record raw ECOS statuses and failure inputs in all spawned workers.
 source "${navigation_repo}/tools/ecos_diagnostics/enable.bash" || exit 1
 
-for navigation_package in navigation_2d navigation_neupan_bridge \
+for navigation_package in nav2_controller r1_neupan_runtime navigation_2d navigation_neupan_bridge \
   r1_neupan_integration r1_lidar_preprocess r1_collision_guard; do
   navigation_prefix="$(ros2 pkg prefix "${navigation_package}" 2>/dev/null || true)"
   case "${navigation_prefix}" in
@@ -29,6 +29,9 @@ done
 # Humble's Python extensions are built for system Python 3.10.  The button
 # must not inherit an interactive Conda Python when starting ROS executables.
 export PATH=/usr/bin:/bin:$PATH
+
+# UI7 startup is operator controlled; release acceptance is tracked separately.
+# Runtime authorization and fault/timeout stopping remain in the ROS nodes.
 
 # Starterbutton runs outside the interactive GNOME session, so it does not
 # inherit the Xwayland connection variables required by the RViz node in the
@@ -46,8 +49,8 @@ fi
 left_arm_ip="${RPP_LEFT_ARM_IP:-192.168.11.60}"
 right_arm_ip="${RPP_RIGHT_ARM_IP:-192.168.11.61}"
 arm_local_ip="${RPP_ARM_LOCAL_IP:-192.168.11.11}"
-# UI 7 is the production dual-LiDAR / live-arm-footprint profile. Operators
-# may still override these values explicitly for a diagnostic session.
+# UI 7 uses dual LiDAR and the live arm mesh for NeuPAN input filtering.
+# The separate final obstacle checker is removed from this HW1 profile.
 scan_source="${RPP_NEUPAN_SCAN_SOURCE:-dual}"
 mesh_self_filter="${RPP_NEUPAN_USE_MESH_SELF_FILTER:-true}"
 collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-false}}"
@@ -62,8 +65,8 @@ if [[ "${mesh_self_filter}" != "false" && "${mesh_self_filter}" != "true" ]]; th
   exit 1
 fi
 
-if [[ "${collision_check_enabled}" != "false" && "${collision_check_enabled}" != "true" ]]; then
-  echo "RPP_NEUPAN_COLLISION_CHECK_ENABLED must be true or false" >&2
+if [[ "${collision_check_enabled}" != "false" ]]; then
+  echo "HW1 duplicate collision checks were removed; RPP_NEUPAN_COLLISION_CHECK_ENABLED must be false" >&2
   exit 1
 fi
 

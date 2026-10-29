@@ -75,8 +75,8 @@ def _build(context):
         raise RuntimeError("scan_source must be livox_only or dual")
     if use_mesh_self_filter not in {"false", "true"}:
         raise RuntimeError("use_mesh_self_filter must be true or false")
-    if collision_check_enabled not in {"false", "true"}:
-        raise RuntimeError("collision_check_enabled must be true or false")
+    if collision_check_enabled != "false":
+        raise RuntimeError("HW1 duplicate collision checks were removed; collision_check_enabled must be false")
     if not 0.0 <= mesh_projection_margin_m <= 0.10:
         raise RuntimeError("mesh_projection_margin_m must be within [0.0, 0.10]")
     if not 0.0 <= planner_footprint_margin_m <= 0.30:
@@ -267,6 +267,11 @@ def _build(context):
                 "planner_result_topic": "/neupan_planner_result",
                 "planner_context_topic": "/neupan_planner_context",
                 "bridge_status_topic": "/neupan_bridge_status",
+                "worker_recovery_enabled": False,
+                "require_execution_context": True,
+                "execution_context_topic": "/neupan_execution_context",
+                "worker_health_topic": "/neupan_worker_health",
+                "worker_health_period_sec": 0.10,
                 "torch_num_threads": 4,
                 "torch_num_interop_threads": 2,
                 "shadow_tf_fault_injection_allowed": False,
@@ -287,8 +292,9 @@ def _build(context):
                 "odom_topic": "/odom",
                 "scan_topic": "/scan_neupan" if use_mesh_self_filter == "true" else navigation_scan_topic,
                 "mesh_self_filter_preapplied": False,
-                "use_exact_mesh_components": use_mesh_self_filter == "true",
-                "collision_check_enabled": collision_check_enabled == "true",
+                "use_exact_mesh_components": False,
+                "require_dynamic_footprint": False,
+                "collision_check_enabled": False,
                 "cmd_vel_in_topic": (
                     "/neupan_nav2_smoothed_cmd_vel"
                     if command_profile == "smoothed" else "/neupan_nav2_cmd_vel"),
@@ -353,8 +359,8 @@ def generate_launch_description():
             "use_mesh_self_filter", default_value="false", choices=["false", "true"],
             description="Use the validated dual-arm mesh self-return filter; disabled by default."),
         DeclareLaunchArgument(
-            "collision_check_enabled", default_value="true", choices=["false", "true"],
-            description="Run final obstacle collision checks; UI7 can disable them explicitly."),
+            "collision_check_enabled", default_value="false", choices=["false"],
+            description="HW1 final node checks runtime authorization without duplicate collision geometry."),
         DeclareLaunchArgument(
             "mesh_projection_margin_m", default_value="0.06",
             description="Local mesh-only LiDAR self-return edge tolerance in metres."),

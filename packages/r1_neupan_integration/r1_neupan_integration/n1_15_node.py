@@ -522,6 +522,11 @@ class N115Node(Node):
                                                for component in self.dynamic_mesh_components]
             dynamic_ready = footprint_ready and mesh_components_ready
         if state is None:
+            # N1.16 acquires robot_state in its scan-driven planner cycle.
+            # If the first cycle ran before TF discovery, returning without a
+            # notification here leaves that cycle asleep forever. A fresh
+            # scan must retry TF acquisition; N1.15's hook remains a no-op.
+            self._planner_input_updated()
             return
         conversion_started = time.perf_counter()
         angles = np.linspace(float(message.angle_min), float(message.angle_max), len(ranges))
@@ -641,7 +646,7 @@ class N115Node(Node):
                         path_tangent=path_tangent_base,
                         **self.planner_base_extents,
                     )
-                elif dynamic_ready:
+                elif dynamic_ready and self.dynamic_footprint_enabled:
                     local_points, dynamic_displacement = inflate_obstacles_for_dynamic_footprint(
                         local_points, dynamic_footprint,
                         clearance_m=self.dynamic_footprint_clearance_m,
@@ -733,7 +738,8 @@ class N115Node(Node):
             self.dynamic_footprint_ready = bool(dynamic_ready)
         self._planner_input_updated()
 
-    def path_callback(self, message: Path) -> None:
+    def _prepare_path(self, message: Path):
+        """Prepare legacy path geometry without notifying the scheduler."""
         if not message.poses:
             return
         coordinates = []
@@ -762,6 +768,12 @@ class N115Node(Node):
                 "Collapsed inconsistent stationary prefix in NeuPAN input path: "
                 f"{matrix.shape[1]} -> {sanitized_matrix.shape[1]} poses")
         matrix = sanitized_matrix
+        return matrix
+
+    def path_callback(self, message: Path) -> None:
+        matrix = self._prepare_path(message)
+        if matrix is None:
+            return
         with self.state_lock:
             self._raw_path_matrix = matrix[:3, :].copy()
             # The Nav2 bridge publishes a path when its terminal goal changes

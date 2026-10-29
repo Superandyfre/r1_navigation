@@ -1,0 +1,6 @@
+<library path="same_uuid_route_controller">
+  <class name="navigation_neupan_bridge/SameUUIDRouteController"
+    type="navigation_neupan_bridge::SameUUIDRouteController" base_class_type="nav2_core::Controller">
+    <description>Isolated test-only setPlan adapter. Refuses non-test configuration.</description>
+  </class>
+</library>

@@ -83,7 +83,20 @@ controller_server:
       diagnostics_topic: "/neupan_controller_status"
       # An old planner command is never reused. A stale envelope produces a
       # fresh zero while waiting for a new solve, keeping the action alive.
-      envelope_timeout: 1.00
+      envelope_timeout: 0.50
+      worker_health_topic: /neupan_worker_health
+      execution_context_topic: /neupan_execution_context
+      motion_grant_topic: /neupan_motion_grant
+      motion_arm_service: /neupan_controller/arm
+      motion_revoke_service: /neupan_controller/revoke_uncertain_execution
+      execution_owner_topic: /neupan_execution_owner
+      motion_retry_service: /neupan_controller/can_retry
+      arm_odom_frame: odom
+      arm_base_frame: base_link
+      odom_topic: /odom
+      worker_health_timeout: 0.50
+      planner_input_timeout: 0.75
+      navigation_authority_timeout: 0.50
       envelope_recovery_timeout: 5.00
       # The worker is asynchronous. Hold zero velocity only while its first
       # result for a newly published path arrives; then normal freshness rules apply.

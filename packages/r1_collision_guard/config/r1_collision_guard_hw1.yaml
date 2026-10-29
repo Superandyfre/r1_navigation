@@ -1,5 +1,7 @@
 r1_collision_guard:
   ros__parameters:
+    # HW1: NeuPAN handles obstacles; this node retains A+ authorization/watchdogs.
+    collision_check_enabled: false
     base_frame_id: base_link
     odom_frame_id: odom
     scan_topic: /scan_neupan
@@ -11,6 +13,15 @@ r1_collision_guard:
     source_cmd_vel_topic: /neupan_nav2_raw_cmd_vel
     cmd_vel_out_topic: /cmd_vel
     status_topic: /r1_collision_guard/status
+    # Mandatory A+ permit chain; collision_check_enabled does not bypass it.
+    worker_health_topic: /neupan_worker_health
+    planner_source_topic: /neupan_planner_result
+    motion_grant_topic: /neupan_motion_grant
+    worker_health_timeout_sec: 0.50
+    planner_source_timeout_sec: 0.50
+    planner_input_timeout_sec: 0.75
+    navigation_authority_timeout_sec: 0.50
+    planner_recovery_timeout_sec: 5.0
     localization_health_topic: /r1_localization_health
     # The monitor accepts a bounded executor delay while raw localization is
     # still present. A missing monitor heartbeat beyond this interval stops
@@ -20,7 +31,7 @@ r1_collision_guard:
     # The live arm projection, not a fixed stow pose, is the navigation
     # footprint. Missing projection data fails closed at the final velocity gate.
     require_arms_stowed: false
-    require_dynamic_footprint: true
+    require_dynamic_footprint: false
     dynamic_footprint_topic: /r1_arm_footprint
     dynamic_footprint_timeout_sec: 0.50
     # The exact mesh guard uses the raw fused scan and removes only returns

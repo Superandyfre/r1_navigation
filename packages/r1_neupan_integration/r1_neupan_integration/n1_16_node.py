@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import math
 import os
 import signal
 import threading
@@ -13,9 +15,15 @@ from typing import Any
 import numpy as np
 import rclpy
 import yaml
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, PoseStamped
+from nav_msgs.msg import Path
+from neupan_ros2.utils import yaw_to_quat
+from r1_neupan_integration.execution_protocol import (
+    ExecutionContextStore, ContextError, make_source,
+)
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray, String
 
@@ -131,6 +139,16 @@ class N116Node(N115Node):
         self.declare_parameter("obstacle_preview_m", 0.90)
         self.declare_parameter("local_detour_preview_m", 1.50)
         self.declare_parameter("obstacle_odom_timeout_sec", 0.50)
+        # Preserve legacy experiment parameters for audit, default disabled.
+        # A+ fatal faults cannot be cleared by this path even if configured on;
+        # automatic replacement needs the future explicit B authorization.
+        self.declare_parameter("worker_recovery_enabled", False)
+        self.declare_parameter("require_execution_context", True)
+        self.declare_parameter("execution_context_topic", "/neupan_execution_context")
+        self.declare_parameter("worker_health_topic", "/neupan_worker_health")
+        self.declare_parameter("worker_health_period_sec", 0.10)
+        self.declare_parameter("worker_recovery_budget", 2)
+        self.declare_parameter("worker_recovery_wait_sec", 5.0)
         # These stay disabled outside the dedicated HW0 shadow launch. The
         # force flag is runtime-settable only when that launch explicitly
         # allows it, and a triggered fault requires a process restart.
@@ -160,8 +178,46 @@ class N116Node(N115Node):
         # scan callback and that timer compete in the same Python executor;
         # cancel it before spinning and solve from fresh input notifications.
         self.timer.cancel()
+        # Independent callback group: planner cleanup or input callbacks must not
+        # serialize the health timer behind the planner scheduler/state lock.
+        period = float(self.get_parameter("worker_health_period_sec").value)
+        if not math.isfinite(period) or period <= 0:
+            raise ValueError("worker_health_period_sec must be finite and positive")
+        self._health_publish_lock = threading.Lock()
+        self._health_callback_group = MutuallyExclusiveCallbackGroup()
+        self.worker_health_pub = self.create_publisher(
+            String, str(self.get_parameter("worker_health_topic").value), 10)
+        self._health_timer = self.create_timer(
+            period, self._publish_worker_health, callback_group=self._health_callback_group)
+        self._publish_worker_health()
         self._shutdown_requested = False
         self._bridge_failed = False
+        # Latest task inputs, cached so a failed worker can be rebuilt from the
+        # current task instead of a replayed command. References only: each
+        # cycle rebuilds these arrays, so nothing is mutated in place.
+        self._last_inputs: dict[str, Any] | None = None
+        self._scheduler_fault = ""
+        self._worker_recovery_enabled = bool(
+            self.get_parameter("worker_recovery_enabled").value
+        )
+        self._worker_recovery_budget = max(
+            0, int(self.get_parameter("worker_recovery_budget").value)
+        )
+        self._worker_recovery_wait_sec = max(
+            0.0, float(self.get_parameter("worker_recovery_wait_sec").value)
+        )
+        self._worker_recovery_used = 0
+        self._worker_recovery_goal_version = None
+        self._worker_recovery_last_code = ""
+        # Optional context ledger: inert unless N116_CTX_LEDGER names a file.
+        self._require_execution_context = bool(self.get_parameter("require_execution_context").value)
+        self._execution_store = ExecutionContextStore()
+        self._execution_context_sub = self.create_subscription(
+            String, str(self.get_parameter("execution_context_topic").value),
+            self.execution_context_callback, 20)
+        self._ctx_ledger_path = os.environ.get("N116_CTX_LEDGER", "").strip()
+        if not self._require_execution_context:
+            self._ctx_ledger_restore()
         self._shadow_tf_fault_injection_allowed = bool(
             self.get_parameter("shadow_tf_fault_injection_allowed").value
         )
@@ -323,12 +379,107 @@ class N116Node(N115Node):
         self._scheduler_callback_started_monotonic = float(started_monotonic)
         self.run()
 
-    def _planner_scheduler_error(self, exc: BaseException) -> None:
+    def _publish_worker_health(self) -> None:
+        # Fault state is set inside the client before logging/quarantine. This
+        # publisher never takes state_lock or waits for the scheduler thread.
+        # Timer and immediate fault/shutdown sends can race. Serialize snapshot
+        # allocation with publish so later sequences never overtake earlier ones.
+        with self._health_publish_lock:
+            message = String()
+            message.data = json.dumps(self.client.health.snapshot(), sort_keys=True, allow_nan=False)
+            try:
+                self.worker_health_pub.publish(message)
+            except Exception:
+                # Guard heartbeat/source watchdogs cover DDS failure independently.
+                pass
+
+    def _handle_fatal_error(self, code: str, message: str) -> None:
+        self.client.health.latch(code, self.client.worker_generation)
         self._bridge_failed = True
-        self.get_logger().error(
-            "N1.16 latest-input scheduler failed: %s: %s", type(exc).__name__, exc
-        )
-        self._publish_failsafe_stop()
+        self._publish_worker_health()
+        try:
+            self._publish_failsafe_stop()
+        except Exception:
+            pass
+        try:
+            self._status(code, message)
+        except Exception:
+            pass
+
+    def _planner_scheduler_error(self, exc: BaseException) -> None:
+        self._scheduler_fault = "%s: %s" % (type(exc).__name__, exc)
+        self._handle_fatal_error("scheduler_exception", self._scheduler_fault)
+
+    def _recover_worker_from_cached_inputs(self, code: str) -> bool:
+        """Rebuild the spawn worker from the latest valid task. Bounded.
+
+        Returns True when a fresh worker handshake succeeded, so the caller must
+        *not* latch ``_bridge_failed``. Returns False when recovery is disabled,
+        unavailable, or the per-task budget is exhausted — the caller then
+        latches as before. No command is reused: the caller has already
+        published a zero Twist and no envelope is emitted for this cycle.
+        """
+        if self.client.health.fault is not None:
+            self._worker_recovery_last_code = code + ":fatal_latched"
+            return False
+        if not self._worker_recovery_enabled:
+            self._worker_recovery_last_code = code + ":disabled"
+            return False
+        inputs = self._last_inputs
+        if inputs is None:
+            self._worker_recovery_last_code = code + ":no_latest_task"
+            return False
+        goal_version = inputs.get("goal_version")
+        if goal_version != self._worker_recovery_goal_version:
+            # A new task starts a new recovery budget.
+            self._worker_recovery_goal_version = goal_version
+            self._worker_recovery_used = 0
+        if self._worker_recovery_used >= self._worker_recovery_budget:
+            self._worker_recovery_last_code = code + ":budget_exhausted"
+            return False
+        self._worker_recovery_used += 1
+        self._worker_recovery_last_code = code
+        started = time.monotonic()
+        try:
+            self.client.recover_worker(
+                inputs["path"],
+                inputs["state"],
+                inputs["points"],
+                inputs["path_version"],
+                navigation_loop_mode=inputs["navigation_loop_mode"],
+                active_gear=inputs["active_gear"],
+                wait_sec=self._worker_recovery_wait_sec,
+            )
+        except Exception as exc:
+            self._worker_recovery_last_code = (
+                code + ":recovery_failed:" + type(exc).__name__ + ":" + str(exc)
+            )
+            try:
+                self.get_logger().error(
+                    "N1.16 worker recovery failed: %s" % (self._worker_recovery_last_code,)
+                )
+            except Exception:
+                pass
+            try:
+                self._publish_failsafe_stop()
+            except Exception:
+                pass
+            return False
+        elapsed = time.monotonic() - started
+        try:
+            self.get_logger().warn(
+                "N1.16 worker recovered from %s in %.3fs (attempt %d/%d)"
+                % (code, elapsed, self._worker_recovery_used, self._worker_recovery_budget)
+            )
+        except Exception:
+            pass
+        try:
+            self._publish_failsafe_stop()
+        except Exception:
+            pass
+        # Schedule a fresh solve from the latest scan; never replay a command.
+        self._planner_input_updated()
+        return True
 
     def _trace_wait_state(self, stage: str, **fields: Any) -> None:
         """Expose the first unsatisfied live input without flooding the log."""
@@ -342,6 +493,23 @@ class N116Node(N115Node):
 
     def _shadow_fault_parameter_callback(self, parameters) -> SetParametersResult:
         """Permit the one-shot TF fault only in the explicit shadow launch."""
+        # These values construct publishers/subscriptions, watchdog timers or
+        # cached protocol/recovery state at startup. Accepting parameter-service
+        # writes would advertise a configuration the running objects do not use.
+        # Validate the entire batch before the shadow fault hook has side effects.
+        immutable = {
+            "worker_recovery_enabled", "worker_recovery_budget", "worker_recovery_wait_sec",
+            "require_execution_context", "worker_health_period_sec", "n115_timeout_sec",
+            "use_sim_time", "control_frequency", "map_frame", "base_frame", "lidar_frame",
+            "shadow_tf_fault_injection_allowed",
+        }
+        if any(parameter.name in immutable or parameter.name.endswith("_topic")
+               for parameter in parameters):
+            return SetParametersResult(
+                successful=False,
+                reason="Worker protocol, transport and timing configuration requires controlled restart",
+            )
+        force_tf_fault = self._shadow_force_robot_tf_failure
         for parameter in parameters:
             if parameter.name == "shadow_tf_fault_injection_allowed":
                 return SetParametersResult(
@@ -360,12 +528,13 @@ class N116Node(N115Node):
                     successful=False,
                     reason="shadow_force_robot_tf_failure must be boolean",
                 )
-            if self._shadow_force_robot_tf_failure and not parameter.value:
+            if force_tf_fault and not parameter.value:
                 return SetParametersResult(
                     successful=False,
                     reason="TF fault is latched; restart the shadow launch to reset",
                 )
-            self._shadow_force_robot_tf_failure = bool(parameter.value)
+            force_tf_fault = bool(parameter.value)
+        self._shadow_force_robot_tf_failure = force_tf_fault
         return SetParametersResult(successful=True)
 
     def _freeze_planner_result_signal(self, _signum, _frame) -> None:
@@ -379,13 +548,142 @@ class N116Node(N115Node):
         message.data = json.dumps(context, sort_keys=True, allow_nan=False)
         self.planner_context_pub.publish(message)
 
+    # ------------------------------------------------------------------
+    # Optional context ledger (additive; inert unless N116_CTX_LEDGER is set).
+    #
+    # nav2_path_version/goal_version are local counters that must match the
+    # controller's path_version_/goal_version_ exactly. They start at (0, -1)
+    # in N1.15, so every restart of this process silently moves the origin and
+    # the controller then discards every envelope as
+    # "discarded_envelope_context_mismatch" while this side never learns why.
+    #
+    # Legacy diagnostic compatibility only. This is not a lossless motion
+    # restart protocol: production execution-context mode never restores it.
+    # Only a new authority context can establish production versions/identity.
+    #
+    # Both helpers swallow every error: a broken ledger must never affect
+    # planning or navigation, only emit a warning.
+    # ------------------------------------------------------------------
+    def _ctx_ledger_restore(self) -> None:
+        path = self._ctx_ledger_path
+        if not path:
+            return
+        current = (self.nav2_path_version, self.goal_version)
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            path_version = int(payload["path_version"])
+            goal_version = int(payload["goal_version"])
+        except FileNotFoundError:
+            self.get_logger().warn(
+                f"N1.16 context ledger absent at {path}; "
+                f"counters stay at {current}"
+            )
+            return
+        except Exception as exc:
+            self.get_logger().warn(
+                f"N1.16 context ledger unreadable at {path} ({exc}); "
+                f"counters stay at {current}"
+            )
+            return
+        self.nav2_path_version = path_version
+        self.goal_version = goal_version
+        self.get_logger().warn(
+            f"N1.16 context ledger restored {current} -> "
+            f"({path_version}, {goal_version}) from {path}"
+        )
+
+    def _ctx_ledger_persist(self) -> None:
+        path = self._ctx_ledger_path
+        if not path:
+            return
+        try:
+            payload = {
+                "path_version": int(self.nav2_path_version),
+                "goal_version": int(self.goal_version),
+                "saved_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "pid": os.getpid(),
+            }
+            tmp = f"{path}.tmp{os.getpid()}"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, sort_keys=True)
+            os.replace(tmp, path)
+        except Exception as exc:
+            self.get_logger().warn(f"N1.16 context ledger persist failed: {exc}")
+
+    def execution_context_callback(self, message) -> None:
+        if not self._require_execution_context or self.client.health.fault is not None:
+            return
+        try:
+            payload = json.loads(message.data)
+            with self.state_lock:
+                previous_store = self._execution_store
+                # Context tuples are immutable; copying only the retirement
+                # set avoids deep-copying a complete route on each heartbeat.
+                candidate = copy.copy(previous_store)
+                candidate.retired = previous_store.retired.copy()
+                changed = candidate.accept(payload, time.monotonic())
+                if not changed:
+                    self._execution_store = candidate
+                    return
+                context = candidate.active
+            matrix = None
+            if context is not None:
+                if context.frame != self.map_frame:
+                    raise ContextError("unexpected_execution_frame")
+                path = Path()
+                path.header.frame_id = context.frame
+                for x, y, yaw in context.coordinates:
+                    pose = PoseStamped()
+                    pose.pose.position.x = x
+                    pose.pose.position.y = y
+                    pose.pose.orientation = yaw_to_quat(yaw)
+                    path.poses.append(pose)
+                matrix = self._prepare_path(path)
+            with self.state_lock:
+                if self._execution_store is not previous_store:
+                    return  # a concurrently delivered newer context wins
+                if self.client.health.fault is not None:
+                    return
+                self._execution_store = candidate
+                self.path_version += 1  # internal geometry epoch, not authority version
+                if context is None:
+                    self.path_matrix = None
+                    self.goal = None
+                    self.client.health.bind_execution(None, self.client.worker_generation,
+                                                      self.nav2_path_version, self.goal_version)
+                else:
+                    matrix[3, :] = self.active_gear
+                    self._raw_path_matrix = matrix[:3, :].copy()
+                    self.path_matrix = matrix
+                    self.nav2_path_version = context.path
+                    self.goal_version = context.goal
+                    self.goal = matrix[:3, -1:].copy()
+                    self.client.health.bind_execution(context.attempt, self.client.worker_generation,
+                                                      context.path, context.goal)
+            self._publish_worker_health()
+            self._publish_context()
+            if context is not None:
+                self._planner_input_updated()
+        except (ValueError, KeyError, TypeError, OverflowError) as exc:
+            if getattr(exc, "fatal", False) or self._execution_store.active is not None:
+                self._handle_fatal_error("execution_protocol_fault", str(exc))
+            else:
+                self._status("invalid_execution_context", str(exc))
+
     def path_callback(self, message) -> None:
+        if getattr(self, "_require_execution_context", True):
+            return
         super().path_callback(message)
         self._publish_context()
+        self._ctx_ledger_persist()
 
     def goal_callback(self, message) -> None:
+        if getattr(self, "_require_execution_context", True):
+            return
         super().goal_callback(message)
         self._publish_context()
+        self._ctx_ledger_persist()
 
     def _status(self, code: str, message: str, **fields: Any) -> None:
         payload = {"schema": N116_SCHEMA, "status": "fail-safe", "code": code,
@@ -427,10 +725,13 @@ class N116Node(N115Node):
         self.forward_only_status_pub.publish(message)
 
     def _fresh_for_publish(self, record: dict[str, Any], expected_scan: int,
-                           expected_path: int, expected_goal: int) -> tuple[bool, str]:
+                           expected_path: int, expected_goal: int,
+                           expected_execution=None) -> tuple[bool, str]:
         with self.state_lock:
             current_path = int(self.path_version)
             current_goal = int(self.goal_version)
+            if expected_execution is not None and self._execution_store.active != expected_execution:
+                return False, "execution_context_changed"
         checks = (
             (int(record.get("scan_counter", -1)) >= int(expected_scan), "scan_counter_lt_expected"),
             (current_path == int(expected_path), "path_version_changed"),
@@ -442,7 +743,7 @@ class N116Node(N115Node):
         return True, "fresh"
 
     def run(self) -> None:
-        if self._shutdown_requested or self._bridge_failed:
+        if self._shutdown_requested or self._bridge_failed or self.client.health.fault is not None:
             return
         transition = self._consume_gear_transition()
         if transition is not None:
@@ -471,17 +772,18 @@ class N116Node(N115Node):
         try:
             cycle_start = time.monotonic()
             if self._shadow_force_robot_tf_failure:
-                self._bridge_failed = True
-                self._status(
+                self._handle_fatal_error(
                     "shadow_tf_fault_injected",
                     "shadow-only robot TF lookup failure injected; restart required",
                 )
-                self._publish_failsafe_stop()
                 return
             if not self._robot_transform():
                 self._trace_wait_state("map_to_base_tf")
                 return
             with self.state_lock:
+                execution_context = self._execution_store.active if self._require_execution_context else None
+                if self._require_execution_context and execution_context is None:
+                    return
                 if self.path_matrix is None:
                     self._trace_wait_state("global_path", path_version=self.path_version)
                     return
@@ -522,6 +824,7 @@ class N116Node(N115Node):
                 goal_version = int(self.goal_version)
                 scan_stamp = float(self.latest_scan_stamp_sec)
                 scan_receive = float(self.latest_scan_receive_monotonic)
+                scan_update = float(getattr(self, "latest_scan_update_monotonic", -1.0))
                 scan_metrics = dict(self.latest_scan_metrics)
                 scan_filter = dict(self.latest_scan_filter)
                 measured_velocity = np.asarray([
@@ -534,6 +837,19 @@ class N116Node(N115Node):
                 gear_transition_pending = self.pending_gear is not None
                 previous_scan = int(self.last_processed_scan)
                 self.last_processed_scan = scan_counter
+            # Cache the exact task a rebuilt worker must resume. These arrays
+            # are rebuilt every cycle and never mutated in place, so keeping
+            # references is safe and costs nothing per cycle.
+            self._last_inputs = {
+                "path": path,
+                "state": state,
+                "points": points,
+                "path_version": path_version,
+                "goal_version": goal_version,
+                "navigation_loop_mode": self.navigation_mode,
+                "active_gear": active_gear,
+                "at_monotonic": time.monotonic(),
+            }
             motion_decision = None
             route_decision = None
             local_detour = None
@@ -585,6 +901,8 @@ class N116Node(N115Node):
                 path_version=path_version,
                 goal_version=goal_version,
             )
+            if not self._require_execution_context:
+                self.client.health.update_context(self.client.worker_generation, nav2_path_version, goal_version)
             try:
                 self.client.startup(
                     path, state, points, path_version,
@@ -598,12 +916,8 @@ class N116Node(N115Node):
                     goal=goal, goal_version=goal_version, cycle_id=cycle_id,
                     navigation_loop_mode=self.navigation_mode,
                     active_gear=active_gear,
-                    scan_callback_receive_monotonic=float(
-                        getattr(self, "latest_scan_receive_monotonic", -1.0)
-                    ),
-                    scan_update_monotonic=float(
-                        getattr(self, "latest_scan_update_monotonic", -1.0)
-                    ),
+                    scan_callback_receive_monotonic=scan_receive,
+                    scan_update_monotonic=scan_update,
                     reference_speed_profile=(
                         motion_decision.speed_profile if motion_decision is not None else None
                     ),
@@ -619,25 +933,47 @@ class N116Node(N115Node):
                     bypass_mode=bypass_requested,
                 )
             except BridgeProtocolError as exc:
-                self._bridge_failed = True
-                self._status(exc.code, str(exc), cycle_id=cycle_id, scan_counter=scan_counter)
-                self._publish_failsafe_stop()
+                self._handle_fatal_error(exc.code, str(exc))
                 return
             except Exception as exc:
-                self._bridge_failed = True
-                self.client._event("bridge_exception", str(exc), cycle_id=cycle_id,
-                                   scan_counter=scan_counter)
-                self._status("bridge_exception", str(exc), cycle_id=cycle_id,
-                             scan_counter=scan_counter)
-                self._publish_failsafe_stop()
+                self._handle_fatal_error("bridge_exception", str(exc))
                 return
 
-            fresh, reason = self._fresh_for_publish(record, scan_counter, path_version, goal_version)
+            fresh, reason = self._fresh_for_publish(record, scan_counter, path_version, goal_version, execution_context)
             main_validation_complete_monotonic = time.monotonic()
             if not fresh:
                 self.client.mark_stale_response(reason, record)
                 self._status("stale_response", reason, request_id=record["request_id"],
                              cycle_id=cycle_id, scan_counter=scan_counter)
+                self._publish_failsafe_stop()
+                return
+
+            # Classify the trajectory before any geometry runs. On a normal
+            # arrive the core packs an empty opt_state; the >=3-state collision
+            # helpers raise on that, and the exception used to escape run() and
+            # kill the node through the scheduler error path.
+            opt_state = outputs["opt_state"]
+            plan_usable = bool(
+                isinstance(opt_state, np.ndarray)
+                and opt_state.ndim == 2
+                and opt_state.shape[0] >= 3
+                and opt_state.shape[1] >= 1
+                and bool(np.isfinite(opt_state).all())
+            )
+            arrived = bool(record.get("info", {}).get("arrive"))
+            if not plan_usable and not arrived:
+                # Empty/invalid plan without an arrival is a solve-side fault,
+                # not a stop: hold the fail-safe output and stay alive so the
+                # next valid scan can produce a plan.
+                self._status(
+                    "invalid_trajectory",
+                    "core returned an unusable opt_state: ndim=%s shape=%s"
+                    % (getattr(opt_state, "ndim", None),
+                       getattr(opt_state, "shape", None)),
+                    request_id=record["request_id"],
+                    cycle_id=cycle_id,
+                    scan_counter=scan_counter,
+                )
                 self._publish_failsafe_stop()
                 return
 
@@ -667,19 +1003,20 @@ class N116Node(N115Node):
             action = outputs["action"]
             command = Twist()
             optimized_free_distance = float("inf")
-            if motion_decision is not None:
+            if motion_decision is not None and plan_usable:
                 optimized_free_distance = min(
                     first_swept_collision_distance(
-                        state, outputs["opt_state"], raw_points,
+                        state, opt_state, raw_points,
                         self.obstacle_motion_config,
                     ),
                     first_swept_collision_distance(
-                        state, outputs["opt_state"], points,
+                        state, opt_state, points,
                         self.obstacle_motion_config,
                     ),
                 )
             verified_neupan_bypass = (
-                bypass_requested
+                plan_usable
+                and bypass_requested
                 and bool(record.get("info", {}).get("bypass_valid", False))
                 and np.isinf(optimized_free_distance)
             )
@@ -704,8 +1041,12 @@ class N116Node(N115Node):
                 verified_local_detour = True
                 path_deviation_blocked = False
                 self.path_deviation_guard.reset()
-            elif (self.local_detour_enabled and motion_decision is not None
+            elif (self.local_detour_enabled and plan_usable
+                  and motion_decision is not None
                   and motion_decision.route_blocked):
+                # plan_usable already proved ndim == 2, shape[0] >= 3 and
+                # shape[1] >= 1, so predicted[:2, -1] below cannot index past
+                # the end of a normal-arrive empty trajectory.
                 predicted = outputs["opt_state"]
                 route_vector = path[:2, -1] - state[:2, 0]
                 route_norm = float(np.linalg.norm(route_vector))
@@ -919,9 +1260,9 @@ class N116Node(N115Node):
                     obstacle_state = "WAIT"
                 else:
                     obstacle_state = "SLOW"
-            cmd_publish_monotonic = time.monotonic()
-            self.cmd_pub.publish(command)
-            output_publish = time.monotonic()
+            if self.client.health.fault is not None or self._shutdown_requested:
+                self._publish_failsafe_stop()
+                return
             planner_result_monotonic = time.monotonic()
             planner_result = make_planner_envelope(
                 linear_x=command.linear.x,
@@ -934,6 +1275,15 @@ class N116Node(N115Node):
                 path_version=nav2_path_version,
                 goal_version=goal_version,
             )
+            if execution_context is not None:
+                planner_result = make_source(
+                    execution_context, worker_boot=self.client.health.boot_id,
+                    generation=record["worker_generation"], request=record["request_id"],
+                    cycle=cycle_id, scan=scan_counter, scan_received=scan_receive,
+                    dispatched=timing["request_dispatched_monotonic"],
+                    solved=timing["worker_solve_end_monotonic"],
+                    published=planner_result_monotonic, linear=command.linear.x,
+                    angular=command.angular.z)
             planner_result_message = String()
             planner_result_message.data = json.dumps(
                 planner_result, sort_keys=True, allow_nan=False
@@ -942,11 +1292,19 @@ class N116Node(N115Node):
             # stream.  The bridge, timing heartbeat, and relay input remain
             # alive so the safety gate must distinguish source staleness from
             # relay loss.  The default path is unchanged.
-            if not self._freeze_planner_result:
-                self.planner_result_pub.publish(planner_result_message)
-                planner_result_publish_monotonic = time.monotonic()
-            else:
-                planner_result_publish_monotonic = -1.0
+            with self.state_lock:
+                if (self.client.health.fault is not None or self._shutdown_requested or
+                        self.path_version != path_version or self.goal_version != goal_version or
+                        (execution_context is not None and self._execution_store.active != execution_context)):
+                    return  # old computation cannot publish after a context/terminal update
+                cmd_publish_monotonic = time.monotonic()
+                self.cmd_pub.publish(command)
+                output_publish = time.monotonic()
+                if not self._freeze_planner_result:
+                    self.planner_result_pub.publish(planner_result_message)
+                    planner_result_publish_monotonic = time.monotonic()
+                else:
+                    planner_result_publish_monotonic = -1.0
             record["planner_result"] = planner_result
             timing["main_validation_complete_monotonic"] = main_validation_complete_monotonic
             timing["planner_result_publish_monotonic"] = planner_result_publish_monotonic
@@ -1194,6 +1552,8 @@ class N116Node(N115Node):
             return
         self._finalized = True
         self._shutdown_requested = True
+        self.client.health.shutting_down()
+        self._publish_worker_health()
         scheduler = getattr(self, "_planner_scheduler", None)
         if scheduler is not None:
             stopped = scheduler.stop(float(self.get_parameter("n115_timeout_sec").value) + 1.0)

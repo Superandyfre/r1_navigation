@@ -48,6 +48,7 @@ setup(
              'scripts/latest_input_scheduler_unit.py',
              'scripts/path_validation_unit.py'],
     install_requires=['setuptools'],
+    tests_require=['pytest'],
     zip_safe=True,
     entry_points={
         'console_scripts': [

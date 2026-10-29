@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.8)
 project(navigation_neupan_bridge)
 
 find_package(ament_cmake REQUIRED)
+find_package(r1_neupan_runtime REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(geometric_shapes REQUIRED)
@@ -14,6 +15,7 @@ find_package(nav2_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
@@ -34,6 +36,9 @@ target_include_directories(${PROJECT_NAME} PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 ament_target_dependencies(${PROJECT_NAME}
+  r1_neupan_runtime
+  rcl_interfaces
+  std_srvs
   geometry_msgs
   nav2_core
   nav2_costmap_2d
@@ -49,10 +54,14 @@ ament_target_dependencies(${PROJECT_NAME}
 )
 
 add_library(neupan_wait_condition_bt_node SHARED src/neupan_wait_condition_bt_node.cpp)
+target_include_directories(neupan_wait_condition_bt_node PRIVATE include)
 target_compile_features(neupan_wait_condition_bt_node PUBLIC cxx_std_17)
 target_compile_definitions(neupan_wait_condition_bt_node PRIVATE BT_PLUGIN_EXPORT)
 ament_target_dependencies(neupan_wait_condition_bt_node
-  behaviortree_cpp_v3 nav2_behavior_tree nav_msgs rclcpp std_msgs)
+  behaviortree_cpp_v3 nav2_behavior_tree nav_msgs rclcpp std_msgs std_srvs r1_neupan_runtime)
+find_library(NEUPAN_FOLLOW_PATH_BT_LIBRARY nav2_follow_path_action_bt_node
+  PATHS "${nav2_behavior_tree_DIR}/../../../lib" REQUIRED)
+target_link_libraries(neupan_wait_condition_bt_node "${NEUPAN_FOLLOW_PATH_BT_LIBRARY}")
 
 add_executable(r1_localization_monitor src/r1_localization_monitor.cpp)
 target_compile_features(r1_localization_monitor PUBLIC cxx_std_17)
@@ -97,7 +106,27 @@ install(FILES navigation_neupan_bridge.xml navigation_neupan_costmap_plugins.xml
   DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
+  add_library(same_uuid_route_controller SHARED test/same_uuid_route_controller.cpp)
+  target_compile_features(same_uuid_route_controller PUBLIC cxx_std_17)
+  target_link_libraries(same_uuid_route_controller ${PROJECT_NAME})
+  ament_target_dependencies(same_uuid_route_controller nav2_core pluginlib)
+  pluginlib_export_plugin_description_file(nav2_core test/same_uuid_route_plugins.xml)
+  install(TARGETS same_uuid_route_controller LIBRARY DESTINATION lib)
+  add_library(action_stall_controller SHARED test/action_stall_controller.cpp)
+  target_compile_features(action_stall_controller PUBLIC cxx_std_17)
+  target_link_libraries(action_stall_controller ${PROJECT_NAME})
+  ament_target_dependencies(action_stall_controller nav2_core pluginlib std_msgs)
+  pluginlib_export_plugin_description_file(nav2_core test/action_stall_plugins.xml)
+  install(TARGETS action_stall_controller LIBRARY DESTINATION lib)
+  add_library(controlled_current_layer SHARED test/controlled_current_layer.cpp)
+  target_compile_features(controlled_current_layer PUBLIC cxx_std_17)
+  ament_target_dependencies(controlled_current_layer nav2_costmap_2d pluginlib rclcpp std_msgs)
+  pluginlib_export_plugin_description_file(nav2_costmap_2d test/controlled_current_plugins.xml)
+  install(TARGETS controlled_current_layer LIBRARY DESTINATION lib)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_same_uuid_adapter_guard test/test_same_uuid_adapter_guard.cpp)
+  target_compile_features(test_same_uuid_adapter_guard PUBLIC cxx_std_17)
+  ament_target_dependencies(test_same_uuid_adapter_guard nav2_core nav2_costmap_2d pluginlib)
   ament_add_gtest(test_guard_recovery test/test_guard_recovery.cpp)
   target_include_directories(test_guard_recovery PRIVATE include)
   ament_add_gtest(test_static_map_overlap_state test/test_static_map_overlap_state.cpp)
@@ -120,14 +149,26 @@ if(BUILD_TESTING)
     test/test_guard_aware_progress_checker.cpp)
   target_link_libraries(test_guard_aware_progress_checker ${PROJECT_NAME})
   ament_target_dependencies(test_guard_aware_progress_checker nav2_core pluginlib)
+  ament_add_gtest(test_neupan_execution_ros test/test_neupan_execution_ros.cpp)
+  target_compile_features(test_neupan_execution_ros PUBLIC cxx_std_17)
+  target_link_libraries(test_neupan_execution_ros ${PROJECT_NAME})
+  ament_target_dependencies(test_neupan_execution_ros
+    r1_neupan_runtime nav2_core nav2_costmap_2d nav_msgs rclcpp std_msgs std_srvs tf2_ros)
+  find_library(NAV2_RECOVERY_BT_LIBRARY nav2_recovery_node_bt_node
+    PATHS "${nav2_behavior_tree_DIR}/../../../lib" REQUIRED)
   ament_add_gtest(test_neupan_wait_condition_bt test/test_neupan_wait_condition_bt.cpp)
   target_compile_definitions(test_neupan_wait_condition_bt PRIVATE
-    WAIT_PLUGIN_PATH="$<TARGET_FILE:neupan_wait_condition_bt_node>")
+    WAIT_PLUGIN_PATH="$<TARGET_FILE:neupan_wait_condition_bt_node>"
+    RECOVERY_PLUGIN_PATH="${NAV2_RECOVERY_BT_LIBRARY}")
   ament_target_dependencies(test_neupan_wait_condition_bt
-    behaviortree_cpp_v3 geometry_msgs nav_msgs rclcpp std_msgs)
+    behaviortree_cpp_v3 geometry_msgs nav_msgs rclcpp std_msgs std_srvs)
+  ament_add_gtest(test_execution_owner_lease test/test_execution_owner_lease.cpp)
+  target_include_directories(test_execution_owner_lease PRIVATE include)
+  ament_target_dependencies(test_execution_owner_lease r1_neupan_runtime)
 endif()
 
 ament_export_dependencies(
+  r1_neupan_runtime rcl_interfaces
   geometric_shapes geometry_msgs lifecycle_msgs nav2_core nav2_costmap_2d nav2_util nav2_msgs nav_msgs pluginlib rclcpp
   std_msgs std_srvs tf2 tf2_geometry_msgs tf2_ros visualization_msgs
 )
