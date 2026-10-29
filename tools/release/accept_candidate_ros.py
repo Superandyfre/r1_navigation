@@ -34,7 +34,21 @@ def verify_solver_provenance(report, bundle):
         for value in nested_values(data,'integration_source'):
             if not Path(value).resolve().is_relative_to(bundle/'install'):
                 errors.append('wrong_worker:'+str(summary)+':'+value)
-    if not roots:errors.append('missing_solver_provenance:'+str(report))
+    if not roots:
+        # A successful pending-ACK halt may prevent execution before the lazy
+        # solver is started. Require its explicit result and independent trace;
+        # a failed setup/test cannot obtain this scoped no-solver exception.
+        result_path=report/'pending-halt-result.json'
+        allowed=False
+        if result_path.is_file():
+            outcome=json.loads(result_path.read_text())
+            trace=json.loads((report/'trace.json').read_text())
+            allowed=(outcome.get('solver_not_expected') is True and
+                outcome.get('top_status')=='CANCELED' and outcome.get('next_goal')=='ABORTED' and
+                not trace['source'] and not any(j['state']=='ACTIVE' for _,j in trace['context']) and
+                not any(j['state']=='COMMIT' for _,j in trace['grant']) and
+                bool(trace['output']) and all(v==0. and w==0. for _,v,w in trace['output']))
+        if not allowed:errors.append('missing_solver_provenance:'+str(report))
     return errors
 
 
@@ -51,7 +65,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate',required=True,type=Path)
     parser.add_argument('--bundle',type=Path,help='Verify and run the relocated bundle instead of candidate/install')
-    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','cognav-owner','ack-delay','all'],default='all')
+    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','cognav-owner','navigator-owner','pending-halt','ack-delay','all'],default='all')
     args=parser.parse_args()
     assert os.environ.get('ROS_DOMAIN_ID')=='192'
     assert os.environ.get('ROS_LOCALHOST_ONLY')=='1'
@@ -104,6 +118,7 @@ def main():
                     'handshake-loss':'failstop_handshake_loss_ros',
                     'source-recovery':'failstop_source_recovery_ros',
                     'owner-loss':'failstop_owner_loss_ros','owner-protocol':'failstop_owner_protocol_ros','cognav-owner':'failstop_cognav_owner_ros',
+                    'navigator-owner':'failstop_navigator_owner_ros','pending-halt':'failstop_navigator_halt_pending_ros',
                     'ack-delay':'failstop_navigator_ack_delay_ros'})
     selected=list(modules) if args.suite=='all' else [args.suite]
     suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromModule(importlib.import_module(modules[name])) for name in selected)

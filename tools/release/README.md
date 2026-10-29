@@ -104,7 +104,7 @@ and `NEUPAN_CHAIN_WORKER=actual-solver`, then run:
 ```
 
 Suites: chain, navigator, cognav, restart, startup-tf, revoke-loss,
-handshake-loss, source-recovery, owner-loss, owner-protocol, cognav-owner, ack-delay, or all (36 cases, sequential). Never run multiple
+handshake-loss, source-recovery, owner-loss, owner-protocol, cognav-owner, navigator-owner, pending-halt, ack-delay, or all (42 cases, sequential). Never run multiple
 suites concurrently in domain192. The runner verifies the entire saved install
 inventory, testing-off caches recorded in it, and absence of the test adapter;
 it selects candidate C++ executables/libraries, installed Python, planner/model
@@ -124,6 +124,13 @@ and synthetic sensor/planner helpers still come from the development test tree.
 Retain maps, imported CogNav source paths and Worker summary
 `neupan_source_root` records to verify actual loading. This is an isolated test
 entry; it does not invoke or validate the full production UI7 startup script.
+
+A pending-ACK halt can deny execution before lazy solver startup. Its successful
+result may explicitly record `solver_not_expected`; the checker additionally
+requires an independent trace with no ACTIVE context, Source or COMMIT, and
+nonempty all-zero output. This proves pre-execution denial only, not solver
+provenance. Failed setup or a test without that result still fails missing-source
+checks. When a solver starts, every observed source must resolve inside the bundle.
 
 The Chinese [deployment and rollback runbook](DEPLOYMENT_RUNBOOK.md) describes
 the proposed complete-version switch, required operator evidence, refusal
