@@ -1,0 +1,34 @@
+{
+  "schema": "r1_navigation_snapshot_pointer_v1",
+  "id": "20261029-baseline-01",
+  "storage": "/home/rpp/navigation_snapshots/20261029-baseline-01",
+  "manifest_sha256": "206186991bc1e3317091ca48f3cc434eb613a32f5a92b36a7085edf6253a6857",
+  "checksums_sha256": "29bcf955094dd8438c158e5133ff62bebb66ea898904ae5bff472d23300dfc8d",
+  "status": {
+    "captured": true,
+    "built": false,
+    "restored": false,
+    "navigation_validated": false,
+    "offline_complete": false
+  },
+  "main_source_commit": "d0b5c307a9403957ee8c122f7f6b658256238d41",
+  "ui7_release_build_commit": "0e4b48e56909bfad23cf606b631278f498ef69c5",
+  "verified_files": 183,
+  "limitations": [
+    "No normal-navigation rosbag collected; motion not authorized for this snapshot.",
+    "No independent restore/build/navigation acceptance yet.",
+    "System package lock has no complete offline .deb/wheel cache or OS image; bare-host offline recovery unproven.",
+    "Absolute paths, external symlinks and native/CUDA system dependencies need restore-host verification.",
+    "Some credential/cache files excluded; inspect environment/excluded.json.",
+    "Runtime parameters: 44 nodes queried, 16 failed or timed out; see raw per-node outcomes.",
+    "513 symlinks have missing original targets; references recorded, recovery needs resolution.",
+    "File archives observed no in-copy changes; sequential multi-process capture is not an atomic machine image."
+  ],
+  "verification_summary": {
+    "git_bundles_verified": 29,
+    "restore_filter_checks_passed": 4,
+    "isolated_calibration_restore_verified": true,
+    "complete_environment_restore_verified": false
+  },
+  "registry_git_bundle_backup": "/home/rpp/navigation_snapshots/git/r1_navigation-nav-baseline-20261029-01.bundle"
+}

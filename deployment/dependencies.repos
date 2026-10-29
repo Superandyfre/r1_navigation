@@ -1,0 +1,149 @@
+{
+  "repositories": {
+    "000-r1_navigation": {
+      "type": "git",
+      "url": "https://git.ustc.edu.cn/helloitsmewow/r1_navigation.git",
+      "version": "d0b5c307a9403957ee8c122f7f6b658256238d41"
+    },
+    "001-r1_navigation": {
+      "type": "git",
+      "url": "https://git.ustc.edu.cn/helloitsmewow/r1_navigation.git",
+      "version": "d8c1de39592bf3de23977c8df809f4ca68dd19fb"
+    },
+    "002-gui": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/r1/motor_driver/gui.git",
+      "version": "f51ac3e3d8713d3609ac9dfde20d3f7a16eb5f51"
+    },
+    "003-livox_ros_driver2": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/drivers/livox-sdk/livox_ros_driver2.git",
+      "version": "631c7d2dd8966239c1facc34236ae52387ec191e"
+    },
+    "004-motor_lift_ros": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/r1/motor_driver/motor_lift_ros.git",
+      "version": "08a8c2d2cafa562619eea2ed5c7b3418db7d52de"
+    },
+    "005-motor_lift_sdk": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/r1/motor_driver/motor_lift_sdk",
+      "version": "1567ca8499281fc8bc0edde578763b62e740ea1d"
+    },
+    "006-motor_pitch_ros": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/r1/motor_driver/motor_pitch_ros.git",
+      "version": "36cb95277d8ff2daa66b6793b110af1fd37ba3d3"
+    },
+    "007-motor_pitch_sdk": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/r1/motor_driver/motor_pitch_sdk.git",
+      "version": "c3c7c60b61a7e594030b8982dfcac14df37efdf8"
+    },
+    "008-realsense-ros": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/drivers/intelrealsense/realsense-ros.git",
+      "version": "20ec87c47a415fb95a2f63b9308e57d974b06e3b"
+    },
+    "009-rpp_driver": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/drivers/drivers-ros2/rpp_driver/rpp_driver.git",
+      "version": "bd5ad314784f61e2f7eaf4ac2d076284af073361"
+    },
+    "010-rpp_msgs": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/drivers/drivers-ros2/rpp_driver/rpp_msgs.git",
+      "version": "80e078e3047c1b4749b664cea8a12cb905baeb63"
+    },
+    "011-rpp_ros_driver": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/drivers/drivers-ros2/rpp_driver/rpp_ros_driver.git",
+      "version": "ac12dc64b50e594f7f38f54f3c8ecf99326d58ec"
+    },
+    "012-rpp_components_description": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/mobile-robot/rpp_components_description.git",
+      "version": "3fd30cadad530deb33d7d3f30007c129f155c6de"
+    },
+    "013-r1_description": {
+      "type": "git",
+      "url": "snapshot-bundle:sources/013-r1_description.bundle",
+      "version": "2d3d1f014a11a8e5f941490a71e60d15d12687a5"
+    },
+    "014-fastlio2_ros2": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/slam/develop/ros2/indoor_slam_location/fastlio2_ros2.git",
+      "version": "d539deb298fe91715662e2917627c7192130bee9"
+    },
+    "015-indoor_location": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/slam/develop/ros2/indoor_slam_location/indoor_location.git",
+      "version": "94ff65654158c59f0e3ce28ffc6b6217f7c63a8a"
+    },
+    "016-lidar2base_pcd_node": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/slam/develop/ros2/indoor_slam_location/lidar2base_pcd_node.git",
+      "version": "8f5bb0063f9ac0b003ef117218c957fb38e5f05a"
+    },
+    "017-lidar_undistortion_2d": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/slam/lidar_undistortion_2d.git",
+      "version": "cfe9efe77a9bde9459eb71f446d6bcb3aff3edd2"
+    },
+    "018-livox_undistortion": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/slam/livox_undistortion.git",
+      "version": "8e5571ab5cf8e918ea3bd83b1178d6c9109cd89c"
+    },
+    "019-loopkypose_to_grid": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/slam/develop/ros2/indoor_slam_location/loopkypose_to_grid.git",
+      "version": "25d62aba7103a3fc006fccdfbdc60e559af4c028"
+    },
+    "020-map_to_odom_tf": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/slam/develop/ros2/indoor_slam_location/map_to_odom_tf.git",
+      "version": "5af2f516b4294638f76b5687771f22d9bafba37a"
+    },
+    "021-pointcloud_to_2dmap_ros2": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/slam/develop/ros2/indoor_slam_location/pointcloud_to_2dmap_ros2.git",
+      "version": "ff4ebf91059868cbdfdbbe26878aaa796078d8eb"
+    },
+    "022-map_cloud_filter": {
+      "type": "git",
+      "url": "snapshot-bundle:sources/022-map_cloud_filter.bundle",
+      "version": "be291361396d14257e73003462d8927d61e83633"
+    },
+    "023-navigation2": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/navigation/ros-navigation/navigation2.git",
+      "version": "507b3659e6c622d9339b61b53810320b600526a2"
+    },
+    "024-rokae_dual_arm_bringup": {
+      "type": "git",
+      "url": "snapshot-bundle:sources/024-rokae_dual_arm_bringup.bundle",
+      "version": "64629b4392719f715de6ab76263bdca752e49d8a"
+    },
+    "025-trace_msgs": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/teleoperation/master-slave-isomorphic-system/trace_msgs.git",
+      "version": "95eeacb7447453ae516a85bc3d65d4ff3d76a5d5"
+    },
+    "026-navigation_2d": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/mobile-manipulator/r1/navigation_2d.git",
+      "version": "3fef3aaa25b758ac3b694b9e8536034615f093dc"
+    },
+    "027-robot_bringup": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/mobile-manipulator/r1/robot_bringup.git",
+      "version": "9b4252e3bb2989cd8e68bfd55c67c700480ec624"
+    },
+    "028-slam_3d": {
+      "type": "git",
+      "url": "https://git.robotplusplus.com.cn/mobile-manipulator/r1/slam_3d.git",
+      "version": "52b1b1a26aff21ced44d27ce123bac2e10507838"
+    }
+  }
+}
