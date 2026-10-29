@@ -5,6 +5,7 @@
 #include <string>
 #include "gtest/gtest.h"
 #include "nav2_core/controller.hpp"
+#include "nav2_costmap_2d/layer.hpp"
 #include "pluginlib/class_loader.hpp"
 
 TEST(SameUUIDAdapter, RefusesProductionConfigurationBeforeAnyROSIO)
@@ -27,6 +28,18 @@ TEST(ActionStallAdapter, RefusesProductionConfigurationBeforeAnyROSIO)
   pluginlib::ClassLoader<nav2_core::Controller> loader("nav2_core", "nav2_core::Controller");
   auto controller = loader.createSharedInstance("navigation_neupan_bridge/ActionStallController");
   EXPECT_THROW(controller->configure({}, "FollowPath", nullptr, nullptr), std::runtime_error);
+  if (saved) {setenv("NEUPAN_ISOLATED_ROS_TEST", saved->c_str(), 1);}
+  else {unsetenv("NEUPAN_ISOLATED_ROS_TEST");}
+}
+
+TEST(CurrentLayerAdapter, RefusesProductionConfigurationBeforeAnyROSIO)
+{
+  const char * previous = std::getenv("NEUPAN_ISOLATED_ROS_TEST");
+  const std::optional<std::string> saved = previous ? std::optional<std::string>(previous) : std::nullopt;
+  setenv("NEUPAN_ISOLATED_ROS_TEST", "0", 1);
+  pluginlib::ClassLoader<nav2_costmap_2d::Layer> loader("nav2_costmap_2d", "nav2_costmap_2d::Layer");
+  EXPECT_THROW(loader.createSharedInstance("navigation_neupan_bridge/ControlledCurrentLayer"),
+    std::exception);
   if (saved) {setenv("NEUPAN_ISOLATED_ROS_TEST", saved->c_str(), 1);}
   else {unsetenv("NEUPAN_ISOLATED_ROS_TEST");}
 }

@@ -1,0 +1,6 @@
+<library path="controlled_current_layer">
+  <class name="navigation_neupan_bridge/ControlledCurrentLayer"
+    type="navigation_neupan_bridge::ControlledCurrentLayer" base_class_type="nav2_costmap_2d::Layer">
+    <description>Isolated test-only costmap current state control.</description>
+  </class>
+</library>

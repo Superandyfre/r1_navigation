@@ -32,6 +32,7 @@ def main():
     assert inventory['build_testing_off'] and all(inventory['build_testing_off'].values())
     assert not list(install.rglob('*same_uuid*'))
     assert not list(install.rglob('*action_stall*'))
+    assert not list(install.rglob('*controlled_current*'))
     repo=Path(__file__).resolve().parents[2]
     sys.path.insert(0,str(repo/'packages/navigation_neupan_bridge/test'))
     import failstop_chain_ros as chain

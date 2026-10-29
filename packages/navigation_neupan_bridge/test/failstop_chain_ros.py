@@ -113,6 +113,10 @@ class FailstopChainROS(unittest.TestCase):
             cmd_vel_out_topic=PREFIX+'output',status_topic=PREFIX+'status',scan_topic=PREFIX+'scan',
             odom_topic=PREFIX+'odom',worker_health_topic=PREFIX+'health',planner_source_topic=PREFIX+'source',
             motion_grant_topic=PREFIX+'grant',planner_recovery_timeout_sec=1.)}}
+        if getattr(self,'noncurrent_test_layer',False):
+            costmap=config['local_costmap']['local_costmap']['ros__parameters']
+            costmap['plugins'].append('test_current_layer')
+            costmap['test_current_layer']={'plugin':'navigation_neupan_bridge/ControlledCurrentLayer'}
         path=self.report/'params.yaml';path.write_text(yaml.safe_dump(config))
         if self.real_node:
             packages=WS/'src/r1_navigation/packages'
