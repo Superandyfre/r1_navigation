@@ -397,7 +397,7 @@ void ControllerServer::beginRuntimeExecution()
     observer, authority_boot_id_, id.str());
   std::lock_guard<std::mutex> lock(runtime_path_mutex_);
   runtime_attempt_id_ = id.str();
-  runtime_terminal_path_ = {};
+  runtime_terminal_path_ = nav_msgs::msg::Path();
   pending_runtime_path_.reset();
 }
 
@@ -410,7 +410,8 @@ void ControllerServer::endRuntimeExecution(const std::string & reason) noexcept
 {
   {
     std::lock_guard<std::mutex> lock(runtime_path_mutex_);
-    runtime_attempt_id_.clear(); pending_runtime_path_.reset(); runtime_terminal_path_ = {};
+    runtime_attempt_id_.clear(); pending_runtime_path_.reset();
+    runtime_terminal_path_ = nav_msgs::msg::Path();
   }
   if (runtime_execution_) {runtime_execution_->end(reason); runtime_execution_.reset();}
 }
@@ -422,7 +423,7 @@ void ControllerServer::applyRuntimePathUpdate()
     std::lock_guard<std::mutex> lock(runtime_path_mutex_);
     path.swap(pending_runtime_path_);
   }
-  if (path) {setPlannerPath(*path);}
+  if (path) {setPlannerPath(*path, false);}
 }
 
 void ControllerServer::computeControl()
@@ -553,7 +554,7 @@ void ControllerServer::computeControl()
   action_server_->succeeded_current();
 }
 
-void ControllerServer::setPlannerPath(const nav_msgs::msg::Path & path)
+void ControllerServer::setPlannerPath(const nav_msgs::msg::Path & path, bool reset_goal_checker)
 {
   RCLCPP_DEBUG(
     get_logger(),
@@ -565,7 +566,7 @@ void ControllerServer::setPlannerPath(const nav_msgs::msg::Path & path)
 
   end_pose_ = path.poses.back();
   end_pose_.header.frame_id = path.header.frame_id;
-  goal_checkers_[current_goal_checker_]->reset();
+  if (reset_goal_checker) {goal_checkers_[current_goal_checker_]->reset();}
 
   RCLCPP_DEBUG(
     get_logger(), "Path end point is (%.2f, %.2f)",
