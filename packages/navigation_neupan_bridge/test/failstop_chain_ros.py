@@ -110,6 +110,7 @@ class FailstopChainROS(unittest.TestCase):
             gate_command_topic='unused_gate_cmd',gate_status_topic='unused_gate_status',
             localization_health_topic='unused_localization',diagnostics_topic='diagnostics').items():
             plugin[key]=PREFIX+topic
+        plugin.update(getattr(self, 'controller_parameters_override', {}))
         config = {
           'controller_server': {'ros__parameters':dict(use_sim_time=False,controller_frequency=20.,
             failure_tolerance=0.,runtime_costmap_wait_timeout_sec=2.,odom_topic=PREFIX+'odom',

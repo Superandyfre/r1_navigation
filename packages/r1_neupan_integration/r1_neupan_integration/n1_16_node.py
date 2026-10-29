@@ -43,6 +43,17 @@ from r1_neupan_integration.command_stabilizer import (
 from r1_neupan_integration.n2_3_contract import make_context, make_planner_envelope
 from r1_neupan_integration.forward_only import ForwardOnlyConfig, ForwardOnlyController
 from r1_neupan_integration.latest_input_scheduler import LatestInputScheduler
+
+
+def encode_semantic(payload: dict[str, Any]) -> str:
+    """Normalize NumPy values without changing finite-value validation."""
+    def numeric_default(value):
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        raise TypeError(f"Unsupported semantic value: {type(value).__name__}")
+    return json.dumps(payload, default=numeric_default, allow_nan=False, sort_keys=True)
 from r1_neupan_integration.local_detour import (
     LocalDetourController, LocalDetourPlanner, ReverseEscapePlanner,
 )
@@ -1541,7 +1552,7 @@ class N116Node(N115Node):
             # record and on the semantic topic consumed by the N2 audit.
             record["cycle_evidence"] = dict(semantic)
             semantic_message = String()
-            semantic_message.data = json.dumps(semantic, allow_nan=False, sort_keys=True)
+            semantic_message.data = encode_semantic(semantic)
             self.semantic_pub.publish(semantic_message)
         finally:
             with self._active_lock:

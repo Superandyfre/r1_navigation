@@ -65,7 +65,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate',required=True,type=Path)
     parser.add_argument('--bundle',type=Path,help='Verify and run the relocated bundle instead of candidate/install')
-    parser.add_argument('--suite',choices=['chain','collisionoff','navigator','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','navigator-owner','navigator-freeze','navigator-tick-loss','navigator-configure-churn','pending-halt','ack-delay','effective-parameters','all'],default='all')
+    parser.add_argument('--suite',choices=['chain','collisionoff','auto-arm','navigator','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','navigator-owner','navigator-freeze','navigator-tick-loss','navigator-configure-churn','pending-halt','ack-delay','effective-parameters','all'],default='all')
     args=parser.parse_args()
     if args.suite=='effective-parameters' and not args.bundle:
         parser.error('effective-parameters admission checks require a pinned --bundle manifest')
@@ -124,6 +124,8 @@ def main():
                     'navigator-owner':'failstop_navigator_owner_ros','pending-halt':'failstop_navigator_halt_pending_ros',
                     'navigator-freeze':'failstop_navigator_freeze_ros',
                     'ack-delay':'failstop_navigator_ack_delay_ros'})
+    if args.suite=='auto-arm':
+        modules['auto-arm']='failstop_auto_arm_ros'
     # This extra fixture needs a manually compiled, test-only decorator. Keep
     # the BUILD_TESTING=OFF candidate's standard suite independent of adapters.
     if args.suite=='navigator-tick-loss':
