@@ -59,9 +59,15 @@ class SourceRecovery(chain.FailstopChainROS):
         ended=time.monotonic()
         # Controller and Guard watchdogs race. Controller may retire/revoke
         # before Guard's own timeout, so prove the immutable Controller fault.
-        self.until(lambda:any(j.get('fault_reason')=='planner_result_recovery_timeout'
+        self.until(lambda:any(j.get('fault_reason') in
+                              ('planner_result_recovery_timeout','guard_fault_latched')
                               and j.get('fault_latched')
                               for t,j in self.runtime_statuses if t>start))
+        controller_reasons=sorted({j['fault_reason'] for t,j in self.runtime_statuses
+                                  if t>start and j.get('fault_latched')})
+        self.assertTrue('planner_result_recovery_timeout' in controller_reasons or
+            any(j['authorization_reason']=='planner_result_recovery_timeout'
+                for t,j in self.statuses if t>start))
         self.source_hold(False)
         self.until(lambda:time.monotonic()>ended+.8)
         retry=self.goal()
@@ -72,7 +78,8 @@ class SourceRecovery(chain.FailstopChainROS):
         self.assertFalse(any(j['state']=='FAULT_LATCHED' for _,j in self.healths))
         (self.report/'source-recovery-result.json').write_text(json.dumps(dict(
             mode='expired-hold',action='ABORTED',new_goal='ABORTED',
-            terminal_after_pause=ended-start,controller_reason='planner_result_recovery_timeout',
+            terminal_after_pause=ended-start,controller_reasons=controller_reasons,
+            root_reason='planner_result_recovery_timeout',
             zero_samples=len(rows),healthy_worker=True,physical_motion=False),indent=2))
 
 def load_tests(loader,tests,pattern):
