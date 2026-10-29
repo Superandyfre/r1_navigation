@@ -56,7 +56,7 @@ def check(manifest, env=None, python_path=None, compatibility_only=False):
     python_path=sys.path if python_path is None else python_path
     errors=[];observed={}
     if manifest.get('schema')!='r1_neupan_release_v1':errors.append('invalid_manifest_schema')
-    if manifest.get('protocol_set')!='A+context1-source2-grant1-health1':errors.append('incompatible_protocol_set')
+    if manifest.get('protocol_set')!='A+context1-source2-grant1-health1-owner1':errors.append('incompatible_protocol_set')
     artifacts=manifest.get('artifacts',{})
     if not isinstance(artifacts,dict):artifacts={};errors.append('invalid_artifacts')
     for role in ROLES:

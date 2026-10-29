@@ -22,7 +22,7 @@ class Preflight(unittest.TestCase):
         # environment under test. This is diagnostic, with all release gates off.
         cls.env=dict(os.environ)
         cls.paths=list(sys.path)
-        cls.manifest=dict(schema='r1_neupan_release_v1',protocol_set='A+context1-source2-grant1-health1',
+        cls.manifest=dict(schema='r1_neupan_release_v1',protocol_set='A+context1-source2-grant1-health1-owner1',
             deployment_approved=False,build_testing=True,gates={},artifacts={})
         for role in preflight.ROLES:
             p=preflight.resolve(role,cls.env,cls.paths)

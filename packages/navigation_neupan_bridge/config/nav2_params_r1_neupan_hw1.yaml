@@ -89,6 +89,7 @@ controller_server:
       motion_grant_topic: /neupan_motion_grant
       motion_arm_service: /neupan_controller/arm
       motion_revoke_service: /neupan_controller/revoke_uncertain_execution
+      execution_owner_topic: /neupan_execution_owner
       motion_retry_service: /neupan_controller/can_retry
       arm_odom_frame: odom
       arm_base_frame: base_link

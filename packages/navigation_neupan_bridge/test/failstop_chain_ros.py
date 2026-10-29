@@ -50,9 +50,13 @@ class FailstopChainROS(unittest.TestCase):
         self.tf = TransformBroadcaster(self.node)
         self.artifacts=[]
         self.context = None
+        self.owned_attempts=set()
+        self.owner_enabled=True
+        self.owner_pub=self.node.create_publisher(String,'/neupan_execution_owner',20)
         self.statuses, self.outputs, self.raw, self.smooth, self.contexts = [], [], [], [], []
         self.sources=[]
         self.healths=[]
+        self.owners=[]
         self.runtime_statuses=[]
         self.grants=[]
         self.inject_acks=[]
@@ -69,6 +73,7 @@ class FailstopChainROS(unittest.TestCase):
             self.context=json.loads(msg.data)
             self.contexts.append((time.monotonic(),self.context))
         self.subs = [self.node.create_subscription(String,PREFIX+'grant',lambda m:self.grants.append((time.monotonic(),json.loads(m.data))),20),
+                     self.node.create_subscription(String,'/neupan_execution_owner',lambda m:self.owners.append((time.monotonic(),json.loads(m.data))),20),
                      self.node.create_subscription(String,PREFIX+'inject_ack',lambda m:self.inject_acks.append((time.monotonic(),json.loads(m.data))),20),
                      self.node.create_subscription(String,PREFIX+'diagnostics',lambda m:self.runtime_statuses.append((time.monotonic(),json.loads(m.data))),20),
                      self.node.create_subscription(String,PREFIX+'health',lambda m:self.healths.append((time.monotonic(),json.loads(m.data))),20),
@@ -214,7 +219,7 @@ class FailstopChainROS(unittest.TestCase):
                 except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=3)
         for log in self.logs:log.close()
         (self.report/'trace.json').write_text(json.dumps(dict(status=self.statuses,output=self.outputs,
-            raw=self.raw,smooth=self.smooth,context=self.contexts,source=self.sources,health=self.healths,runtime_status=self.runtime_statuses,grant=self.grants,inject_ack=self.inject_acks),indent=2))
+            raw=self.raw,smooth=self.smooth,context=self.contexts,source=self.sources,health=self.healths,runtime_status=self.runtime_statuses,grant=self.grants,inject_ack=self.inject_acks,owner=self.owners),indent=2))
         self.node.destroy_node();rclpy.shutdown()
 
     def publish(self,key,payload):
@@ -256,6 +261,15 @@ class FailstopChainROS(unittest.TestCase):
                     command=dict(linear_x=.1,angular_z=0.))
                 self.publish('source',source)
         rclpy.spin_once(self.node,timeout_sec=.01)
+        if self.owner_enabled and self.context and self.context['state']=='ACTIVE' and self.context['navigation_attempt_id'] in self.owned_attempts:
+            owner={k:self.context[k] for k in ['authority_boot_id','controller_boot_id','navigation_attempt_id']}
+            owner.update(schema='r1_neupan_execution_owner_v1',owner_id='isolated-action-client',
+                         sequence=self.sequence,monotonic=time.monotonic())
+            # tick() can run more often than input pulses. Allocate an owner
+            # sequence for each publication rather than conflicting duplicates.
+            self.owner_sequence=getattr(self,'owner_sequence',0)+1
+            owner['sequence']=self.owner_sequence
+            self.owner_pub.publish(String(data=json.dumps(owner)))
 
     def until(self,predicate,seconds=6):
         deadline=time.monotonic()+seconds
@@ -263,7 +277,11 @@ class FailstopChainROS(unittest.TestCase):
         self.assertTrue(predicate(),'timeout; report='+str(self.report)+' last='+str(self.statuses[-1:]))
 
     def future(self,future,seconds=6):
-        self.until(future.done,seconds);return future.result()
+        self.until(future.done,seconds)
+        result=future.result()
+        if getattr(result,'accepted',False) and hasattr(result,'goal_id'):
+            self.owned_attempts.add(bytes(result.goal_id.uuid).hex())
+        return result
 
     def lifecycle(self,name,transition):
         client=self.node.create_client(ChangeState,'/'+name+'/change_state')
@@ -293,6 +311,7 @@ class FailstopChainROS(unittest.TestCase):
             pose=PoseStamped();pose.header.frame_id='map';pose.pose.position.x=x;pose.pose.orientation.w=1.
             goal.path.poses.append(pose)
         handle=self.future(self.action.send_goal_async(goal));self.assertTrue(handle.accepted)
+        self.owned_attempts.add(bytes(handle.goal_id.uuid).hex())
         return handle
 
     def exercise(self,mode):

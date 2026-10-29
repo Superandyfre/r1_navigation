@@ -36,7 +36,7 @@ def package(candidate, destination, repo):
                 raise ValueError('unsupported_archive_entry:'+member.name)
             tar.extract(member,destination)
     shutil.copytree(candidate/'install',destination/'install')
-    manifest=dict(schema='r1_neupan_release_v1',protocol_set='A+context1-source2-grant1-health1',
+    manifest=dict(schema='r1_neupan_release_v1',protocol_set='A+context1-source2-grant1-health1-owner1',
         build_source_sha=inv['source_sha'],tooling_source_sha=tooling_sha,build_testing=False,
         deployment_approved=False,gates=dict(full_no_motion_acceptance=False,
         physical_stop_acceptance=False,rollback_rehearsal=False),artifacts={})

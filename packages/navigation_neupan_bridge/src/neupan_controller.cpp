@@ -125,6 +125,7 @@ void NeuPANController::configure(
     std::make_pair("motion_grant_topic", &motion_grant_topic_),
     std::make_pair("motion_arm_service", &motion_arm_service_),
     std::make_pair("motion_retry_service", &motion_retry_service_),
+    std::make_pair("execution_owner_topic", &owner_topic_),
     std::make_pair("motion_revoke_service", &motion_revoke_service_),
     std::make_pair("arm_odom_frame", &arm_odom_frame_),
     std::make_pair("arm_base_frame", &arm_base_frame_),
@@ -211,6 +212,14 @@ void NeuPANController::configure(
       response->message = response->success ? "run_armed_each_action_still_requires_grant" :
         "arm_denied_require_idle_stopped_fresh_guard_and_no_fatal";
     });
+  owner_sub_ = node_->create_subscription<std_msgs::msg::String>(owner_topic_, rclcpp::QoS(20),
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!execution_->active() || execution_->faulted()) {return;}
+      try {owner_lease_.observe(nlohmann::json::parse(msg->data), monotonicNow());}
+      catch (const std::exception &) {execution_->fail("invalid_execution_owner");}
+      ownerReadyLocked(monotonicNow());
+    });
   retry_service_ = node_->create_service<std_srvs::srv::Trigger>(motion_retry_service_,
     [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -268,6 +277,7 @@ void NeuPANController::cleanup()
   envelope_ = Envelope{};
   runtime_timer_.reset();
   arm_service_.reset();
+  owner_sub_.reset();
   retry_service_.reset();
   revoke_service_.reset();
   worker_health_sub_.reset();
@@ -305,6 +315,7 @@ void NeuPANController::beginExecution(const std::string & authority, const std::
   std::lock_guard<std::mutex> lock(mutex_);
   if (!active_) {throw nav2_core::PlannerException("controller_inactive");}
   execution_->begin(authority, attempt, monotonicNow());
+  owner_lease_.begin(authority, execution_->boot(), attempt, monotonicNow());
   path_published_ = false; goal_published_ = false; plan_valid_ = false;
   route_update_gate_.reset(); envelope_ = Envelope{};
   envelope_recovery_active_ = false; guard_stop_active_ = false;
@@ -314,7 +325,15 @@ void NeuPANController::checkExecution(const std::string & authority, const std::
 {
   if (shadow_mode_) {return;}
   std::lock_guard<std::mutex> lock(mutex_);
+  ownerReadyLocked(monotonicNow());
   execution_->check(authority, attempt, monotonicNow());
+}
+
+bool NeuPANController::ownerReadyLocked(double now)
+{
+  const bool ready = owner_lease_.ready(now);
+  if (!owner_lease_.fault().empty()) {execution_->fail(owner_lease_.fault());}
+  return ready;
 }
 
 nlohmann::json NeuPANController::executionContextLocked(const char * state)
@@ -382,6 +401,7 @@ void NeuPANController::runtimeTick()
     std_msgs::msg::String status;
     status.data = nlohmann::json{{"schema", "r1_neupan_execution_status_v1"},
       {"controller_boot_id", execution_->boot()}, {"sequence", ++runtime_status_sequence_},
+      {"authority_boot_id", execution_->authority()},
       {"monotonic", monotonicNow()}, {"plugin_active", active_},
       {"execution_active", execution_->active()}, {"fault_latched", execution_->faulted()},
       {"fault_reason", execution_->fault()}, {"navigation_attempt_id", execution_->attempt()}}.dump();
@@ -390,6 +410,10 @@ void NeuPANController::runtimeTick()
   }
   if (!active_ || !execution_->active()) {return;}
   try {
+    if (!ownerReadyLocked(monotonicNow())) {
+      if (execution_->faulted()) {endExecutionLocked(execution_->fault());}
+      return;
+    }
     const auto grant = execution_->tick(monotonicNow());
     if (execution_->faulted()) {envelope_ = Envelope{}; endExecutionLocked(execution_->fault()); return;}
     if (path_published_) {publishExecutionContextLocked("ACTIVE");}
@@ -459,7 +483,8 @@ void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
         execution_->plan(path_version_, goal_version_, monotonicNow());
         // Send route PREPARE synchronously, before publishing new Worker context.
         // The Guard ACK, not local publication order, establishes invalidation.
-        const auto grant = execution_->tick(monotonicNow());
+        const auto grant = ownerReadyLocked(monotonicNow()) ?
+          execution_->tick(monotonicNow()) : std::nullopt;
         if (grant) {std_msgs::msg::String msg; msg.data = grant->dump(); motion_grant_pub_->publish(msg);}
       }
     }
@@ -544,7 +569,7 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
   }
   if (!shadow_mode_) {
     std::lock_guard<std::mutex> lock(mutex_);
-    const bool permitted = execution_->permitted(monotonicNow());
+    const bool permitted = ownerReadyLocked(monotonicNow()) && execution_->permitted(monotonicNow());
     if (execution_->faulted()) {throw nav2_core::PlannerException(execution_->fault());}
     if (!permitted) {
       geometry_msgs::msg::TwistStamped zero; zero.header = pose.header; zero.header.stamp = node_->now();
@@ -739,7 +764,7 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
   if (!shadow_mode_) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (execution_->faulted()) {throw nav2_core::PlannerException(execution_->fault());}
-    if (!execution_->permitted(monotonicNow()) || !plan_valid_ ||
+    if (!ownerReadyLocked(monotonicNow()) || !execution_->permitted(monotonicNow()) || !plan_valid_ ||
       path_version_ != expected_path || goal_version_ != expected_goal ||
       !envelope_.valid || envelope_.planner_result_monotonic != envelope.planner_result_monotonic)
     {return command;}

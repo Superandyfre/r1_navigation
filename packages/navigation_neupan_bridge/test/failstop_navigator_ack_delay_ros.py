@@ -19,9 +19,11 @@ class NavigatorAckDelay(nav.NavigatorFailstop):
             log=open(self.report/'goal-ack-peer.log','w');self.logs.append(log)
             self.procs.append(subprocess.Popen([sys.executable,str(helper),str(self.report/'ack-peer')],stdout=log,stderr=subprocess.STDOUT))
             remaps=[*remaps,'/follow_path/_action/send_goal:=/test_failstop_ack/follow_path/_action/send_goal']
+            if self._testMethodName=='test_ack_timeout_revoke_unavailable':
+                remaps.append('/neupan_controller/revoke_uncertain_execution:=/test_failstop_ack/missing_revoke')
         super().start(exe,params,remaps)
 
-    def test_ack_timeout_downstream_observation(self):
+    def exercise_ack_timeout(self):
         client=ActionClient(self.node,NavigateToPose,'/navigate_to_pose')
         self.until(client.server_is_ready)
         goal=NavigateToPose.Goal();goal.pose.header.frame_id='map'
@@ -41,12 +43,16 @@ class NavigatorAckDelay(nav.NavigatorFailstop):
             physical_motion=False,diagnostic_exposure_test=False)
         (self.report/'ack-delay-result.json').write_text(json.dumps(record,indent=2))
         self.assertEqual(len(later),0,'downstream output after top-level failure')
-        self.assertTrue(any(j.get('fault_reason')=='follow_path_execution_uncertain'
+        self.assertTrue(any(j.get('fault_reason') in ('follow_path_execution_uncertain','owner_ack_timeout')
                             and j.get('fault_latched') for _,j in self.runtime_statuses))
         retry=self.future(client.send_goal_async(goal));self.assertTrue(retry.accepted)
         self.assertEqual(self.future(retry.get_result_async()).status,GoalStatus.STATUS_ABORTED)
         client.destroy()
 
+    def test_ack_timeout_downstream_observation(self):self.exercise_ack_timeout()
+    def test_ack_timeout_revoke_unavailable(self):self.exercise_ack_timeout()
+
 def load_tests(loader,tests,pattern):
-    return unittest.TestSuite([NavigatorAckDelay('test_ack_timeout_downstream_observation')])
+    return unittest.TestSuite(NavigatorAckDelay(n) for n in
+        ['test_ack_timeout_downstream_observation','test_ack_timeout_revoke_unavailable'])
 if __name__=='__main__':unittest.main()

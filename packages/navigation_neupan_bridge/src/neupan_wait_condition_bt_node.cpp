@@ -20,6 +20,7 @@
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "r1_neupan_runtime/motion_authorization.hpp"
 
 namespace navigation_neupan_bridge
 {
@@ -33,6 +34,14 @@ public:
   NeuPANFollowPath(const std::string & name, const BT::NodeConfiguration & config)
   : FollowPathAction(name, "follow_path", config)
   {
+    owner_id_ = r1_neupan_runtime::newBootId();
+    owner_pub_ = node_->create_publisher<std_msgs::msg::String>("/neupan_execution_owner", 20);
+    rclcpp::SubscriptionOptions options; options.callback_group = callback_group_;
+    owner_context_ = node_->create_subscription<std_msgs::msg::String>(
+      "/neupan_execution_context", 20,
+      [this](const std_msgs::msg::String::SharedPtr msg) {
+        try {context_ = nlohmann::json::parse(msg->data);} catch (const std::exception &) {}
+      }, options);
     revoke_ = node_->create_client<std_srvs::srv::Trigger>(
       "/neupan_controller/revoke_uncertain_execution", rmw_qos_profile_services_default,
       callback_group_);
@@ -42,6 +51,21 @@ public:
   {
     const auto pending = future_goal_handle_;
     const auto status = FollowPathAction::tick();
+    if (status == BT::NodeStatus::RUNNING && goal_handle_ && !future_goal_handle_) {
+      const auto id = rclcpp_action::to_string(goal_handle_->get_goal_id());
+      if (context_.value("state", "") == "ACTIVE" &&
+        context_.value("navigation_attempt_id", "") == id)
+      {
+        nlohmann::json owner{{"schema", "r1_neupan_execution_owner_v1"},
+          {"owner_id", owner_id_}, {"sequence", ++owner_sequence_},
+          {"monotonic", std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count()}};
+        for (const auto key : {"authority_boot_id", "controller_boot_id", "navigation_attempt_id"}) {
+          owner[key] = context_.at(key);
+        }
+        std_msgs::msg::String msg; msg.data = owner.dump(); owner_pub_->publish(msg);
+      }
+    }
     if (status == BT::NodeStatus::FAILURE && pending &&
       pending->wait_for(std::chrono::seconds(0)) != std::future_status::ready)
     {
@@ -69,6 +93,11 @@ private:
     }
   }
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr revoke_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr owner_pub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr owner_context_;
+  nlohmann::json context_ = nlohmann::json::object();
+  std::string owner_id_;
+  std::int64_t owner_sequence_{0};
 };
 
 bool sameGoal(const Pose & left, const Pose & right)

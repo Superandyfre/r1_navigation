@@ -20,6 +20,7 @@
 #include "r1_neupan_runtime/controller_execution.hpp"
 #include "r1_neupan_runtime/stopped_odometry.hpp"
 #include "navigation_neupan_bridge/route_update_gate.hpp"
+#include "navigation_neupan_bridge/execution_owner_lease.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/lifecycle_node.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -55,6 +56,10 @@ public:
 
 private:
   void runtimeTick();
+  bool ownerReadyLocked(double now);
+  ExecutionOwnerLease owner_lease_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr owner_sub_;
+  std::string owner_topic_{"/neupan_execution_owner"};
   nlohmann::json executionContextLocked(const char * state);
   void publishExecutionContextLocked(const char * state);
   void endExecutionLocked(const std::string & reason);

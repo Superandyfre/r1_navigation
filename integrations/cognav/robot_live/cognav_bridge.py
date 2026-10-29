@@ -108,6 +108,10 @@ class Bridge(Node):
         self.receipts = {}
         self.session = uuid.uuid4().hex
         self.lifecycle = GoalLifecycle()
+        self.owner_id=str(uuid.uuid4())
+        self.owner_sequence=0
+        self.owner_pub=self.create_publisher(String,'/neupan_execution_owner',20)
+        self.owner_timer=self.create_timer(.1,self.publish_execution_owner)
         self.neupan = NeuPANFailstop()
         self.neupan_subscriptions = []
         for kind, topic in [('worker', args.worker_health_topic),
@@ -318,6 +322,35 @@ class Bridge(Node):
             self.get_logger().warn('observation skipped: ' + reason)
 
     # ---------------- motion spool ----------------
+
+    def publish_execution_owner(self):
+        now = time.monotonic()
+        if self.stopping or self.neupan.reason(now):
+            return
+        with self.lifecycle.lock:
+            ctx=self.lifecycle.current
+            if not ctx or ctx['state']!='executing' or ctx.get('cancel_requested') or not ctx.get('accepted'):
+                return
+            # Renewal must independently require the parent driver's authority;
+            # do not depend on the scheduling order of the separate watchdog.
+            if lease_reason(ctx, read_json(self.root / 'live' / 'lease.json'),
+                            self.session, now, self.a.lease_timeout):
+                return
+            motion = getattr(self, 'motion_payload', {})
+            if not (motion.get('inputs_valid') is True and self._health_ready()
+                    and 0 <= now - motion.get('received_at', 0) <= self.a.input_max_age
+                    and 0 <= now - motion.get('obstacles_received_at', 0) <= self.a.input_max_age):
+                return
+            attempt=ctx.get('navigation_attempt_id')
+        record=self.neupan.records.get('controller',{}).get('row',{})
+        if (record.get('navigation_attempt_id')!=attempt or not record.get('execution_active')
+                or not record.get('authority_boot_id')):
+            return
+        self.owner_sequence+=1
+        owner={k:record[k] for k in ['authority_boot_id','controller_boot_id','navigation_attempt_id']}
+        owner.update(schema='r1_neupan_execution_owner_v1',owner_id=self.owner_id,
+                     sequence=self.owner_sequence,monotonic=time.monotonic())
+        self.owner_pub.publish(String(data=json.dumps(owner)))
 
     def write_motion(self):
         now = time.monotonic()

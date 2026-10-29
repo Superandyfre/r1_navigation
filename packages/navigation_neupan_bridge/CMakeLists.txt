@@ -57,7 +57,7 @@ add_library(neupan_wait_condition_bt_node SHARED src/neupan_wait_condition_bt_no
 target_compile_features(neupan_wait_condition_bt_node PUBLIC cxx_std_17)
 target_compile_definitions(neupan_wait_condition_bt_node PRIVATE BT_PLUGIN_EXPORT)
 ament_target_dependencies(neupan_wait_condition_bt_node
-  behaviortree_cpp_v3 nav2_behavior_tree nav_msgs rclcpp std_msgs std_srvs)
+  behaviortree_cpp_v3 nav2_behavior_tree nav_msgs rclcpp std_msgs std_srvs r1_neupan_runtime)
 find_library(NEUPAN_FOLLOW_PATH_BT_LIBRARY nav2_follow_path_action_bt_node
   PATHS "${nav2_behavior_tree_DIR}/../../../lib" REQUIRED)
 target_link_libraries(neupan_wait_condition_bt_node "${NEUPAN_FOLLOW_PATH_BT_LIBRARY}")
@@ -161,6 +161,9 @@ if(BUILD_TESTING)
     RECOVERY_PLUGIN_PATH="${NAV2_RECOVERY_BT_LIBRARY}")
   ament_target_dependencies(test_neupan_wait_condition_bt
     behaviortree_cpp_v3 geometry_msgs nav_msgs rclcpp std_msgs std_srvs)
+  ament_add_gtest(test_execution_owner_lease test/test_execution_owner_lease.cpp)
+  target_include_directories(test_execution_owner_lease PRIVATE include)
+  ament_target_dependencies(test_execution_owner_lease r1_neupan_runtime)
 endif()
 
 ament_export_dependencies(
