@@ -31,6 +31,17 @@ local symbol scope, so RTLD_NEXT alone is insufficient). The first failed
 RTLD_NEXT diagnostic attempt was preserved in evidence; it is not a navigation
 regression result.
 
+`NEUPAN_RMW_OBSERVER_FAILURE_ONLY=1` reduces instrumentation: successful responses
+return without listener queries/logging, and only Navigator change-state requests
+are logged. A failed response is queried only after the original call returns;
+`matched_before=-1` explicitly means not measured. It still interposes calls,
+reads the steady clock and logs configure requests, so it is not transparent.
+On failure `RMW_WRITER_MATCH_STATUS` queries the writer publication-match status
+after the failed send. Check its return code before interpreting counts/GUID.
+The installed Fast DDS matched-subscriptions list API returns UNSUPPORTED(2),
+so an empty list from that API does not prove no reader was matched. Match-status
+counts are aggregate; even a supported count alone cannot identify every reader.
+
 `RMW_RESPONSE_OBSERVE` records the response target GUID, local listener match
 before/after, original return value and original call duration. On failure,
 `RMW_WRITER_MATCHES` additionally queries actual writer matched subscriptions;
@@ -67,3 +78,11 @@ Only Navigator remains configure-only; background components are activated by
 the reused chain fixture. This changes coexistence but still does not recreate
 the full suite's repeated chain teardown/startup or prior motion traffic. Keep
 the two reports separate and do not infer a cause from passes alone.
+
+`accept_candidate_ros.py --suite navigator-configure-churn` is a separate
+12-case diagnostic with fresh full peer/chain fixtures and original configure
+client timing. It omits only Navigator activation and all goals. It is excluded
+from standard all43; no solver provenance is claimed because no solver should
+start. All bundle/install hashes and actual BT loading checks still run. A
+failed configure response remains a test failure; a subsequent GetState query
+only records the state, without retrying configure or changing its deadline.

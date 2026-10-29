@@ -65,7 +65,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate',required=True,type=Path)
     parser.add_argument('--bundle',type=Path,help='Verify and run the relocated bundle instead of candidate/install')
-    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','cognav-owner','navigator-owner','navigator-freeze','navigator-tick-loss','pending-halt','ack-delay','all'],default='all')
+    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','cognav-owner','navigator-owner','navigator-freeze','navigator-tick-loss','navigator-configure-churn','pending-halt','ack-delay','all'],default='all')
     args=parser.parse_args()
     assert os.environ.get('ROS_DOMAIN_ID')=='192'
     assert os.environ.get('ROS_LOCALHOST_ONLY')=='1'
@@ -125,11 +125,18 @@ def main():
     # the BUILD_TESTING=OFF candidate's standard all43 independent of adapters.
     if args.suite=='navigator-tick-loss':
         modules['navigator-tick-loss']='failstop_navigator_tick_loss_ros'
+    if args.suite=='navigator-configure-churn':
+        modules['navigator-configure-churn']='failstop_navigator_configure_churn_ros'
     selected=list(modules) if args.suite=='all' else [args.suite]
     suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromModule(importlib.import_module(modules[name])) for name in selected)
     result=unittest.TextTestRunner(verbosity=2,resultclass=AcceptanceResult).run(suite)
     provenance_errors=[]
-    if bundle:
+    if bundle and args.suite=='navigator-configure-churn':
+        # Explicit no-goal diagnostic, excluded from all43. It cannot establish
+        # solver provenance because no lazy solver should have started.
+        print(json.dumps(dict(diagnostic_scope='configure-only; no solver provenance claimed',
+                              scenes_checked=len(result.reports))),flush=True)
+    elif bundle:
         for report in result.reports:
             provenance_errors.extend(verify_solver_provenance(report,bundle))
         print(json.dumps(dict(bundle_provenance_errors=provenance_errors,
