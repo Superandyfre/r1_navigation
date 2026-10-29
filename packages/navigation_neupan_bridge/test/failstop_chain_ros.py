@@ -79,7 +79,7 @@ class FailstopChainROS(unittest.TestCase):
             arm_odom_frame='odom',arm_base_frame='base_link')
         for key,topic in dict(path_topic='path',goal_topic='goal',envelope_topic='source',
             guard_status_topic='status',worker_health_topic='health',execution_context_topic='context',
-            motion_grant_topic='grant',motion_arm_service='arm',odom_topic='odom',
+            motion_grant_topic='grant',motion_arm_service='arm',motion_retry_service='retry',odom_topic='odom',
             gate_command_topic='unused_gate_cmd',gate_status_topic='unused_gate_status',
             localization_health_topic='unused_localization',diagnostics_topic='diagnostics').items():
             plugin[key]=PREFIX+topic
@@ -88,7 +88,7 @@ class FailstopChainROS(unittest.TestCase):
             failure_tolerance=0.,runtime_costmap_wait_timeout_sec=2.,odom_topic=PREFIX+'odom',
             controller_plugins=['FollowPath'],progress_checker_plugin='progress_checker',
             goal_checker_plugins=['goal_checker'],
-            progress_checker={'plugin':'nav2_controller::SimpleProgressChecker','movement_time_allowance':60.},
+            progress_checker={'plugin':'nav2_controller::SimpleProgressChecker','movement_time_allowance':getattr(self,'progress_allowance',60.)},
             goal_checker={'plugin':'nav2_controller::SimpleGoalChecker','xy_goal_tolerance':.1,'yaw_goal_tolerance':.1},
             FollowPath=plugin)},
           'local_costmap':{'local_costmap':{'ros__parameters':dict(use_sim_time=False,
@@ -141,7 +141,18 @@ class FailstopChainROS(unittest.TestCase):
         self.until(lambda:time.monotonic()-self.statuses[0][0]>.35)
         client=self.node.create_client(Trigger,PREFIX+'arm')
         self.until(client.service_is_ready)
-        response=self.future(client.call_async(Trigger.Request()))
+        # DDS discovery and the stopped-odom dwell are asynchronous. Test
+        # preparation may wait for admission, but never reset a fault or relax
+        # its evidence thresholds. Preserve every denied preflight request.
+        arm_attempts=[]
+        arm_deadline=time.monotonic()+3.
+        while True:
+            response=self.future(client.call_async(Trigger.Request()))
+            arm_attempts.append(dict(monotonic=time.monotonic(),success=response.success,message=response.message))
+            (self.report/'preflight-arm.json').write_text(json.dumps(arm_attempts,indent=2))
+            if response.success or time.monotonic()>=arm_deadline:break
+            resume=time.monotonic()+.05
+            self.until(lambda:time.monotonic()>=resume)
         self.assertTrue(response.success,response.message)
         self.action=ActionClient(self.node,FollowPath,'/follow_path')
         self.until(self.action.server_is_ready)
