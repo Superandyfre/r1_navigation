@@ -152,6 +152,9 @@ def main():
     envcmd='; '.join('. '+shlex.quote(str(p)) for p in [Path(profile['ros_prefix'])/'setup.bash',Path(profile['underlay_install'])/'local_setup.bash',bundle/'install/local_setup.bash'])
     resolutions={pkg:run(['/bin/bash','-c',envcmd+'; ros2 pkg prefix '+shlex.quote(pkg)]) for pkg in profile['navigation_packages']}
     write(dest/'runtime/package-prefixes.json',resolutions)
+    module_probe = "import importlib.util,json,sys; names=['r1_neupan_integration','r1_neupan_integration.n1_16_node','neupan','torch','cvxpy','ecos']; print(json.dumps({'executable':sys.executable,'modules':{n:(str(x.origin) if (x:=importlib.util.find_spec(n)) else None) for n in names}}))"
+    probe = envcmd+'; export PYTHONPATH='+shlex.quote(str(bundle/'third_party/NeuPAN'))+':"${PYTHONPATH:-}"; '+shlex.quote(profile['python'])+' -c '+shlex.quote(module_probe)
+    write(dest/'runtime/python-module-origins.json',run(['/bin/bash','-c',probe]))
     if a.runtime:
         graph=run(['/bin/bash','-c',envcmd+'; ros2 node list --no-daemon --spin-time 2'],timeout=15)
         write(dest/'runtime/nodes.json',graph)
