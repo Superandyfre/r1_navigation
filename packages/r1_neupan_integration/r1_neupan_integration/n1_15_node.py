@@ -522,6 +522,11 @@ class N115Node(Node):
                                                for component in self.dynamic_mesh_components]
             dynamic_ready = footprint_ready and mesh_components_ready
         if state is None:
+            # N1.16 acquires robot_state in its scan-driven planner cycle.
+            # If the first cycle ran before TF discovery, returning without a
+            # notification here leaves that cycle asleep forever. A fresh
+            # scan must retry TF acquisition; N1.15's hook remains a no-op.
+            self._planner_input_updated()
             return
         conversion_started = time.perf_counter()
         angles = np.linspace(float(message.angle_min), float(message.angle_max), len(ranges))

@@ -6,10 +6,13 @@ real NeuPAN optimization/model acceptance test.
 """
 import json
 import os
+from collections import deque
 from pathlib import Path
 import signal
+import sys
 import threading
 import time
+import traceback
 
 import numpy as np
 import rclpy
@@ -45,6 +48,56 @@ def main():
                 row['ended']=time.monotonic()
                 health_sends.append(row)
     node.worker_health_pub=HealthRecorder()
+    # Diagnostic-only, bounded startup evidence. Do not acquire state_lock,
+    # change inputs, refresh protocol times, or trigger a planner cycle.
+    startup_events=deque(maxlen=1024)
+    startup_samples=deque(maxlen=512)
+    startup_stacks=deque(maxlen=16)
+    diagnostic_stop=threading.Event()
+    def trace_call(owner,name):
+        original=getattr(owner,name)
+        def traced(*args,**kwargs):
+            entered=time.monotonic()
+            startup_events.append(dict(method=name,event='enter',monotonic=entered))
+            try:
+                result=original(*args,**kwargs)
+                startup_events.append(dict(method=name,event='return',monotonic=time.monotonic(),
+                    result=result if isinstance(result,bool) else None))
+                return result
+            except BaseException as exc:
+                startup_events.append(dict(method=name,event='raise',monotonic=time.monotonic(),
+                    error=repr(exc)))
+                raise
+        setattr(owner,name,traced)
+    trace_call(node,'_robot_transform')
+    robot_tf_paused=threading.Event()
+    traced_robot_transform=node._robot_transform
+    def gated_robot_transform():
+        if robot_tf_paused.is_set():return False
+        return traced_robot_transform()
+    node._robot_transform=gated_robot_transform
+    trace_call(node.client,'startup')
+    trace_call(node.client,'solve')
+    def sample_startup():
+        next_stack=time.monotonic()+2.
+        while not diagnostic_stop.wait(.25):
+            now=time.monotonic()
+            startup_samples.append(dict(monotonic=now,
+                scheduler=node._planner_scheduler.snapshot(),
+                active_request=node._active_request,scan_counter=node.scan_counter,
+                last_processed_scan=node.last_processed_scan,
+                tf_stamp_sec=getattr(node,'tf_stamp_sec',None),
+                context_active=node._execution_store.active is not None,
+                bridge_failed=node._bridge_failed))
+            if now>=next_stack:
+                next_stack=now+5.
+                frames=sys._current_frames()
+                startup_stacks.append(dict(monotonic=now,threads=[dict(
+                    name=t.name,ident=t.ident,stack=traceback.format_stack(frames[t.ident]))
+                    for t in threading.enumerate() if t.ident in frames and
+                    t is not threading.current_thread()]))
+    diagnostic_thread=threading.Thread(target=sample_startup,name='test-startup-evidence',daemon=True)
+    diagnostic_thread.start()
     fatal=threading.Event()
     counter=0
     def startup(*args,**kwargs):
@@ -75,6 +128,11 @@ def main():
     ack=node.create_publisher(String,'/test_failstop_chain/inject_ack',20)
     def inject(msg):
         request=json.loads(msg.data)
+        if 'hold_robot_tf' in request:
+            if request['hold_robot_tf']:robot_tf_paused.set()
+            else:robot_tf_paused.clear()
+            ack.publish(String(data=json.dumps(request)))
+            return
         if 'hold_source' in request:
             if request['hold_source']:source_paused.set()
             else:source_paused.clear()
@@ -93,11 +151,17 @@ def main():
     try:
         while not stopping.is_set():executor.spin_once(timeout_sec=.05)
     finally:
+        diagnostic_stop.set();diagnostic_thread.join(timeout=2)
         node.finalize();executor.shutdown(timeout_sec=2)
         output=Path(str(node.get_parameter('n115_output_dir').value))
         output.mkdir(parents=True,exist_ok=True)
         (output/'health-send-trace.json').write_text(json.dumps(dict(
             initial_constructor_publish_recorded=False,records=health_sends),indent=2))
+        (output/'startup-trace.json').write_text(json.dumps(dict(
+            diagnostic_only=True,samples_are_unsynchronized_observations=True,
+            constructor_not_instrumented=True,
+            events=list(startup_events),samples=list(startup_samples),
+            stacks=list(startup_stacks)),indent=2))
         node.destroy_node();rclpy.shutdown()
 
 
