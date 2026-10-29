@@ -65,7 +65,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate',required=True,type=Path)
     parser.add_argument('--bundle',type=Path,help='Verify and run the relocated bundle instead of candidate/install')
-    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','cognav-owner','navigator-owner','pending-halt','ack-delay','all'],default='all')
+    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','cognav-owner','navigator-owner','navigator-freeze','pending-halt','ack-delay','all'],default='all')
     args=parser.parse_args()
     assert os.environ.get('ROS_DOMAIN_ID')=='192'
     assert os.environ.get('ROS_LOCALHOST_ONLY')=='1'
@@ -119,6 +119,7 @@ def main():
                     'source-recovery':'failstop_source_recovery_ros',
                     'owner-loss':'failstop_owner_loss_ros','owner-protocol':'failstop_owner_protocol_ros','cognav-owner':'failstop_cognav_owner_ros',
                     'navigator-owner':'failstop_navigator_owner_ros','pending-halt':'failstop_navigator_halt_pending_ros',
+                    'navigator-freeze':'failstop_navigator_freeze_ros',
                     'ack-delay':'failstop_navigator_ack_delay_ros'})
     selected=list(modules) if args.suite=='all' else [args.suite]
     suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromModule(importlib.import_module(modules[name])) for name in selected)

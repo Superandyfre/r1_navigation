@@ -1,5 +1,19 @@
 # A+ release preflight (candidate)
 
+`external_dependencies.py` creates a separate, read-only inventory of external
+files observed in saved scene maps, executable records and nested solver runtime
+summaries. Supply `--bundle ABSOLUTE_BUNDLE --reports ABSOLUTE_SCENE ... --output
+NEW_JSON`; the output must not already exist. `--check JSON` checks current file
+hashes and resolved symlink targets and refuses unresolved observations. This
+standalone tool is not a deployment preflight gate. It hashes files **after** the
+test and cannot prove which bytes were loaded during that test. Non-executable
+`/dev/shm/fastrtps_*` maps are retained separately as transient shared-memory data;
+executable maps and executable/summary observations never get that exception.
+Missing libraries remain unresolved. The inventory is not full dependency
+closure: Python imports, lazy modules, drivers, sensors, effective parameters and
+runtime arm identity still need independent evidence. `review_complete` remains
+false; a successful consistency check never authorizes motion or deployment.
+
 `preflight.py` is a read-only, same-host path/hash check against an independently
 reviewed manifest (`r1_neupan_release_v1`). It never generates approval. Keep the
 manifest protected and independent of the environment being checked: a freshly

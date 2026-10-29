@@ -36,6 +36,7 @@ class PendingHalt(NavigatorAckDelay):
         terminal=time.monotonic()
         self.until(lambda:time.monotonic()>terminal+3.,4.)
         events=json.loads(eventfile.read_text());first=events[0]
+        self.assertIn('accepted',first,'ACK proxy did not observe downstream response: '+str(first))
         self.assertTrue(first['accepted'])
         self.assertLess(marker,first['delayed_response'])
         self.assertGreater(first['delayed_response']-first['actual_response'],1.9)
