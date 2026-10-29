@@ -17,6 +17,7 @@ class BypassGuide:
     goal_pose: np.ndarray
     phase: str = "side"
     backoff_distance: float = 0.0
+    route_target: np.ndarray | None = None
 
     @property
     def normal(self) -> np.ndarray:
@@ -50,6 +51,13 @@ class BypassGuide:
 
     def reference(self, pose: np.ndarray, steps: int, footprint_radius: float,
                   margin: float) -> np.ndarray:
+        if self.phase == "route_rejoin":
+            result = np.repeat(self.route_target.reshape(3, 1), steps + 1, axis=1)
+            delta = self.route_target[:2] - np.asarray(pose).reshape(-1)[:2]
+            if np.linalg.norm(delta) > .12:
+                result[2, 1:] = math.atan2(delta[1], delta[0])
+            result[:, 0] = np.asarray(pose).reshape(-1)[:3]
+            return result
         relative = np.asarray(pose).reshape(-1)[:2] - self.origin
         along = float(self.tangent @ relative)
         if self.phase == "backoff":
@@ -146,6 +154,45 @@ class BypassRecovery:
 
     def accepted(self):
         self.invalid_since = None
+
+
+def make_route_rejoin_guide(pose, route, points, vertices, G, h, margin, goal_pose):
+    """Choose a forward route point only if the rotate/translate connector clears."""
+    state = np.asarray(pose).reshape(-1)[:3]
+    xy = np.asarray(route)[:2].T
+    lengths = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+    arc = np.r_[0., np.cumsum(lengths)]
+    projections = []
+    for index, length in enumerate(lengths):
+        if length < 1e-6:
+            continue
+        delta = xy[index+1]-xy[index]
+        t = float(np.clip((state[:2]-xy[index]) @ delta / (length*length), 0., 1.))
+        projections.append((float(np.linalg.norm(state[:2]-xy[index]-t*delta)),
+                            arc[index]+t*length))
+    if not projections:
+        return None
+    distance, progress = min(projections)
+    if distance <= .15 or distance > .9:
+        return None
+    close_arcs = [s for d, s in projections if d <= distance+.03]
+    if max(close_arcs)-min(close_arcs) > .5:
+        return None
+    target_arc = min(progress+.25, arc[-1])
+    index = min(int(np.searchsorted(arc, target_arc, side='right')-1), len(lengths)-1)
+    if lengths[index] < 1e-6:
+        return None
+    tangent = (xy[index+1]-xy[index])/lengths[index]
+    target_xy = xy[index]+(target_arc-arc[index])*tangent
+    heading = math.atan2(tangent[1], tangent[0])
+    travel_yaw = math.atan2(target_xy[1]-state[1], target_xy[0]-state[0])
+    connector = np.column_stack((state, [*state[:2], travel_yaw],
+                                [*target_xy, travel_yaw], [*target_xy, heading]))
+    if trajectory_clearance(connector, points, vertices, G, h) < margin:
+        return None
+    return BypassGuide(state[:2].copy(), tangent, 1, 0., 0.,
+        np.asarray(goal_pose).reshape(-1)[:3].copy(), phase='route_rejoin',
+        route_target=np.array([*target_xy, heading]))
 
 
 def make_bypass_guide(pose: np.ndarray, points: np.ndarray, reference: np.ndarray,

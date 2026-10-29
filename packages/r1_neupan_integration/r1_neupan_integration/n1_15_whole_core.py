@@ -1046,6 +1046,9 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                 preserve_bypass = (same_goal and request.get("bypass_mode", False)
                                    and getattr(planner, "bypass_guide", None) is not None)
                 if preserve_bypass:
+                    if planner.bypass_guide.phase == "route_rejoin":
+                        planner.bypass_guide = None
+                    planner.bypass_recovery.clear_since = None
                     planner.ipath.set_initial_path([
                         next_path[:, index:index + 1]
                         for index in range(next_path.shape[1])

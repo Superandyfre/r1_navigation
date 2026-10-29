@@ -7,7 +7,7 @@ from unittest.mock import patch
 import unittest
 import numpy as np
 import yaml
-from neupan.bypass import BypassGuide, BypassRecovery
+from neupan.bypass import BypassGuide, BypassRecovery, make_route_rejoin_guide
 
 
 class BypassRecoveryTests(unittest.TestCase):
@@ -61,6 +61,19 @@ class BypassRecoveryTests(unittest.TestCase):
         reference = guide.reference(np.array([[.3], [0.], [math.pi/2]]), 20, .4, .08)
         self.assertAlmostEqual(reference[2, 1], math.atan2(.4, -.9))
         self.assertAlmostEqual(reference[2, 0], math.pi/2)
+
+    def test_connector_checks_swept_geometry_and_selects_forward_point(self):
+        vertices = np.array([[.341, .341, -.341, -.341], [.266, -.266, -.266, .266]])
+        G = np.array([[1., 0.], [-1., 0.], [0., 1.], [0., -1.]])
+        h = np.array([[.341], [.341], [.266], [.266]])
+        pose = np.array([.2, .5, 0.])
+        far_cloud = np.array([[2., 2.], [2., -2.]])
+        guide = make_route_rejoin_guide(pose, self.route, far_cloud, vertices, G, h, .05, [1., 0., 0.])
+        self.assertIsNotNone(guide)
+        self.assertEqual(guide.phase, 'route_rejoin')
+        self.assertGreater(guide.route_target[0], pose[0])
+        blocked = np.column_stack((far_cloud, [.3, .3]))
+        self.assertIsNone(make_route_rejoin_guide(pose, self.route, blocked, vertices, G, h, .05, [1., 0., 0.]))
 
 
 @unittest.skipUnless(os.environ.get('NEUPAN_SOLVER_REGRESSION') == '1', 'actual solver opt-in')

@@ -32,6 +32,7 @@ from neupan.configuration import np_to_tensor, tensor_to_np
 from neupan.bypass import (
     make_bypass_guide, seed_controls, seed_reverse_controls, trajectory_clearance,
     BypassRecovery,
+    make_route_rejoin_guide,
 )
 from math import cos, sin
 
@@ -191,6 +192,7 @@ class neupan(torch.nn.Module):
             state, self.cur_vel_array, self.ref_speed, planning_profile
         )
         rejoined = False
+        rejoin_guide = None
         if use_bypass and bypass_route_clear:
             route = np.hstack(self.ipath.initial_path)[:3]
             clearance = trajectory_clearance(
@@ -198,8 +200,18 @@ class neupan(torch.nn.Module):
             rejoined = self.bypass_recovery.can_rejoin(
                 time.monotonic(), True, state, route, clearance,
                 self.bypass_min_clearance)
+            if not rejoined and (self.bypass_guide is None or
+                                 self.bypass_guide.phase != "route_rejoin"):
+                goal_pose = np.asarray(self.ipath.initial_path[-1]).reshape(-1)[:3]
+                rejoin_guide = make_route_rejoin_guide(
+                    state, route, points, self.robot.vertices, self.robot.G, self.robot.h,
+                    self.bypass_min_clearance, goal_pose)
         elif use_bypass:
             self.bypass_recovery.clear_since = None
+            if self.bypass_guide is not None and self.bypass_guide.phase == "route_rejoin":
+                self.bypass_guide = None
+        if rejoin_guide is not None:
+            self.bypass_guide = rejoin_guide
         if rejoined:
             use_bypass = False
             self.bypass_active = False
@@ -260,19 +272,20 @@ class neupan(torch.nn.Module):
                     (guide.phase in ("pass", "align") and abs(heading_error) > 0.20)
                     or (guide.phase == "rejoin" and abs(heading_error) > 0.40)
                     or (guide.phase == "final" and abs(heading_error) > 0.40)
+                    or (guide.phase == "route_rejoin" and abs(heading_error) > 0.40)
                 )
                 guided_speed = (
                     torch.zeros_like(reference_speed) if turn_before_pass else reference_speed
                 )
                 if guide.phase == "backoff":
                     guided_speed = torch.full_like(reference_speed, -0.10)
-                if guide.phase in ("rejoin", "final"):
+                if guide.phase in ("rejoin", "final", "route_rejoin"):
                     guided_speed = torch.clamp(guided_speed, max=0.10)
                 speed_cap = (
                     torch.zeros((self.T,), dtype=nominal_state.dtype)
                     if turn_before_pass else None
                 )
-                if guide.phase in ("rejoin", "final") and not turn_before_pass:
+                if guide.phase in ("rejoin", "final", "route_rejoin") and not turn_before_pass:
                     speed_cap = torch.full((self.T,), 0.12, dtype=nominal_state.dtype)
                 try:
                     result = self.pan(
@@ -327,20 +340,21 @@ class neupan(torch.nn.Module):
                     progress = (0.0 if guide.phase == "align" else along) + 0.15 * (
                         heading_error - next_heading_error
                     )
-                elif guide.phase == "final":
+                elif guide.phase in ("final", "route_rejoin"):
+                    target = guide.route_target if guide.phase == "route_rejoin" else guide.goal_pose
                     start_distance = float(np.linalg.norm(
-                        predicted[:2, 0] - guide.goal_pose[:2]
+                        predicted[:2, 0] - target[:2]
                     ))
                     end_distance = float(np.linalg.norm(
-                        predicted[:2, -1] - guide.goal_pose[:2]
+                        predicted[:2, -1] - target[:2]
                     ))
                     start_yaw_error = abs(float(np.arctan2(
-                        np.sin(predicted[2, 0] - guide.goal_pose[2]),
-                        np.cos(predicted[2, 0] - guide.goal_pose[2]),
+                        np.sin(predicted[2, 0] - target[2]),
+                        np.cos(predicted[2, 0] - target[2]),
                     )))
                     end_yaw_error = abs(float(np.arctan2(
-                        np.sin(predicted[2, -1] - guide.goal_pose[2]),
-                        np.cos(predicted[2, -1] - guide.goal_pose[2]),
+                        np.sin(predicted[2, -1] - target[2]),
+                        np.cos(predicted[2, -1] - target[2]),
                     )))
                     progress = (start_distance - end_distance) + 0.10 * (
                         start_yaw_error - end_yaw_error
@@ -360,7 +374,7 @@ class neupan(torch.nn.Module):
                     and clearance >= self.bypass_min_clearance
                     and first_moves
                     and progress > (0.005 if turn_before_pass else
-                                    0.01 if guide.phase == "final" else 0.05)
+                                    0.01 if guide.phase in ("final", "route_rejoin") else 0.05)
                 )
                 reason = ("nonfinite" if not (np.isfinite(predicted).all() and np.isfinite(controls).all())
                           else "clearance" if clearance < self.bypass_min_clearance
