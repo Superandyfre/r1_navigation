@@ -70,7 +70,18 @@ def check(manifest, env=None, python_path=None, compatibility_only=False):
             if digest!=pin['sha256']:errors.append(role+': hash_mismatch')
         except (KeyError,TypeError,ValueError,OSError) as exc:
             errors.append(role+': '+str(exc))
+    inventory=manifest.get('inventory', [])
+    if inventory:
+        try:
+            root=Path(manifest['inventory_root']).resolve(strict=True)
+            for row in inventory:
+                path=(root/row['path']).resolve(strict=True)
+                if not path.is_relative_to(root):raise ValueError('inventory_path_escape')
+                if hashlib.sha256(path.read_bytes()).hexdigest()!=row['sha256']:
+                    errors.append('inventory_hash_mismatch:'+row['path'])
+        except (KeyError,TypeError,ValueError,OSError) as exc:errors.append('inventory:'+str(exc))
     if not compatibility_only:
+        if not inventory:errors.append('release_inventory_missing')
         if manifest.get('deployment_approved') is not True:errors.append('release_not_approved')
         if manifest.get('build_testing') is not False:errors.append('production_requires_BUILD_TESTING_OFF')
         for gate in ['full_no_motion_acceptance','physical_stop_acceptance','rollback_rehearsal']:
