@@ -1,0 +1,8 @@
+# Revises a route inside an already acknowledged FollowPath execution.
+# Does not create an execution or grant motion permission.
+string authority_boot_id
+string navigation_attempt_id
+nav_msgs/Path path
+---
+bool accepted
+string reason

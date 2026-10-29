@@ -942,6 +942,8 @@ class N116Node(N115Node):
                         local_detour.identifier if local_detour is not None else 0
                     ),
                     bypass_mode=bypass_requested,
+                    bypass_route_clear=bool(
+                        route_decision is not None and not route_decision.route_blocked),
                 )
             except BridgeProtocolError as exc:
                 self._handle_fatal_error(exc.code, str(exc))
@@ -1032,7 +1034,7 @@ class N116Node(N115Node):
                 and np.isinf(optimized_free_distance)
             )
             bypass_phase = record.get("info", {}).get("bypass_phase")
-            if bypass_phase == "done":
+            if bypass_phase in ("done", "rejoined"):
                 self._neupan_bypass_engaged = False
             elif verified_neupan_bypass:
                 self._neupan_bypass_engaged = True
@@ -1271,6 +1273,8 @@ class N116Node(N115Node):
                     obstacle_state = "WAIT"
                 else:
                     obstacle_state = "SLOW"
+            if bypass_requested and stop_requested and not arrived:
+                obstacle_state = "WAIT"
             if self.client.health.fault is not None or self._shutdown_requested:
                 self._publish_failsafe_stop()
                 return
@@ -1387,8 +1391,11 @@ class N116Node(N115Node):
                     "neupan_bypass_side": int(record.get("info", {}).get("bypass_side", 0)),
                     "neupan_bypass_clearance_m": record.get("info", {}).get("bypass_clearance_m"),
                     "neupan_bypass_solver_failures": int(record.get("info", {}).get("bypass_solver_failures", 0)),
+                    "bypass_recovery_exhausted": bool(record.get("info", {}).get("bypass_recovery_exhausted", False)),
                     "state": obstacle_state,
                     "reason": (
+                        record.get("info", {}).get("stop_reason", "bypass_no_valid_candidate")
+                        if bypass_requested and stop_requested else
                         motion_decision.reason if motion_decision is not None else "disabled"
                     ),
                     "route_blocked": bool(

@@ -80,6 +80,8 @@ void GuardAwareProgressChecker::neupanSemanticsCallback(
     infeasibility.active = stop && dune_min_m < 0.0 &&
       !payload.value("recovery_reverse_requested", false);
     const auto motion = payload.value("obstacle_motion", nlohmann::json::object());
+    infeasibility.active = infeasibility.active ||
+      (stop && motion.value("bypass_recovery_exhausted", false));
     wait.active = motion.value("enabled", false) &&
       motion.value("state", "") == "WAIT" && !infeasibility.active;
   } catch (const std::exception &) {

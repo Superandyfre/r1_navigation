@@ -21,6 +21,8 @@
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "r1_neupan_runtime/motion_authorization.hpp"
+#include "r1_neupan_runtime/srv/update_path.hpp"
+#include "r1_neupan_runtime/route_revision.hpp"
 #include "navigation_neupan_bridge/execution_owner_lease.hpp"
 
 namespace navigation_neupan_bridge
@@ -46,12 +48,82 @@ public:
     revoke_ = node_->create_client<std_srvs::srv::Trigger>(
       "/neupan_controller/revoke_uncertain_execution", rmw_qos_profile_services_default,
       callback_group_);
+    update_path_ = node_->create_client<r1_neupan_runtime::srv::UpdatePath>(
+      "/update_follow_path", rmw_qos_profile_services_default, callback_group_);
+  }
+
+  static BT::PortsList providedPorts()
+  {
+    auto ports = FollowPathAction::providedPorts();
+    ports.insert(BT::InputPort<Pose>("navigation_goal"));
+    ports.insert(BT::InputPort<Goals>("navigation_goals"));
+    return ports;
+  }
+
+  void on_tick() override
+  {
+    clearUpdate(); update_failed_ = false;
+    readParent();
+    FollowPathAction::on_tick();
+  }
+
+  void on_wait_for_result(
+    std::shared_ptr<const nav2_msgs::action::FollowPath::Feedback> feedback) override
+  {
+    Pose parent; Goals parents;
+    const bool has_parent = bool(getInput("navigation_goal", parent));
+    const bool has_parents = bool(getInput("navigation_goals", parents));
+    std::string controller, checker;
+    getInput("controller_id", controller); getInput("goal_checker_id", checker);
+    nav_msgs::msg::Path path; getInput("path", path);
+    // A parent request (including its stamp), terminal or plugin change still
+    // creates a new action UUID. Never infer task identity from endpoint alone.
+    const bool parent_changed = has_parent != has_parent_ || has_parents != has_parents_ ||
+      (has_parent && parent != parent_) || (has_parents && parents != parents_);
+    if ((!has_parent && !has_parents) || parent_changed || controller != goal_.controller_id ||
+      checker != goal_.goal_checker_id ||
+      !r1_neupan_runtime::validRouteRevision(path, goal_.path))
+    {
+      clearUpdate(); readParent();
+      FollowPathAction::on_wait_for_result(feedback);
+      // A new parent can have exactly the same path: it still needs a new UUID.
+      if (parent_changed) {goal_updated_ = true;}
+      return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (pending_update_) {
+      if (pending_update_->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+        try {
+          const auto response = pending_update_->get();
+          if (response->accepted) {goal_.path = sent_path_;}
+          else {update_failed_ = true;}
+        } catch (const std::exception &) {update_failed_ = true;}
+        pending_update_.reset();
+      } else if (now - update_started_ > std::chrono::milliseconds(500)) {
+        clearUpdate(); update_failed_ = true;
+      }
+      return;
+    }
+    if (path == goal_.path || update_failed_) {return;}
+    if (!goal_handle_ || context_.value("state", "") != "ACTIVE" ||
+      context_.value("navigation_attempt_id", "") != executionAttemptId(goal_handle_->get_goal_id()))
+    {return;}
+    if (!update_path_->service_is_ready()) {update_failed_ = true; return;}
+    auto request = std::make_shared<r1_neupan_runtime::srv::UpdatePath::Request>();
+    request->authority_boot_id = context_.at("authority_boot_id").get<std::string>();
+    request->navigation_attempt_id = executionAttemptId(goal_handle_->get_goal_id());
+    request->path = path; sent_path_ = path; update_started_ = now;
+    pending_update_.emplace(update_path_->async_send_request(request));
   }
 
   BT::NodeStatus tick() override
   {
     const auto pending = future_goal_handle_;
     const auto status = FollowPathAction::tick();
+    if (update_failed_) {
+      revokeUncertain(); halt();
+      return BT::NodeStatus::FAILURE;
+    }
     if (status == BT::NodeStatus::RUNNING && goal_handle_ && !future_goal_handle_) {
       // Humble's human-readable to_string omits per-byte zero padding.
       // Use the exact fixed-width identity emitted by ControllerServer.
@@ -82,11 +154,32 @@ public:
 
   void halt() override
   {
+    clearUpdate();
     if (future_goal_handle_) {revokeUncertain();}
     FollowPathAction::halt();
   }
 
 private:
+  void readParent()
+  {
+    has_parent_ = bool(getInput("navigation_goal", parent_));
+    has_parents_ = bool(getInput("navigation_goals", parents_));
+  }
+  void clearUpdate()
+  {
+    if (pending_update_) {
+      update_path_->remove_pending_request(pending_update_->request_id);
+      pending_update_.reset();
+    }
+  }
+  using UpdatePath = r1_neupan_runtime::srv::UpdatePath;
+  rclcpp::Client<UpdatePath>::SharedPtr update_path_;
+  std::optional<rclcpp::Client<UpdatePath>::FutureAndRequestId> pending_update_;
+  std::chrono::steady_clock::time_point update_started_;
+  nav_msgs::msg::Path sent_path_;
+  Pose parent_;
+  Goals parents_;
+  bool has_parent_{false}, has_parents_{false}, update_failed_{false};
   void revokeUncertain()
   {
     auto request = revoke_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());

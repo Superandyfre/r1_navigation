@@ -24,6 +24,7 @@
 
 #include "nav2_core/controller.hpp"
 #include "r1_neupan_runtime/execution_observer.hpp"
+#include "r1_neupan_runtime/srv/update_path.hpp"
 #include "nav2_core/progress_checker.hpp"
 #include "nav2_core/goal_checker.hpp"
 #include "nav2_costmap_2d/costmap_2d_ros.hpp"
@@ -127,6 +128,12 @@ protected:
   void beginRuntimeExecution();
   void checkRuntimeExecution();
   void endRuntimeExecution(const std::string & reason) noexcept;
+  void applyRuntimePathUpdate();
+  std::mutex runtime_path_mutex_;
+  std::string runtime_attempt_id_;
+  nav_msgs::msg::Path runtime_terminal_path_;
+  std::shared_ptr<nav_msgs::msg::Path> pending_runtime_path_;
+  rclcpp::Service<r1_neupan_runtime::srv::UpdatePath>::SharedPtr runtime_path_service_;
   std::string authority_boot_id_;
   std::unique_ptr<r1_neupan_runtime::ExecutionSession> runtime_execution_;
   double runtime_costmap_wait_timeout_sec_{5.0};

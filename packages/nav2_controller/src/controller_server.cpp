@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <sstream>
 #include "r1_neupan_runtime/motion_authorization.hpp"
+#include "r1_neupan_runtime/route_revision.hpp"
 
 #include "lifecycle_msgs/msg/state.hpp"
 #include "nav2_core/exceptions.hpp"
@@ -202,6 +203,24 @@ ControllerServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
 
   odom_sub_ = std::make_unique<nav_2d_utils::OdomSubscriber>(node);
   vel_publisher_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 1);
+  runtime_path_service_ = create_service<r1_neupan_runtime::srv::UpdatePath>(
+    "update_follow_path",
+    [this](const std::shared_ptr<r1_neupan_runtime::srv::UpdatePath::Request> request,
+    std::shared_ptr<r1_neupan_runtime::srv::UpdatePath::Response> response) {
+      std::lock_guard<std::mutex> lock(runtime_path_mutex_);
+      response->accepted = false;
+      response->reason = "inactive_or_mismatched_execution";
+      if (runtime_attempt_id_.empty() || request->authority_boot_id != authority_boot_id_ ||
+        request->navigation_attempt_id != runtime_attempt_id_) {return;}
+      if (!r1_neupan_runtime::validRouteRevision(request->path, runtime_terminal_path_)) {
+        response->reason = "invalid_route_or_changed_terminal"; return;
+      }
+      // Only the action loop calls setPlan. Coalesce to the newest route;
+      // cancellation/end clears the queue before another execution can start.
+      pending_runtime_path_ = std::make_shared<nav_msgs::msg::Path>(request->path);
+      response->accepted = true;
+      response->reason = "queued_for_current_execution";
+    });
 
   // Create the action server that we implement with our followPath method
   action_server_ = std::make_unique<ActionServer>(
@@ -293,6 +312,7 @@ ControllerServer::on_cleanup(const rclcpp_lifecycle::State & /*state*/)
 
   // Release any allocated resources
   action_server_.reset();
+  runtime_path_service_.reset();
   odom_sub_.reset();
   costmap_thread_.reset();
   vel_publisher_.reset();
@@ -375,6 +395,10 @@ void ControllerServer::beginRuntimeExecution()
   if (!nonzero) {throw nav2_core::PlannerException("missing_active_action_uuid");}
   runtime_execution_ = std::make_unique<r1_neupan_runtime::ExecutionSession>(
     observer, authority_boot_id_, id.str());
+  std::lock_guard<std::mutex> lock(runtime_path_mutex_);
+  runtime_attempt_id_ = id.str();
+  runtime_terminal_path_ = {};
+  pending_runtime_path_.reset();
 }
 
 void ControllerServer::checkRuntimeExecution()
@@ -384,7 +408,21 @@ void ControllerServer::checkRuntimeExecution()
 
 void ControllerServer::endRuntimeExecution(const std::string & reason) noexcept
 {
+  {
+    std::lock_guard<std::mutex> lock(runtime_path_mutex_);
+    runtime_attempt_id_.clear(); pending_runtime_path_.reset(); runtime_terminal_path_ = {};
+  }
   if (runtime_execution_) {runtime_execution_->end(reason); runtime_execution_.reset();}
+}
+
+void ControllerServer::applyRuntimePathUpdate()
+{
+  std::shared_ptr<nav_msgs::msg::Path> path;
+  {
+    std::lock_guard<std::mutex> lock(runtime_path_mutex_);
+    path.swap(pending_runtime_path_);
+  }
+  if (path) {setPlannerPath(*path);}
 }
 
 void ControllerServer::computeControl()
@@ -465,6 +503,7 @@ void ControllerServer::computeControl()
 
       checkRuntimeExecution();
       updateGlobalPath();
+      applyRuntimePathUpdate();
 
       computeAndPublishVelocity();
 
@@ -533,6 +572,8 @@ void ControllerServer::setPlannerPath(const nav_msgs::msg::Path & path)
     end_pose_.pose.position.x, end_pose_.pose.position.y);
 
   current_path_ = path;
+  std::lock_guard<std::mutex> lock(runtime_path_mutex_);
+  runtime_terminal_path_ = path;
 }
 
 void ControllerServer::computeAndPublishVelocity()

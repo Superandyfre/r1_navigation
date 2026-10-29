@@ -1,0 +1,62 @@
+"""No ROS/driver: route handoff, bounded retries and final heading regressions."""
+import math
+import unittest
+import numpy as np
+from neupan.bypass import BypassGuide, BypassRecovery
+
+
+class BypassRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.policy = BypassRecovery()
+        self.route = np.array([[0., .5, 1.], [0., 0., 0.], [0., 0., 0.]])
+        self.pose = np.array([[.1], [.02], [.05]])
+
+    def rejoin(self, t, clear=True, pose=None, route=None, clearance=.06):
+        return self.policy.can_rejoin(t, clear, self.pose if pose is None else pose,
+            self.route if route is None else route, clearance, .05)
+
+    def test_clear_route_requires_stability_and_resets_on_blockage(self):
+        self.assertFalse(self.rejoin(1.))
+        self.assertFalse(self.rejoin(1.5))
+        self.assertFalse(self.rejoin(1.55, clear=False))
+        self.assertFalse(self.rejoin(2.))
+        self.assertTrue(self.rejoin(2.61))
+
+    def test_nearby_obstacles_bad_heading_and_off_route_cannot_handoff(self):
+        for kwargs in (dict(clearance=.049), dict(pose=np.array([.1, .02, math.pi])),
+                       dict(pose=np.array([.1, .3, 0.]))):
+            self.assertFalse(self.rejoin(1., **kwargs))
+            self.assertFalse(self.rejoin(4., **kwargs))
+        self.assertFalse(self.rejoin(5.))
+        self.assertTrue(self.rejoin(5.7))
+
+    def test_crossing_is_not_a_unique_progress_match(self):
+        loop = np.array([[0., 1., 1., 0., 0., 1.],
+                         [0., 0., 1., 1., 0., 0.], [0., 0., 0., 0., 0., 0.]])
+        self.assertFalse(self.rejoin(1., route=loop))
+        self.assertFalse(self.rejoin(5., route=loop))
+
+    def test_only_two_rebuilds_then_exhaustion(self):
+        self.assertFalse(self.policy.rejected(1.))
+        self.assertTrue(self.policy.rejected(1.81))
+        self.assertTrue(self.policy.rejected(2.62))
+        self.assertFalse(self.policy.rejected(3.43))
+        self.assertTrue(self.policy.exhausted)
+        self.assertEqual(self.policy.rebuilds, 2)
+
+    def test_valid_motion_breaks_consecutive_failure_window(self):
+        self.policy.rejected(1.)
+        self.policy.accepted()
+        self.assertFalse(self.policy.rejected(3.))
+        self.assertFalse(self.policy.rejected(3.5))
+
+    def test_final_aims_at_goal_even_after_passing_original_tangent(self):
+        guide = BypassGuide(np.zeros(2), np.array([1., 0.]), -1, -.5, .5,
+                            np.array([-.6, .4, -math.pi]), phase='final')
+        reference = guide.reference(np.array([[.3], [0.], [math.pi/2]]), 20, .4, .08)
+        self.assertAlmostEqual(reference[2, 1], math.atan2(.4, -.9))
+        self.assertAlmostEqual(reference[2, 0], math.pi/2)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1110,6 +1110,7 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                         reference_speed_profile=speed_profile,
                         measured_velocity=measured_velocity,
                         bypass_mode=bool(request.get("bypass_mode", False)),
+                        bypass_route_clear=bool(request.get("bypass_route_clear", False)),
                     )
             except Exception as exc:
                 status = "exception"
@@ -1144,6 +1145,10 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                     "bypass_phase": str(getattr(planner, "info", {}).get("bypass_phase", "none")),
                     "bypass_clearance_m": getattr(planner, "info", {}).get("bypass_clearance_m"),
                     "bypass_solver_failures": int(getattr(planner, "info", {}).get("bypass_solver_failures", 0)),
+                    "bypass_candidates": getattr(planner, "info", {}).get("bypass_candidates", []),
+                    "bypass_rebuilds": int(getattr(planner, "info", {}).get("bypass_rebuilds", 0)),
+                    "bypass_recovery_exhausted": bool(getattr(planner, "info", {}).get("bypass_recovery_exhausted", False)),
+                    "stop_reason": str(getattr(planner, "info", {}).get("stop_reason", "none")),
                 },
                 "semantic": _planner_semantics(planner),
                 "worker_pid": os.getpid(),

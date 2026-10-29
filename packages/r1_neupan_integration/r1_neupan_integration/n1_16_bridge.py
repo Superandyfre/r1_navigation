@@ -340,6 +340,7 @@ class ProductionWholeCoreClient:
         local_reference_path: np.ndarray | None = None,
         local_reference_id: int = 0,
         bypass_mode: bool = False,
+        bypass_route_clear: bool = False,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         if self.health.fault is not None:
             raise BridgeProtocolError("worker_fault_latched", "full controlled restart required")
@@ -365,6 +366,7 @@ class ProductionWholeCoreClient:
             "active_gear": validate_gear(active_gear),
             "restore_planner_state": restore_planner_state,
             "bypass_mode": bool(bypass_mode),
+            "bypass_route_clear": bool(bypass_route_clear),
         }
         if reference_speed_profile is not None:
             request["reference_speed_profile"] = _pack_array(reference_speed_profile)

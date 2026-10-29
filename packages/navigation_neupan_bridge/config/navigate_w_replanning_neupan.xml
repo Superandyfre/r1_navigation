@@ -12,7 +12,7 @@
             <IsNeuPANWaiting path="{path}" goal="{goal}" accepted_goal="{accepted_goal}"/>
           </Fallback>
         </RateController>
-        <NeuPANFollowPath path="{path}" controller_id="FollowPath"/>
+        <NeuPANFollowPath path="{path}" navigation_goal="{goal}" controller_id="FollowPath"/>
       </PipelineSequence>
       <Sequence name="RetryOnlyWhenRuntimePermits">
         <CanRetryNeuPANExecution/>

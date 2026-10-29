@@ -74,7 +74,7 @@ class BypassGuide:
         else:
             result = np.repeat(np.asarray(self.goal_pose).reshape(3, 1), steps + 1, axis=1)
             delta = np.asarray(self.goal_pose).reshape(-1)[:2] - np.asarray(pose).reshape(-1)[:2]
-            if float(self.tangent @ delta) > 0.10:
+            if float(np.linalg.norm(delta)) > 0.12:
                 result[2, 1:] = math.atan2(delta[1], delta[0])
             result[:, 0] = np.asarray(pose).reshape(-1)[:3]
             return result
@@ -85,6 +85,67 @@ class BypassGuide:
         result = np.repeat(np.array([[goal[0]], [goal[1]], [heading]]), steps + 1, axis=1)
         result[:, 0] = np.asarray(pose).reshape(-1)[:3]
         return result
+
+
+class BypassRecovery:
+    """Steady-time hysteresis and bounded guide reconstruction per bypass."""
+    def __init__(self):
+        self.clear_since = None
+        self.invalid_since = None
+        self.rebuilds = 0
+        self.exhausted = False
+
+    def can_rejoin(self, now, route_clear, pose, route, clearance, margin):
+        route = np.asarray(route, dtype=float)
+        state = np.asarray(pose).reshape(-1)
+        eligible = bool(route_clear and np.isfinite(route).all()
+                        and route.ndim == 2 and route.shape[0] >= 3
+                        and route.shape[1] >= 2 and clearance >= margin)
+        best = math.inf
+        heading_error = math.inf
+        if eligible:
+            projections = []
+            arc = 0.0
+            for a, b in zip(route[:2].T[:-1], route[:2].T[1:]):
+                delta = b - a
+                length = float(np.linalg.norm(delta))
+                if length < 1e-6:
+                    continue
+                t = float(np.clip((state[:2]-a) @ delta / (length*length), 0., 1.))
+                distance = float(np.linalg.norm(state[:2] - a - t*delta))
+                projections.append((distance, arc + t*length))
+                if distance < best:
+                    best = distance
+                    heading_error = abs(math.atan2(
+                        math.sin(math.atan2(delta[1], delta[0]) - state[2]),
+                        math.cos(math.atan2(delta[1], delta[0]) - state[2])))
+                arc += length
+            # At a crossing, proximity alone cannot identify forward progress.
+            close_arcs = [s for d, s in projections if d <= best + .03]
+            ambiguous = bool(close_arcs and max(close_arcs)-min(close_arcs) > .50)
+            eligible = best <= .15 and heading_error <= .35 and not ambiguous
+        if not eligible:
+            self.clear_since = None
+            return False
+        if self.clear_since is None or now < self.clear_since:
+            self.clear_since = now
+        return now - self.clear_since >= .60
+
+    def rejected(self, now):
+        """Return True only when one of two bounded rebuilds becomes due."""
+        if self.invalid_since is None or now < self.invalid_since:
+            self.invalid_since = now
+        if now - self.invalid_since < .8:
+            return False
+        self.invalid_since = now
+        if self.rebuilds >= 2:
+            self.exhausted = True
+            return False
+        self.rebuilds += 1
+        return True
+
+    def accepted(self):
+        self.invalid_since = None
 
 
 def make_bypass_guide(pose: np.ndarray, points: np.ndarray, reference: np.ndarray,

@@ -19,6 +19,7 @@ along with NeuPAN planner. If not, see <https://www.gnu.org/licenses/>.
 '''
 
 import yaml
+import time
 import torch
 from neupan.robot import robot
 from neupan.blocks import InitialPath, PAN
@@ -30,6 +31,7 @@ from diffcp.cone_program import SolverError
 from neupan.configuration import np_to_tensor, tensor_to_np
 from neupan.bypass import (
     make_bypass_guide, seed_controls, seed_reverse_controls, trajectory_clearance,
+    BypassRecovery,
 )
 from math import cos, sin
 
@@ -83,6 +85,7 @@ class neupan(torch.nn.Module):
         self.bypass_active = False
         self.bypass_guide = None
         self.bypass_completed = False
+        self.bypass_recovery = BypassRecovery()
 
         # initialization
         self.cur_vel_array = np.zeros((2, self.T))
@@ -123,7 +126,7 @@ class neupan(torch.nn.Module):
     @time_it("neupan forward")
     def forward(self, state, points, velocities=None,
                 reference_speed_profile=None, measured_velocity=None,
-                bypass_mode=False):
+                bypass_mode=False, bypass_route_clear=False):
         """
         state: current state of the robot, matrix (3, 1), x, y, theta
         points: current input obstacle point positions, matrix (2, N), N is the number of obstacle points.
@@ -131,6 +134,9 @@ class neupan(torch.nn.Module):
         """
 
         assert state.shape[0] >= 3
+        self.info.update(bypass_candidates=[], bypass_recovery_exhausted=False,
+                         bypass_rebuilds=self.bypass_recovery.rebuilds,
+                         stop_reason="none")
 
         if self.bypass_completed:
             self.info["arrive"] = True
@@ -157,6 +163,7 @@ class neupan(torch.nn.Module):
         use_bypass = (self.bypass_enabled and bypass_mode and not self.bypass_completed
                       and points is not None and points.shape[1] > 0)
         if not use_bypass:
+            self.bypass_recovery = BypassRecovery()
             if self.bypass_active:
                 self.cur_vel_array = np.zeros_like(self.cur_vel_array)
                 self.pan.current_nom_values = [None, None, None, None]
@@ -183,6 +190,27 @@ class neupan(torch.nn.Module):
         nom_input_np = self.ipath.generate_nom_ref_state(
             state, self.cur_vel_array, self.ref_speed, planning_profile
         )
+        rejoined = False
+        if use_bypass and bypass_route_clear:
+            route = np.hstack(self.ipath.initial_path)[:3]
+            clearance = trajectory_clearance(
+                nom_input_np[2], points, self.robot.vertices, self.robot.G, self.robot.h)
+            rejoined = self.bypass_recovery.can_rejoin(
+                time.monotonic(), True, state, route, clearance,
+                self.bypass_min_clearance)
+        elif use_bypass:
+            self.bypass_recovery.clear_since = None
+        if rejoined:
+            use_bypass = False
+            self.bypass_active = False
+            self.bypass_guide = None
+            self.bypass_side = 0
+            self.bypass_invalid_cycles = 0
+            self.bypass_recovery = BypassRecovery()
+            self.cur_vel_array = np.zeros_like(self.cur_vel_array)
+            self.pan.current_nom_values = [None, None, None, None]
+            nom_input_np = self.ipath.generate_nom_ref_state(
+                state, self.cur_vel_array, self.ref_speed, reference_speed_profile)
 
         # convert to tensor
         nom_input_tensor = [np_to_tensor(n) for n in nom_input_np]
@@ -215,6 +243,8 @@ class neupan(torch.nn.Module):
                                               self.robot.vertices, self.robot.G, self.robot.h)
                             for side in (1, -1)])
             guides = [guide for guide in guides if guide is not None]
+            if self.bypass_recovery.exhausted:
+                guides = []
 
             def solve_candidate(seed_state, seed_control, guide, min_speed):
                 nonlocal solver_failures
@@ -229,6 +259,7 @@ class neupan(torch.nn.Module):
                 turn_before_pass = (
                     (guide.phase in ("pass", "align") and abs(heading_error) > 0.20)
                     or (guide.phase == "rejoin" and abs(heading_error) > 0.40)
+                    or (guide.phase == "final" and abs(heading_error) > 0.40)
                 )
                 guided_speed = (
                     torch.zeros_like(reference_speed) if turn_before_pass else reference_speed
@@ -253,6 +284,8 @@ class neupan(torch.nn.Module):
                     )
                 except SolverError:
                     solver_failures += 1
+                    self.info["bypass_candidates"].append(
+                        {"phase": guide.phase, "side": guide.side, "reason": "solver_error"})
                     return False
                 predicted = tensor_to_np(result[0])
                 controls = tensor_to_np(result[1])
@@ -273,7 +306,12 @@ class neupan(torch.nn.Module):
                         abs(float(measured[1])) >= 0.04
                         and abs(float(controls[1, 0])) < abs(float(measured[1])) - 0.02
                     )
-                if guide.phase == "backoff":
+                if turn_before_pass:
+                    next_error = abs(float(np.arctan2(
+                        np.sin(guided_reference[2, -1].item() - predicted[2, -1]),
+                        np.cos(guided_reference[2, -1].item() - predicted[2, -1]))))
+                    progress = .15 * (abs(heading_error) - next_error)
+                elif guide.phase == "backoff":
                     progress = -along
                 elif guide.phase == "side":
                     progress = guide.side * (lateral + 0.15 * heading_change)
@@ -324,6 +362,17 @@ class neupan(torch.nn.Module):
                     and progress > (0.005 if turn_before_pass else
                                     0.01 if guide.phase == "final" else 0.05)
                 )
+                reason = ("nonfinite" if not (np.isfinite(predicted).all() and np.isfinite(controls).all())
+                          else "clearance" if clearance < self.bypass_min_clearance
+                          else "first_motion" if not first_moves
+                          else "progress" if not valid else "accepted")
+                self.info["bypass_candidates"].append({
+                    "phase": guide.phase, "side": guide.side, "reason": reason,
+                    "clearance_m": float(clearance) if np.isfinite(clearance) else None,
+                    "progress": float(progress) if np.isfinite(progress) else None,
+                    "linear_x": float(controls[0, 0]) if np.isfinite(controls[0, 0]) else None,
+                    "angular_z": float(controls[1, 0]) if np.isfinite(controls[1, 0]) else None,
+                })
                 if valid:
                     score = progress + 0.25 * min(clearance, 0.20)
                     score -= 0.10 * abs(float(result[1][0, 0])) if result[1][0, 0] < 0 else 0.0
@@ -370,6 +419,7 @@ class neupan(torch.nn.Module):
             else:
                 self.bypass_invalid_cycles = 0
             if candidates:
+                self.bypass_recovery.accepted()
                 _, selected_guide, selected_clearance, result, guided_reference = max(
                     candidates, key=lambda item: item[0]
                 )
@@ -382,6 +432,9 @@ class neupan(torch.nn.Module):
                 self.info["bypass_clearance_m"] = selected_clearance
                 self.info["bypass_phase"] = selected_guide.phase
             else:
+                if self.bypass_recovery.rejected(time.monotonic()):
+                    self.bypass_guide = None
+                    self.cur_vel_array = np.zeros_like(self.cur_vel_array)
                 opt_state_tensor = nominal_state
                 opt_vel_tensor = torch.zeros_like(nominal_control)
                 opt_distance_tensor = torch.zeros((1, self.T), dtype=nominal_state.dtype)
@@ -390,6 +443,8 @@ class neupan(torch.nn.Module):
                 self.info["bypass_clearance_m"] = None
                 self.info["bypass_phase"] = self.bypass_guide.phase if self.bypass_guide else "none"
             self.info["bypass_solver_failures"] = solver_failures
+            self.info["bypass_rebuilds"] = self.bypass_recovery.rebuilds
+            self.info["bypass_recovery_exhausted"] = self.bypass_recovery.exhausted
         else:
             opt_state_tensor, opt_vel_tensor, opt_distance_tensor = self.pan(
                 *nom_input_tensor, obstacle_points_tensor, point_velocities_tensor,
@@ -398,7 +453,7 @@ class neupan(torch.nn.Module):
             self.info["bypass_valid"] = False
             self.info["bypass_side"] = 0
             self.info["bypass_clearance_m"] = None
-            self.info["bypass_phase"] = "done" if self.bypass_completed else "none"
+            self.info["bypass_phase"] = "rejoined" if rejoined else "done" if self.bypass_completed else "none"
             self.info["bypass_solver_failures"] = 0
 
         opt_state_np, opt_vel_np = tensor_to_np(opt_state_tensor), tensor_to_np(
@@ -420,6 +475,9 @@ class neupan(torch.nn.Module):
 
         if (use_bypass and not self.info["bypass_valid"]) or self.check_stop():
             self.info["stop"] = True
+            self.info["stop_reason"] = ("bypass_recovery_exhausted" if self.bypass_recovery.exhausted
+                else "bypass_no_valid_candidate" if use_bypass and not self.info["bypass_valid"]
+                else "collision_threshold")
             return np.zeros((2, 1)), self.info
         else:
             self.info["stop"] = False
@@ -557,6 +615,7 @@ class neupan(torch.nn.Module):
 
 
     def reset(self):
+        self.bypass_recovery = BypassRecovery()
         self.ipath.point_index = 0
         self.ipath.curve_index = 0
         self.ipath.arrive_flag = False
@@ -576,6 +635,7 @@ class neupan(torch.nn.Module):
         path: list of [x, y, theta, gear] 4x1 vector, gear is -1 (back gear) or 1 (forward gear)
         '''
 
+        self.bypass_recovery = BypassRecovery()
         self.bypass_guide = None
         self.bypass_side = 0
         self.bypass_completed = False
