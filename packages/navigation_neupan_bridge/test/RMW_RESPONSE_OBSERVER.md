@@ -48,3 +48,15 @@ The test harness also accepts `NEUPAN_LIFECYCLE_CLIENT_MODE=precreated` for a
 bounded A/B experiment: create persistent ChangeState clients before launching
 servers. Default remains `ephemeral`; neither mode sleeps to settle discovery or
 retries state transitions. A pass in one mode must not erase failures in another.
+
+`failstop_navigator_configure_probe.py` is a separate configure-only diagnostic:
+source the selected bundle environment, then pass `--bundle ABSOLUTE_BUNDLE
+--navigator ABSOLUTE_NAVIGATOR --report NEW_DIRECTORY --rounds 12` under the same
+domain192/localhost/opt-in flags. It alternates mode order, creates a fresh actual
+Navigator process for each call, and compares clients created before the server
+with clients created after node discovery. It sends configure exactly once,
+queries state without retrying configure, then stops its own child. It never
+activates Navigator, sends a goal, starts a driver, or claims solver provenance.
+Saved process maps must contain the actual selected BT library. This reduced
+experiment excludes the Controller/Worker/Guard/smoother coexistence of the full
+acceptance harness; a pass is not a fix or full startup acceptance.
