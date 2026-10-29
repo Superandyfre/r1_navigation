@@ -41,3 +41,23 @@ verify refusal never dispatches. Run from the development overlay:
 ```
 /usr/bin/python3 tools/release/test_preflight.py -v
 ```
+
+## Loaded C++ artifacts (diagnostic only)
+
+`runtime_maps.py --manifest PIN.json --bindings PROCESSES.json` checks the
+ControllerServer executable, loaded core and NeuPAN plugin, and Guard executable
+against four corresponding artifact pins. Bindings contain `controller` and
+`guard`, each with the explicitly selected PID and Linux `/proc/PID/stat`
+`start_ticks` (field22), so a recycled PID is refused. It verifies live process
+identity, mapped canonical paths/inodes, mountinfo device identity and SHA256.
+Deleted/replaced mapped objects are refused even if replacement bytes match.
+Btrfs maps use mount device identity rather than the stat subvolume device;
+foreign mount namespaces are refused. It never arms, launches or approves.
+
+This is a point-in-time C++ artifact check. It does not verify in-memory code
+pages, every dependency, Python imports, BT runtime loading, effective ROS
+parameters, or continuously prevent post-check changes. Keep release files
+immutable and verify the remaining release/runtime inventory separately. It is
+not yet integrated with the UI7 startup/arm workflow. Tests cover actual isolated
+ROS process maps (candidate accepted and preserved old core refused), wrong
+start_ticks, temporary mapped-file replacement and terminated process refusal.
