@@ -157,6 +157,32 @@ snapshot being checked against itself. The tool proves the named values only
 during a bounded interval, not PID ownership, topic remaps, code identity or
 physical readiness. It is not yet connected to the production arm gate.
 
+`launch_parameter_contract.py --bundle /absolute/bundle --calibration
+/absolute/calibration.json --output /absolute/new-draft.json` evaluates the
+installed HW1 motion and Nav2 control builders without executing any ROS action.
+It checks the bundle inventory and selected package roots, merges YAML plus
+Launch overrides, preserves exact ROS parameter types, and records intended
+resolved command remappings. Default draft covers dual scan, mesh enabled,
+collision checking enabled and smoothed commands; `--profile direct` selects
+the other command path. The returned `pins` object is input to the live
+parameter checker API; the enclosing draft also includes an expected `topology`.
+Drafts have `review_complete=false` and authorize no motion. This does not
+execute or prove the complete upstream UI7/arm-stream launch path, and it does
+not include parameter defaults absent from launch inputs.
+
+`runtime_topology.py --contract /absolute/new-draft.json --output
+/absolute/new-graph-report.json` reads actual resolved publisher/subscriber
+edges and checks exclusive publishers for final/raw/smoothed commands and
+Worker source/health. It rejects wrong topics/types, duplicate node names,
+missing nodes or extra publishers. Graph discovery is sampled within a bounded
+window; a matching graph does not prove transport delivery or associate a ROS
+node with a specific PID. Combine it with process/maps and parameter checks;
+these tools do not grant arm permission or establish continuous authorization.
+
+The explicit `effective-parameters` suite additionally checks resolved endpoints
+before its test-only arm, rejects a wrong raw topic and a temporary second final
+output publisher (no messages published), then verifies normal solver/cancel.
+
 The separate `--suite navigator-tick-loss` is not part of standard `all`: it
 requires a deliberately test-only BT decorator, never installed in a candidate.
 Compile `packages/navigation_neupan_bridge/test/pause_tick_bt_node.cpp` outside

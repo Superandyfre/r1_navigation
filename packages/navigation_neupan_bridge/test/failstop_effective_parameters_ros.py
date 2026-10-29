@@ -11,6 +11,7 @@ import failstop_chain_ros as chain
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'tools/release'))
 from effective_parameters import SCHEMA, sample
+from runtime_topology import check as check_topology, control_contract
 
 
 def flatten(values, prefix=''):
@@ -38,6 +39,7 @@ class EffectiveParameters(chain.FailstopChainROS):
             'worker_recovery_enabled': dict(type=1, value=False),
             'require_execution_context': dict(type=1, value=True),
             'worker_health_period_sec': dict(type=3, value=.1),
+            'worker_health_topic': dict(type=4, value=chain.PREFIX + 'health'),
             'execution_context_topic': dict(type=4, value=chain.PREFIX + 'context'),
             'planner_result_topic': dict(type=4, value=chain.PREFIX + 'source')})
         (self.report / 'parameter-pins.json').write_text(json.dumps(pins, indent=2))
@@ -50,6 +52,37 @@ class EffectiveParameters(chain.FailstopChainROS):
         rejected = sample(self.node, bad, 5., pump=self.tick)
         (self.report / 'wrong-pins-refused.json').write_text(json.dumps(rejected, indent=2))
         self.assertIn('/controller_server:FollowPath.shadow_mode:mismatch', rejected['errors'])
+        self.assertFalse(any(v or w for _, v, w in self.outputs))
+        # Base peer precreates unused source/health publishers even in actual
+        # Worker mode. Remove those test-only endpoints before exclusivity checks.
+        self.node.destroy_publisher(self.pubs['source'])
+        self.node.destroy_publisher(self.pubs['health'])
+        remaps = {'/controller_server': [('cmd_vel', chain.PREFIX + 'raw')],
+                  '/velocity_smoother': [('cmd_vel', chain.PREFIX + 'raw'),
+                                         ('cmd_vel_smoothed', chain.PREFIX + 'smooth')]}
+        topology = control_contract(pins, remaps, smoother='/velocity_smoother')
+        observations = []
+        def ready():
+            result = check_topology(self.node, topology)
+            observations.append(result)
+            return result['ok']
+        self.until(ready, 3.)
+        (self.report / 'topology-before-arm.json').write_text(json.dumps(observations, indent=2))
+        wrong = copy.deepcopy(topology)
+        wrong['nodes']['/controller_server']['publishers'][chain.PREFIX + 'wrong_raw'] = 'geometry_msgs/msg/Twist'
+        mismatch = check_topology(self.node, wrong)
+        self.assertFalse(mismatch['ok'])
+        from geometry_msgs.msg import Twist
+        rogue = self.node.create_publisher(Twist, chain.PREFIX + 'output', 10)
+        try:
+            self.until(lambda: len(self.node.get_publishers_info_by_topic(chain.PREFIX + 'output')) == 2, 3.)
+            duplicated = check_topology(self.node, topology)
+            self.assertIn(chain.PREFIX + 'output:publisher_not_exclusive', duplicated['errors'])
+            (self.report / 'topology-refused.json').write_text(json.dumps(dict(
+                wrong_remap=mismatch, extra_final_publisher=duplicated), indent=2))
+        finally:
+            self.node.destroy_publisher(rogue)
+        self.until(ready, 3.)
         self.assertFalse(any(v or w for _, v, w in self.outputs))
         super().arm_runtime()
 
