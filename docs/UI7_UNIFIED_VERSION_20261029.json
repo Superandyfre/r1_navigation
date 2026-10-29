@@ -34,7 +34,8 @@
       532112,
       532114
     ],
-    "not_using_new_release": true
+    "not_using_new_release": true,
+    "ui_button": "UI8 (confirmed by user)"
   },
-  "activation": "next UI7 launch after separately stopping existing navigation"
+  "activation": "UI7 registration selected; not launched by this task; UI8 old-version processes left unchanged"
 }
