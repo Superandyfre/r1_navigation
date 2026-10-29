@@ -51,6 +51,21 @@ XML must explicitly whitelist loopback on its own UDP descriptor. No transport
 profile from this diagnostic is a production recommendation. Inspect effective
 participant transport QoS and maps before claiming a transport was disabled.
 
+`dds_participant_transport_probe.cpp` is a separate, manually built diagnostic
+interposer, never CMake-built or installed. Compile outside source/build/install
+with the local include directories and `-shared -fPIC -std=c++17 -ldl
+-L/opt/ros/humble/lib -lfastrtps`. Preload it only for an isolated command.
+`NEUPAN_DDS_PARTICIPANT_DIAGNOSTIC=observe` records input, outgoing and actual
+post-creation participant QoS without changing the input transports.
+`udp-loopback` is an **active test intervention**: it removes SHM, disables
+builtin transports, preserves copies of existing UDPv4 descriptors and explicitly
+limits them to 127.0.0.1. It rejects unknown transports or no existing UDP and
+requires domain192, ROS_LOCALHOST_ONLY=1 and NEUPAN_ISOLATED_ROS_TEST=1.
+The original create-participant function is called exactly once. Unknown mode
+or non-isolated use fails rather than changing a production participant.
+Actual post-creation QoS plus process maps must both validate the intervention.
+Do not describe `udp-loopback` as read-only or a production middleware fix.
+
 `RMW_RESPONSE_OBSERVE` records the response target GUID, local listener match
 before/after, original return value and original call duration. On failure,
 `RMW_WRITER_MATCHES` additionally queries actual writer matched subscriptions;
