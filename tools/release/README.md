@@ -130,6 +130,20 @@ uses the protected source integration, not a full packaged driver/vision stack.
 These are bounded-scope acceptance tests, not production startup or hardware
 acceptance; running them never approves deployment. Preserve raw logs and traces.
 
+The separate `--suite navigator-tick-loss` is not part of standard `all43`: it
+requires a deliberately test-only BT decorator, never installed in a candidate.
+Compile `packages/navigation_neupan_bridge/test/pause_tick_bt_node.cpp` outside
+the source/build/install/release trees using `g++ -shared -fPIC -std=c++17
+-DBT_PLUGIN_EXPORT -I/opt/ros/humble/include SOURCE -o
+/absolute/new-directory/libtest_neupan_pause_tick_bt_node.so
+-L/opt/ros/humble/lib -lbehaviortree_cpp_v3`. Set
+`NEUPAN_TEST_TICK_PLUGIN_PATH` to that absolute library path for this one test.
+The fixture wraps actual bundle `NeuPANFollowPath` in a test decorator that skips
+only its ticks after a marker appears. Navigator lifecycle services and the
+outer BT keep running. It checks owner expiry/zero output with a live Worker,
+then removes the marker and verifies failure/new-goal refusal. It is evidence
+for BT tick loss, not an unmodified production tree or hardware test.
+
 To test a relocated review bundle, source its `install/local_setup.bash` after
 the required external ROS overlay and add `--bundle /absolute/bundle` alongside
 `--candidate /absolute/original-candidate`. The runner verifies the bundle's

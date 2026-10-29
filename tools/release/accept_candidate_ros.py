@@ -65,7 +65,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate',required=True,type=Path)
     parser.add_argument('--bundle',type=Path,help='Verify and run the relocated bundle instead of candidate/install')
-    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','cognav-owner','navigator-owner','navigator-freeze','pending-halt','ack-delay','all'],default='all')
+    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','cognav-owner','navigator-owner','navigator-freeze','navigator-tick-loss','pending-halt','ack-delay','all'],default='all')
     args=parser.parse_args()
     assert os.environ.get('ROS_DOMAIN_ID')=='192'
     assert os.environ.get('ROS_LOCALHOST_ONLY')=='1'
@@ -121,6 +121,10 @@ def main():
                     'navigator-owner':'failstop_navigator_owner_ros','pending-halt':'failstop_navigator_halt_pending_ros',
                     'navigator-freeze':'failstop_navigator_freeze_ros',
                     'ack-delay':'failstop_navigator_ack_delay_ros'})
+    # This extra fixture needs a manually compiled, test-only decorator. Keep
+    # the BUILD_TESTING=OFF candidate's standard all43 independent of adapters.
+    if args.suite=='navigator-tick-loss':
+        modules['navigator-tick-loss']='failstop_navigator_tick_loss_ros'
     selected=list(modules) if args.suite=='all' else [args.suite]
     suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromModule(importlib.import_module(modules[name])) for name in selected)
     result=unittest.TextTestRunner(verbosity=2,resultclass=AcceptanceResult).run(suite)
