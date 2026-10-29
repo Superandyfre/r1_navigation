@@ -24,6 +24,7 @@
 #include "r1_neupan_runtime/srv/update_path.hpp"
 #include "r1_neupan_runtime/route_revision.hpp"
 #include "navigation_neupan_bridge/execution_owner_lease.hpp"
+#include "navigation_neupan_bridge/path_replan_distance.hpp"
 
 namespace navigation_neupan_bridge
 {
@@ -91,11 +92,18 @@ public:
       return;
     }
     const auto now = std::chrono::steady_clock::now();
+    if (waiting_route_version_ && context_.value("path_version", -1) > sent_path_version_) {
+      waiting_route_version_ = false;
+    }
     if (pending_update_) {
       if (pending_update_->wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         try {
           const auto response = pending_update_->get();
-          if (response->accepted) {goal_.path = sent_path_;}
+          if (response->accepted) {
+            waiting_route_version_ =
+              forwardRouteDeviation(sent_path_, goal_.path) >= .08 || waiting_route_version_;
+            goal_.path = sent_path_;
+          }
           else {update_failed_ = true;}
         } catch (const std::exception &) {update_failed_ = true;}
         pending_update_.reset();
@@ -104,7 +112,11 @@ public:
       }
       return;
     }
-    if (r1_neupan_runtime::sameRouteGeometry(path, goal_.path) || update_failed_) {return;}
+    if (update_failed_ ||
+      (r1_neupan_runtime::sameRouteGeometry(path, goal_.path) && !waiting_route_version_)) {return;}
+    // A queued revision may still be awaiting the Controller's route debounce.
+    // Repeat at most once per second until its context version advances.
+    if (now - update_started_ < std::chrono::seconds(1)) {return;}
     if (!goal_handle_ || context_.value("state", "") != "ACTIVE" ||
       context_.value("navigation_attempt_id", "") != executionAttemptId(goal_handle_->get_goal_id()))
     {return;}
@@ -113,6 +125,7 @@ public:
     request->authority_boot_id = context_.at("authority_boot_id").get<std::string>();
     request->navigation_attempt_id = executionAttemptId(goal_handle_->get_goal_id());
     request->path = path; sent_path_ = path; update_started_ = now;
+    sent_path_version_ = context_.value("path_version", -1);
     pending_update_.emplace(update_path_->async_send_request(request));
   }
 
@@ -167,6 +180,7 @@ private:
   }
   void clearUpdate()
   {
+    waiting_route_version_ = false;
     if (pending_update_) {
       update_path_->remove_pending_request(pending_update_->request_id);
       pending_update_.reset();
@@ -180,6 +194,8 @@ private:
   Pose parent_;
   Goals parents_;
   bool has_parent_{false}, has_parents_{false}, update_failed_{false};
+  bool waiting_route_version_{false};
+  int sent_path_version_{-1};
   void revokeUncertain()
   {
     auto request = revoke_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
