@@ -1,6 +1,11 @@
 #include <gtest/gtest.h>
 #include "navigation_neupan_bridge/execution_owner_lease.hpp"
 using navigation_neupan_bridge::ExecutionOwnerLease;
+TEST(ExecutionOwnerIdentity, EveryByteHasTwoHexDigits) {
+  const std::array<unsigned char,16> id{1,2,3,4,0x10,0x20,0x30,0x40,5,6,7,8,0x50,0x60,0x70,0x80};
+  EXPECT_EQ(navigation_neupan_bridge::executionAttemptId(id),"01020304102030400506070850607080");
+  EXPECT_EQ(navigation_neupan_bridge::executionAttemptId({}),std::string(32,'0'));
+}
 nlohmann::json owner(double stamp=10.1, int sequence=1) {
   return {{"schema","r1_neupan_execution_owner_v1"},{"authority_boot_id","a"},
     {"controller_boot_id","c"},{"navigation_attempt_id","g"},{"owner_id","o"},

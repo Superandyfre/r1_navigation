@@ -54,6 +54,7 @@ ament_target_dependencies(${PROJECT_NAME}
 )
 
 add_library(neupan_wait_condition_bt_node SHARED src/neupan_wait_condition_bt_node.cpp)
+target_include_directories(neupan_wait_condition_bt_node PRIVATE include)
 target_compile_features(neupan_wait_condition_bt_node PUBLIC cxx_std_17)
 target_compile_definitions(neupan_wait_condition_bt_node PRIVATE BT_PLUGIN_EXPORT)
 ament_target_dependencies(neupan_wait_condition_bt_node

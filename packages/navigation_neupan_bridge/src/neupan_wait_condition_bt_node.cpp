@@ -21,6 +21,7 @@
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "r1_neupan_runtime/motion_authorization.hpp"
+#include "navigation_neupan_bridge/execution_owner_lease.hpp"
 
 namespace navigation_neupan_bridge
 {
@@ -52,7 +53,9 @@ public:
     const auto pending = future_goal_handle_;
     const auto status = FollowPathAction::tick();
     if (status == BT::NodeStatus::RUNNING && goal_handle_ && !future_goal_handle_) {
-      const auto id = rclcpp_action::to_string(goal_handle_->get_goal_id());
+      // Humble's human-readable to_string omits per-byte zero padding.
+      // Use the exact fixed-width identity emitted by ControllerServer.
+      const auto id = executionAttemptId(goal_handle_->get_goal_id());
       if (context_.value("state", "") == "ACTIVE" &&
         context_.value("navigation_attempt_id", "") == id)
       {

@@ -410,13 +410,16 @@ void NeuPANController::runtimeTick()
   }
   if (!active_ || !execution_->active()) {return;}
   try {
+    // Ownership needs the exact execution identity before it can be confirmed.
+    // Repeat this non-authorizing context even while waiting for the owner;
+    // a missed first publication must not deadlock the ownership handshake.
+    if (path_published_) {publishExecutionContextLocked("ACTIVE");}
     if (!ownerReadyLocked(monotonicNow())) {
       if (execution_->faulted()) {endExecutionLocked(execution_->fault());}
       return;
     }
     const auto grant = execution_->tick(monotonicNow());
     if (execution_->faulted()) {envelope_ = Envelope{}; endExecutionLocked(execution_->fault()); return;}
-    if (path_published_) {publishExecutionContextLocked("ACTIVE");}
     if (grant) {std_msgs::msg::String msg; msg.data = grant->dump(); motion_grant_pub_->publish(msg);}
   } catch (const std::exception &) {execution_->fail("execution_publish_failed"); envelope_ = Envelope{};}
 }

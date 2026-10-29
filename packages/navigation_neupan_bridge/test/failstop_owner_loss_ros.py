@@ -14,6 +14,10 @@ class OwnerLoss(chain.FailstopChainROS):
         self.until(lambda:any(j.get('fault_reason')=='owner_ack_timeout' for _,j in self.runtime_statuses))
         self.assertFalse(any(v!=0. or w!=0. for _,v,w in self.outputs))
         self.assertFalse(any(j['state']=='COMMIT' for _,j in self.grants))
+        # A late-discovered owner must get another identity advertisement while
+        # permission remains denied. Context publication cannot require ownership.
+        active=[j for _,j in self.contexts if j['state']=='ACTIVE']
+        self.assertGreaterEqual(len(active),3,'owner handshake context was not repeated')
         (self.report/'owner-loss-result.json').write_text(json.dumps(dict(
             reason='owner_ack_timeout',action='ABORTED',all_outputs_zero=True,
             commit_count=0,physical_motion=False),indent=2))

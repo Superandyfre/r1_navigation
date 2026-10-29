@@ -35,7 +35,7 @@ TEST(NeuPANExecutionROS, RealCallbacksHandshakeThenFatalRetiresContext)
   for (const auto & name : {"path_topic", "goal_topic", "envelope_topic", "gate_command_topic",
       "gate_status_topic", "guard_status_topic", "localization_health_topic", "diagnostics_topic",
       "worker_health_topic", "execution_context_topic", "motion_grant_topic", "motion_arm_service",
-      "odom_topic", "motion_retry_service"})
+      "odom_topic", "motion_retry_service", "execution_owner_topic"})
   {
     params.emplace_back(std::string("FollowPath.") + name, prefix + name);
   }
@@ -52,6 +52,7 @@ TEST(NeuPANExecutionROS, RealCallbacksHandshakeThenFatalRetiresContext)
   auto health_pub =
     peer->create_publisher<std_msgs::msg::String>(prefix + "worker_health_topic", 20);
   auto source_pub = peer->create_publisher<std_msgs::msg::String>(prefix + "envelope_topic", 20);
+  auto owner_pub = peer->create_publisher<std_msgs::msg::String>(prefix + "execution_owner_topic", 20);
   auto odom_pub = peer->create_publisher<nav_msgs::msg::Odometry>(prefix + "odom_topic", 20);
   Json context, grant;
   std::vector<Json> contexts;
@@ -106,6 +107,12 @@ TEST(NeuPANExecutionROS, RealCallbacksHandshakeThenFatalRetiresContext)
       if (odom_fault == 3) {odom.twist.twist.linear.y = std::numeric_limits<double>::quiet_NaN();}
       odom_pub->publish(odom);
       if (!context.is_null() && context.at("state") == "ACTIVE") {
+        Json owner{{"schema", "r1_neupan_execution_owner_v1"}, {"owner_id", "test-action-client"},
+          {"sequence", sequence}, {"monotonic", now}};
+        for (const auto key : {"authority_boot_id", "controller_boot_id", "navigation_attempt_id"}) {
+          owner[key] = context.at(key);
+        }
+        publish(owner_pub, owner);
         Json health{{"schema", r1_neupan_runtime::kHealthSchema}, {"boot_id", "test-worker"},
           {"worker_generation", 1}, {"sequence", sequence}, {"monotonic", now},
           {"state", fatal ? "FAULT_LATCHED" : "RUNNING"},

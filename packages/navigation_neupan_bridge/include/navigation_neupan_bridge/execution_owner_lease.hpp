@@ -1,10 +1,20 @@
 #pragma once
+#include <array>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <nlohmann/json.hpp>
 #include "r1_neupan_runtime/motion_authorization.hpp"
 
 namespace navigation_neupan_bridge
 {
+inline std::string executionAttemptId(const std::array<unsigned char, 16> & uuid)
+{
+  std::ostringstream id;
+  id << std::hex << std::setfill('0');
+  for (const auto byte : uuid) {id << std::setw(2) << static_cast<unsigned int>(byte);}
+  return id.str();
+}
 // Same-host, deny-by-default client ownership. An accepted goal alone is not
 // proof that the client received its ACK or still holds the parent execution.
 class ExecutionOwnerLease
