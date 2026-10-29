@@ -43,6 +43,7 @@ class FailstopChainROS(unittest.TestCase):
         self.report = self.report/(self._testMethodName+'-'+str(time.time_ns()))
         self.report.mkdir(parents=True)
         self.procs, self.logs = [], []
+        self.lifecycle_events=[]
         rclpy.init()
         self.node = Node('failstop_chain_peer')
         self.addCleanup(self.shutdown)
@@ -266,10 +267,23 @@ class FailstopChainROS(unittest.TestCase):
 
     def lifecycle(self,name,transition):
         client=self.node.create_client(ChangeState,'/'+name+'/change_state')
-        self.until(client.service_is_ready)
-        req=ChangeState.Request();req.transition.id=transition
-        response=self.future(client.call_async(req))
-        self.assertTrue(response.success,name+' transition '+str(transition)+' '+str(self.report))
+        event=dict(node=name,transition=transition,created=time.monotonic())
+        try:
+            self.until(client.service_is_ready)
+            event['ready']=time.monotonic()
+            req=ChangeState.Request();req.transition.id=transition
+            event['sent']=time.monotonic()
+            response=self.future(client.call_async(req))
+            event['received']=time.monotonic();event['success']=response.success
+            self.assertTrue(response.success,name+' transition '+str(transition)+' '+str(self.report))
+        except BaseException as exc:
+            event['error']=repr(exc)
+            raise
+        finally:
+            event['finished']=time.monotonic()
+            self.lifecycle_events.append(event)
+            (self.report/'lifecycle-client-events.json').write_text(json.dumps(self.lifecycle_events,indent=2))
+            self.node.destroy_client(client)
 
     def goal(self):
         goal=FollowPath.Goal();goal.controller_id='FollowPath';goal.goal_checker_id='goal_checker'
