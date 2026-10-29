@@ -17,7 +17,7 @@ import unittest
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate',required=True,type=Path)
-    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','all'],default='all')
+    parser.add_argument('--suite',choices=['chain','navigator','cognav','restart','startup-tf','revoke-loss','all'],default='all')
     args=parser.parse_args()
     assert os.environ.get('ROS_DOMAIN_ID')=='192'
     assert os.environ.get('ROS_LOCALHOST_ONLY')=='1'
@@ -49,7 +49,8 @@ def main():
     print(json.dumps(dict(candidate=str(candidate),build_source_sha=inventory['source_sha'],
         worker_import=worker.__file__,inventory_verified_files=len(inventory['files']),suite=args.suite)),flush=True)
     modules=dict(chain='failstop_chain_ros',navigator='failstop_navigator_ros',
-                 cognav='failstop_cognav_ros',restart='failstop_full_restart_ros')
+                 cognav='failstop_cognav_ros',restart='failstop_full_restart_ros',
+                 **{'startup-tf':'failstop_startup_tf_ros','revoke-loss':'failstop_revoke_loss_ros'})
     selected=list(modules) if args.suite=='all' else [args.suite]
     suite=unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromModule(importlib.import_module(modules[name])) for name in selected)
     return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
