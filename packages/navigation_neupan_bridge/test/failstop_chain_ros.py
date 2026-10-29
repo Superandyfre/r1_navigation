@@ -47,6 +47,14 @@ class FailstopChainROS(unittest.TestCase):
         rclpy.init()
         self.node = Node('failstop_chain_peer')
         self.addCleanup(self.shutdown)
+        # Diagnostic A/B only: establish both response readers before spawning
+        # lifecycle servers, as Nav2's lifecycle manager does with persistent clients.
+        self.lifecycle_client_mode=os.environ.get('NEUPAN_LIFECYCLE_CLIENT_MODE','ephemeral')
+        self.assertIn(self.lifecycle_client_mode,('ephemeral','precreated'))
+        self.lifecycle_clients={}
+        if self.lifecycle_client_mode=='precreated':
+            self.lifecycle_clients={name:self.node.create_client(ChangeState,'/'+name+'/change_state')
+                                    for name in ('controller_server','bt_navigator','velocity_smoother')}
         self.tf = TransformBroadcaster(self.node)
         self.artifacts=[]
         self.context = None
@@ -284,8 +292,10 @@ class FailstopChainROS(unittest.TestCase):
         return result
 
     def lifecycle(self,name,transition):
-        client=self.node.create_client(ChangeState,'/'+name+'/change_state')
-        event=dict(node=name,transition=transition,created=time.monotonic())
+        persistent=name in self.lifecycle_clients
+        client=self.lifecycle_clients[name] if persistent else self.node.create_client(ChangeState,'/'+name+'/change_state')
+        event=dict(node=name,transition=transition,created=time.monotonic(),
+                   client_mode=self.lifecycle_client_mode,persistent=persistent)
         try:
             self.until(client.service_is_ready)
             event['ready']=time.monotonic()
@@ -301,7 +311,7 @@ class FailstopChainROS(unittest.TestCase):
             event['finished']=time.monotonic()
             self.lifecycle_events.append(event)
             (self.report/'lifecycle-client-events.json').write_text(json.dumps(self.lifecycle_events,indent=2))
-            self.node.destroy_client(client)
+            if not persistent:self.node.destroy_client(client)
 
     def goal(self):
         goal=FollowPath.Goal();goal.controller_id='FollowPath';goal.goal_checker_id='goal_checker'

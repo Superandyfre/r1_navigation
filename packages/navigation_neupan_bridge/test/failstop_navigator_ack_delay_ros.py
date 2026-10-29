@@ -36,10 +36,15 @@ class NavigatorAckDelay(nav.NavigatorFailstop):
         events=json.loads((self.report/'ack-peer/events.json').read_text())
         self.assertTrue(events and events[0]['accepted'])
         self.assertGreater(events[0]['delayed_response']-events[0]['actual_response'],1.9)
-        self.assertTrue(any(j['navigation_attempt_id']==events[0]['uuid'] for _,j in self.contexts))
+        context_observed=any(j['navigation_attempt_id']==events[0]['uuid'] for _,j in self.contexts)
+        # The deny-only RPC can arrive before Controller begins the late goal.
+        # Such an execution must fail before setPlan publishes ACTIVE context.
+        self.assertTrue(context_observed or any(
+            j.get('fault_latched') and j.get('fault_reason')=='follow_path_execution_uncertain'
+            for _,j in self.runtime_statuses))
         later=[row for row in self.outputs if row[0]>terminal+.1 and (row[1]!=0. or row[2]!=0.)]
         record=dict(top_status='ABORTED',terminal=terminal,observation_seconds=6.,
-            later_nonzero_samples=len(later),proxy_events=events,
+            later_nonzero_samples=len(later),proxy_events=events,context_observed=context_observed,
             physical_motion=False,diagnostic_exposure_test=False)
         (self.report/'ack-delay-result.json').write_text(json.dumps(record,indent=2))
         self.assertEqual(len(later),0,'downstream output after top-level failure')
