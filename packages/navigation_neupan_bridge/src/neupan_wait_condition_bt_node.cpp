@@ -104,7 +104,7 @@ public:
       }
       return;
     }
-    if (path == goal_.path || update_failed_) {return;}
+    if (r1_neupan_runtime::sameRouteGeometry(path, goal_.path) || update_failed_) {return;}
     if (!goal_handle_ || context_.value("state", "") != "ACTIVE" ||
       context_.value("navigation_attempt_id", "") != executionAttemptId(goal_handle_->get_goal_id()))
     {return;}

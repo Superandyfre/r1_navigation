@@ -4,6 +4,15 @@
 
 namespace r1_neupan_runtime
 {
+inline bool sameRouteGeometry(const nav_msgs::msg::Path & a, const nav_msgs::msg::Path & b)
+{
+  if (a.header.frame_id != b.header.frame_id || a.poses.size() != b.poses.size()) {return false;}
+  for (size_t i = 0; i < a.poses.size(); ++i) {
+    if (a.poses[i].pose != b.poses[i].pose) {return false;}
+  }
+  return true;
+}
+
 inline bool validRouteRevision(
   const nav_msgs::msg::Path & path, const nav_msgs::msg::Path & active)
 {
