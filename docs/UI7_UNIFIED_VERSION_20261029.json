@@ -1,0 +1,40 @@
+{
+  "time": "2026-10-29T22:49:02.084845+08:00",
+  "branch": "codex/navigation-environment-snapshots",
+  "build_source_sha": "dc5c6a736efdbfb86772910563e9d24317d6ed28",
+  "tooling_source_sha": "dc5c6a736efdbfb86772910563e9d24317d6ed28",
+  "bundle": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01",
+  "manifest": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01/releases/a-plus/manifest.json",
+  "manifest_sha256": "94cdae1b1708c73e7554e3d8dbb6a756cbbaa3f4c4331e615e65008448566eba",
+  "inventory_files": 666,
+  "previous_ui7_script": "/home/rpp/r1_navigation/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
+  "ui7_script": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
+  "navigation_launched_by_this_task": false,
+  "physical_acceptance_run": false,
+  "deployment_approved": false,
+  "build_packages": 8,
+  "checks": {
+    "bundle_inventory": true,
+    "compatibility_only": true,
+    "worker_failstop": 16,
+    "execution_context": 18,
+    "collisionoff_profile": 2,
+    "snapshot_restore": 3
+  },
+  "initial_check_limitations": [
+    "preflight unit fixture requires historical development overlay; not applicable to new path; new bundle compatibility CLI passed",
+    "initial Worker import path wrong; explicit source check passed",
+    "initial context check lacked pytest in venv; system test dependency path check passed"
+  ],
+  "uncommitted_solver_changes_deployed": false,
+  "current_processes_preserved": {
+    "prefix": "/home/rpp/nav_restore_20261016",
+    "observed_pids": [
+      532094,
+      532112,
+      532114
+    ],
+    "not_using_new_release": true
+  },
+  "activation": "next UI7 launch after separately stopping existing navigation"
+}
