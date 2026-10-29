@@ -1,29 +1,35 @@
 {
-  "previous_ui7_script": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
-  "ui7_script": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-02/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
-  "build_source_sha": "2787aa3f0ed88890a3bf0a6bddbf1c068512c0b4",
-  "manifest_sha256": "1d01c59abe8880ae36cd5859868024a2dd3d2f2dd0e13eace1ca5a00db9a1869",
-  "new_script_pid": 555056,
-  "old_navigation_pids_exited": [
-    541244,
-    541787,
-    541805,
-    541816
-  ],
+  "previous_ui7_script": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-02/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
+  "ui7_script": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-03/tools/starterbutton/start_navigation_high_sampling_neupan.sh",
+  "new_script_pid": 585614,
   "goals_sent_by_this_task": false,
   "motion_validation": false,
   "auto_arm_on_ready": true,
   "branch": "codex/navigation-environment-snapshots",
-  "bundle": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-02",
+  "bundle": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-03",
+  "build_source_sha": "1a2be6b5ea129b04c4b06061cb2e658fb68e5d0a",
+  "tooling_source_sha": "424d9c1fd00293be2331cfcbc2b4010a505a5d9b",
+  "manifest_sha256": "f55eb54f3fe67a5649d4ffda76ea0eea4b250903678cef4d49b9a30e58a7779a",
+  "operator_confirmed_stopped_and_estop": true,
   "deployment_approved": false,
+  "physical_navigation_validated": false,
   "checks": {
     "build_packages": 8,
-    "controller_execution_unit": 18,
-    "semantic_regression": 2,
+    "bypass_recovery_with_actual_solver": 8,
     "worker_failstop": 16,
+    "isolated_route_update_actual_solver": 3,
     "isolated_auto_arm_actual_solver": 1,
-    "solver_provenance_errors": []
+    "solver_provenance_errors": [],
+    "steady_window_zero_fraction": 0.0,
+    "actual_solver_route_replanning_calls": 9,
+    "route_path_version_before": 1,
+    "route_path_version_after": 2
   },
   "navigation_started": true,
-  "physical_navigation_validated": false
+  "navigation_ready": false,
+  "startup_localization_state": "BOOTSTRAP",
+  "startup_localization_reason": "map_to_base_unavailable",
+  "startup_fault_latched": false,
+  "operator_authorized_switch": true,
+  "rviz_display_recovered": true
 }
