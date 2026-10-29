@@ -52,6 +52,7 @@ class FailstopChainROS(unittest.TestCase):
         self.statuses, self.outputs, self.raw, self.smooth, self.contexts = [], [], [], [], []
         self.sources=[]
         self.healths=[]
+        self.runtime_statuses=[]
         self.sequence = 0
         self.next_pulse = 0.
         self.worker_mode=os.environ.get('NEUPAN_CHAIN_WORKER','synthetic')
@@ -64,7 +65,8 @@ class FailstopChainROS(unittest.TestCase):
         def context(msg):
             self.context=json.loads(msg.data)
             self.contexts.append((time.monotonic(),self.context))
-        self.subs = [self.node.create_subscription(String,PREFIX+'health',lambda m:self.healths.append((time.monotonic(),json.loads(m.data))),20),
+        self.subs = [self.node.create_subscription(String,PREFIX+'diagnostics',lambda m:self.runtime_statuses.append((time.monotonic(),json.loads(m.data))),20),
+                     self.node.create_subscription(String,PREFIX+'health',lambda m:self.healths.append((time.monotonic(),json.loads(m.data))),20),
                      self.node.create_subscription(String,PREFIX+'source',lambda m:self.sources.append((time.monotonic(),json.loads(m.data))),20),
                      self.node.create_subscription(String,PREFIX+'context',context,20),
                      self.node.create_subscription(String,PREFIX+'status',lambda m:self.statuses.append((time.monotonic(),json.loads(m.data))),20)]
@@ -198,7 +200,7 @@ class FailstopChainROS(unittest.TestCase):
                 except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=3)
         for log in self.logs:log.close()
         (self.report/'trace.json').write_text(json.dumps(dict(status=self.statuses,output=self.outputs,
-            raw=self.raw,smooth=self.smooth,context=self.contexts,source=self.sources,health=self.healths),indent=2))
+            raw=self.raw,smooth=self.smooth,context=self.contexts,source=self.sources,health=self.healths,runtime_status=self.runtime_statuses),indent=2))
         self.node.destroy_node();rclpy.shutdown()
 
     def publish(self,key,payload):

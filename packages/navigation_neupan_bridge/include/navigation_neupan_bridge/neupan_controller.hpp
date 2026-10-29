@@ -68,6 +68,7 @@ private:
   std::string motion_retry_service_{"/neupan_controller/can_retry"};
   std::string odom_topic_{"/odom"};
   std::int64_t context_sequence_{0};
+  std::int64_t runtime_status_sequence_{0};
   r1_neupan_runtime::StoppedOdometry stopped_odometry_;
   std::string arm_odom_frame_{"odom"}, arm_base_frame_{"base_link"};
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr execution_context_pub_, motion_grant_pub_;

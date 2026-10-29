@@ -362,7 +362,20 @@ void NeuPANController::runtimeTick()
 {
   if (shadow_mode_) {return;}
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!active_ || !execution_ || !execution_->active()) {return;}
+  if (!execution_) {return;}
+  // Periodic, read-only state remains visible after an Action has ended. It
+  // never grants motion; consumers must still pass the normal grant protocol.
+  if (diagnostics_pub_) {
+    std_msgs::msg::String status;
+    status.data = nlohmann::json{{"schema", "r1_neupan_execution_status_v1"},
+      {"controller_boot_id", execution_->boot()}, {"sequence", ++runtime_status_sequence_},
+      {"monotonic", monotonicNow()}, {"plugin_active", active_},
+      {"execution_active", execution_->active()}, {"fault_latched", execution_->faulted()},
+      {"fault_reason", execution_->fault()}, {"navigation_attempt_id", execution_->attempt()}}.dump();
+    try {diagnostics_pub_->publish(status);}
+    catch (const std::exception &) {execution_->fail("execution_status_publish_failed");}
+  }
+  if (!active_ || !execution_->active()) {return;}
   try {
     const auto grant = execution_->tick(monotonicNow());
     if (execution_->faulted()) {envelope_ = Envelope{}; endExecutionLocked(execution_->fault()); return;}
