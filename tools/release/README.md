@@ -183,6 +183,24 @@ The explicit `effective-parameters` suite additionally checks resolved endpoints
 before its test-only arm, rejects a wrong raw topic and a temporary second final
 output publisher (no messages published), then verifies normal solver/cancel.
 
+`runtime_admission.py --manifest /absolute/manifest.json --bindings
+/absolute/current-pids.json --contract /absolute/reviewed-contract.json --output
+/absolute/new-audit.json` composes compatibility/inventory, C++ loaded identity,
+live typed parameters and resolved graph checks. It checks file inputs and
+mapped identities again after sampling; changed inputs, stale PID start ticks
+or any failed stage reject. Static identity failures stop before ROS queries.
+The result is a bounded diagnostic (`motion_authorized=false`,
+`coverage_complete=false`), never an arm permit. Worker live import/PID binding,
+full dependencies, physical readiness and continuous/production arm integration
+remain separate. `effective-parameters` now requires `--bundle` for these checks.
+
+Launch drafts preserve `robot_type`/`robot_description` under
+`informational_launch_inputs`: N116 does not declare/read these historical YAML
+metadata entries. They are excluded from effective parameter pins, rather than
+mistakenly treated as runtime configuration. Default pins cover221 explicit
+runtime inputs (including82 Worker parameters); missing safety defaults still
+require independent review.
+
 The separate `--suite navigator-tick-loss` is not part of standard `all`: it
 requires a deliberately test-only BT decorator, never installed in a candidate.
 Compile `packages/navigation_neupan_bridge/test/pause_tick_bt_node.cpp` outside

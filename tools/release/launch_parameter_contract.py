@@ -72,6 +72,7 @@ def compile_contract(bundle, calibration, profile='smoothed', mesh=True, collisi
     pins = dict(schema=SCHEMA, nodes={})
     evidence = {}
     remaps = {}
+    informational_inputs = {}
 
     def record(path):
         path = Path(path).resolve(strict=True)
@@ -118,6 +119,13 @@ def compile_contract(bundle, calibration, profile='smoothed', mesh=True, collisi
                     parameters.update(flatten(value))
                 else:
                     raise ValueError('unsupported_evaluated_parameter_input')
+            # These historical YAML entries describe the robot but are not
+            # declared/read by N115/N116. Preserve them as informational input,
+            # never represent them as effective runtime settings.
+            if name == 'n1_16_production_bridge':
+                informational_inputs['/' + name] = {
+                    key: parameters.pop(key) for key in ('robot_type', 'robot_description')
+                    if key in parameters}
             pins['nodes']['/' + name] = dict(parameters=parameters)
             remaps['/' + name] = [
                 [perform_substitutions(context, left), perform_substitutions(context, right)]
@@ -131,6 +139,7 @@ def compile_contract(bundle, calibration, profile='smoothed', mesh=True, collisi
     description = Path(get_package_share_directory('r1_description')) / 'config/r1_lidar_extrinsics.yaml'
     record(description)
     return dict(pins=pins, remappings=remaps, topology=control_contract(pins, remaps), inputs=evidence,
+                informational_launch_inputs=informational_inputs,
                 launch_arguments=dict(scan_source='dual', command_profile=profile,
                                       use_mesh_self_filter=mesh, collision_check_enabled=collision),
                 build_source_sha=manifest['build_source_sha'], tooling_source_sha=manifest['tooling_source_sha'],

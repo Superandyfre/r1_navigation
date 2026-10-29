@@ -67,6 +67,8 @@ def main():
     parser.add_argument('--bundle',type=Path,help='Verify and run the relocated bundle instead of candidate/install')
     parser.add_argument('--suite',choices=['chain','navigator','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','navigator-owner','navigator-freeze','navigator-tick-loss','navigator-configure-churn','pending-halt','ack-delay','effective-parameters','all'],default='all')
     args=parser.parse_args()
+    if args.suite=='effective-parameters' and not args.bundle:
+        parser.error('effective-parameters admission checks require a pinned --bundle manifest')
     assert os.environ.get('ROS_DOMAIN_ID')=='192'
     assert os.environ.get('ROS_LOCALHOST_ONLY')=='1'
     assert os.environ.get('NEUPAN_ISOLATED_ROS_TEST')=='1'
@@ -98,6 +100,8 @@ def main():
     chain.CONTROLLER=install/'nav2_controller/lib/nav2_controller/controller_server'
     chain.GUARD=install/'r1_collision_guard/lib/r1_collision_guard/r1_collision_guard_node'
     base=chain.FailstopChainROS
+    if bundle:
+        base.runtime_release_manifest=manifest
     base.expected_plugin_root=str(install/'navigation_neupan_bridge/lib')
     base.expected_bt_root=str(install/'navigation_neupan_bridge/lib')
     base.worker_source_root=install/'r1_neupan_integration/lib/python3.10/site-packages/r1_neupan_integration'

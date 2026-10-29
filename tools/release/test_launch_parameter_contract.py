@@ -42,6 +42,8 @@ class InstalledControlBuilders(unittest.TestCase):
                         self.assertEqual(get('/bt_navigator', 'use_sim_time'), False)
                         self.assertEqual(get('/controller_server', 'FollowPath.shadow_mode'), False)
                         self.assertEqual(get('/n1_16_production_bridge', 'worker_recovery_enabled'), False)
+                        self.assertNotIn('robot_type', nodes['/n1_16_production_bridge']['parameters'])
+                        self.assertIn('robot_type', data['informational_launch_inputs']['/n1_16_production_bridge'])
                         self.assertEqual(get('/n1_16_production_bridge', 'scan_topic'),
                                          '/scan_neupan_mesh_shadow' if mesh else '/scan_neupan')
                         self.assertEqual(get('/r1_collision_guard', 'collision_check_enabled'), collision)

@@ -12,6 +12,8 @@ import failstop_chain_ros as chain
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'tools/release'))
 from effective_parameters import SCHEMA, sample
 from runtime_topology import check as check_topology, control_contract
+import runtime_admission
+import runtime_maps
 
 
 def flatten(values, prefix=''):
@@ -83,6 +85,28 @@ class EffectiveParameters(chain.FailstopChainROS):
         finally:
             self.node.destroy_publisher(rogue)
         self.until(ready, 3.)
+        self.assertFalse(any(v or w for _, v, w in self.outputs))
+        import hashlib
+        manifest = self.runtime_release_manifest
+        bindings = {}
+        for process in self.procs:
+            exe = (Path('/proc') / str(process.pid) / 'exe').resolve()
+            for role, key in [('controller_server', 'controller'), ('guard', 'guard')]:
+                if exe == Path(manifest['artifacts'][role]['path']).resolve():
+                    bindings[key] = dict(pid=process.pid, start_ticks=runtime_maps.identity(process.pid))
+        contract = dict(pins=pins, topology=topology, inputs={
+            str(self.report / 'params.yaml'): hashlib.sha256((self.report / 'params.yaml').read_bytes()).hexdigest()})
+        (self.report / 'admission-bindings.json').write_text(json.dumps(bindings, indent=2))
+        admission = runtime_admission.audit(self.node, manifest, bindings, contract, 5., pump=self.tick)
+        (self.report / 'admission-before-arm.json').write_text(json.dumps(admission, indent=2))
+        self.assertTrue(admission['ok'], admission['errors'])
+        self.assertFalse(admission['motion_authorized'])
+        stale = copy.deepcopy(bindings)
+        stale['controller']['start_ticks'] = str(int(stale['controller']['start_ticks']) + 1)
+        rejected = runtime_admission.audit(self.node, manifest, stale, contract, 5., pump=self.tick)
+        (self.report / 'admission-stale-process.json').write_text(json.dumps(rejected, indent=2))
+        self.assertFalse(rejected['ok'])
+        self.assertNotIn('parameters', rejected['checks'])
         self.assertFalse(any(v or w for _, v, w in self.outputs))
         super().arm_runtime()
 
