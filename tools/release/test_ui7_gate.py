@@ -39,12 +39,12 @@ class UI7Gate(unittest.TestCase):
             manifest=Path(directory)/'bad.json';manifest.write_text('{bad')
             self.invoke(manifest)
 
-    def test_gate_precedes_process_creation_in_candidate(self):
+    def test_ui7_does_not_require_release_approval(self):
         text=(ROOT/'tools/starterbutton/start_navigation_high_sampling_neupan.sh').read_text()
-        gate=text.index('neupan_release_gate "${navigation_repo}" || exit $?')
-        self.assertLess(gate,text.index('/usr/bin/python3 "${script_dir}/launch_with_parent_death.py"'))
-        self.assertLess(gate,text.index('xwayland_args='))
-        # Never ship a diagnostic-mode bypass through this entry.
+        self.assertNotIn('neupan_release_gate',text)
+        self.assertNotIn('source "${script_dir}/release_gate.sh"',text)
+        self.assertIn('single_instance_or_exit',text)
+        self.assertIn('ros2 pkg prefix',text)
         self.assertNotIn('--compatibility-only',text)
 
 if __name__=='__main__':unittest.main()
