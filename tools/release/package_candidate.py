@@ -22,6 +22,8 @@ def package(candidate, destination, repo):
         if not path.resolve().is_relative_to(candidate/'install') or digest(path)!=item['sha256']:
             raise ValueError('candidate_inventory_mismatch:'+item['path'])
     if any(p.is_symlink() for p in (candidate/'install').rglob('*')):raise ValueError('install_contains_symlinks')
+    for pattern in ['*same_uuid*','*action_stall*']:
+        if list((candidate/'install').rglob(pattern)):raise ValueError('test_adapter_in_release')
     if subprocess.check_output(['git','status','--porcelain'],cwd=repo,text=True).strip():raise ValueError('dirty_tooling_tree')
     tooling_sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=repo,text=True).strip()
     archive=subprocess.check_output(['git','archive',tooling_sha,'tools','third_party','integrations'],cwd=repo)

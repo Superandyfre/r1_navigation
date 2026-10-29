@@ -31,6 +31,7 @@ def main():
         assert hashlib.sha256(path.read_bytes()).hexdigest()==row['sha256'],path
     assert inventory['build_testing_off'] and all(inventory['build_testing_off'].values())
     assert not list(install.rglob('*same_uuid*'))
+    assert not list(install.rglob('*action_stall*'))
     repo=Path(__file__).resolve().parents[2]
     sys.path.insert(0,str(repo/'packages/navigation_neupan_bridge/test'))
     import failstop_chain_ros as chain
