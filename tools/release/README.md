@@ -104,7 +104,7 @@ and `NEUPAN_CHAIN_WORKER=actual-solver`, then run:
 ```
 
 Suites: chain, navigator, cognav, restart, startup-tf, revoke-loss,
-handshake-loss, source-recovery, owner-loss, ack-delay, or all (30 cases, sequential). Never run multiple
+handshake-loss, source-recovery, owner-loss, owner-protocol, ack-delay, or all (34 cases, sequential). Never run multiple
 suites concurrently in domain192. The runner verifies the entire saved install
 inventory, testing-off caches recorded in it, and absence of the test adapter;
 it selects candidate C++ executables/libraries, installed Python, planner/model
