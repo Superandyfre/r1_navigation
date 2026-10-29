@@ -53,6 +53,7 @@ class CogNavFailstop(chain.FailstopChainROS):
         if self.bridge is not None:
             self.bridge.stopping=True
             self.bridge_executor.remove_node(self.bridge);self.bridge_executor.shutdown()
+            chain.destroy_actions(self.bridge)
             self.bridge.destroy_node();self.bridge=None
         super().shutdown()
 
@@ -99,7 +100,9 @@ class CogNavFailstop(chain.FailstopChainROS):
         if freeze:
             self.assertTrue(any(j['state']=='RUNNING' for t,j in self.healths if t>settled))
         old_session=self.bridge.session
-        self.bridge_executor.remove_node(self.bridge);self.bridge.destroy_node()
+        self.bridge_executor.remove_node(self.bridge)
+        chain.destroy_actions(self.bridge)
+        self.bridge.destroy_node()
         self.plan=None
         self.bridge=Bridge(self.bridge_args);self.bridge_executor.add_node(self.bridge)
         self.assertNotEqual(self.bridge.session,old_session)

@@ -14,7 +14,7 @@ import time
 import unittest
 
 import rclpy
-from rclpy.action import ActionClient
+from rclpy.action import ActionClient, ActionServer
 from rclpy.node import Node
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import TransformStamped, Twist
@@ -32,6 +32,13 @@ CONTROLLER = WS/'install/nav2_controller/lib/nav2_controller/controller_server'
 GUARD = WS/'install/r1_collision_guard/lib/r1_collision_guard/r1_collision_guard_node'
 SMOOTHER = Path('/home/rpp/rpp_ws/install/nav2_velocity_smoother/lib/nav2_velocity_smoother/velocity_smoother')
 PREFIX = '/test_failstop_chain/'
+
+def destroy_actions(node):
+    # Humble Node.destroy_node() does not destroy Action waitables. Leaving
+    # them to cyclic GC can finalize DDS readers after their context is gone.
+    for waitable in list(node.waitables):
+        if isinstance(waitable,(ActionClient,ActionServer)):
+            waitable.destroy()
 
 
 @unittest.skipUnless(os.environ.get('NEUPAN_ISOLATED_ROS_TEST') == '1', 'isolated opt-in only')
@@ -228,6 +235,7 @@ class FailstopChainROS(unittest.TestCase):
         for log in self.logs:log.close()
         (self.report/'trace.json').write_text(json.dumps(dict(status=self.statuses,output=self.outputs,
             raw=self.raw,smooth=self.smooth,context=self.contexts,source=self.sources,health=self.healths,runtime_status=self.runtime_statuses,grant=self.grants,inject_ack=self.inject_acks,owner=self.owners),indent=2))
+        destroy_actions(self.node)
         self.node.destroy_node();rclpy.shutdown()
 
     def publish(self,key,payload):
