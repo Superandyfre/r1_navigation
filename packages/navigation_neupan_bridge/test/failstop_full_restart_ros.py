@@ -34,6 +34,12 @@ class FullRestart(PartialRestart):
         super().setUp()
         self.assertTrue(self.real_node, 'requires an actual N116Node')
 
+    def before_restart_arm(self):
+        pass
+
+    def after_restart_commit(self, result):
+        return False
+
     def exercise_full_restart(self):
         handle = self.goal(); result = handle.get_result_async()
         self.until(lambda:any(v>.04 for _,v,_ in self.outputs) or result.done(),50)
@@ -83,6 +89,7 @@ class FullRestart(PartialRestart):
         prearm = [row for row in self.outputs if row[0]>marker+.25]
         self.assertGreater(len(prearm), 10)
         self.assertTrue(all(v==0. and w==0. for _,v,w in prearm))
+        self.before_restart_arm()
         # arm is a separate explicit operator action; a new Action is still
         # required. Do not send a rejected goal first: that may itself latch.
         self.arm_runtime()
@@ -102,8 +109,11 @@ class FullRestart(PartialRestart):
                             for t,j in self.sources))
         # Synthetic pose reaches the target: verify real FollowPath success,
         # rather than claiming recovery from a single nonzero sample.
-        self.position = 4.
-        self.assertEqual(self.future(fresh_result,10).status, GoalStatus.STATUS_SUCCEEDED)
+        replay_aborted = self.after_restart_commit(fresh_result)
+        if not replay_aborted:
+            self.position = 4.
+        expected = GoalStatus.STATUS_ABORTED if replay_aborted else GoalStatus.STATUS_SUCCEEDED
+        self.assertEqual(self.future(fresh_result,10).status, expected)
         terminal = time.monotonic()
         self.until(lambda:time.monotonic()>terminal+.5)
         zeros = [r for r in self.outputs if r[0]>terminal+.1]
@@ -115,7 +125,8 @@ class FullRestart(PartialRestart):
         (self.report/'full-restart-result.json').write_text(json.dumps(dict(
             ledger_mode=self._testMethodName, ledger_path=str(self.ledger), ledger_unchanged=True,
             old_pids=old_pids, new_pids=[p.pid for p in self.procs], old_context=old_context,
-            new_context=new_context, old_action='ABORTED', new_action='SUCCEEDED',
+            new_context=new_context, old_action='ABORTED',
+            new_action='ABORTED' if replay_aborted else 'SUCCEEDED',
             old_arm_denied=True, prearm_zero_samples=len(prearm), armed_without_goal_zero=True,
             old_source_replayed_before_arm=True, stale_grant_context_replay_tested=False,
             physical_motion=False, worker=self.worker_mode), indent=2))
