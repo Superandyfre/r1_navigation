@@ -1,151 +1,240 @@
-# R1 导航改动与 CogNav 接入交接（2026-10-29）
+# R1 导航系统现状与 CogNav 接入技术说明
 
-本文供 CogNav 负责人和导航负责人共同使用。覆盖本轮 Worker fail-stop、NeuPAN/ROS2 连接、Nav2 生命周期、UI7 入口与环境版本管理。实际运动验收尚未完成；“源码已提交”“程序已构建”“UI7 已选中”和“实机导航通过”必须分别记录。
+日期：2026-10-29
 
-## 1. 当前结论和协作边界
+适用对象：CogNav 决策与 ROS 2 接口维护人员、导航系统维护人员
 
-- 统一交付分支为 `codex/navigation-environment-snapshots`。本轮将 `codex/neupan-failstop-a-plus` 合入该分支，保留原有环境快照工具及已提交的 ECOS 诊断工具。
-- UI7 应使用从统一分支的固定提交构建的独立发布包。发布清单记录源码 SHA；不能仅凭当前 checkout 分支名判断运行版本。具体新发布路径及 SHA 见同目录 `UI7_UNIFIED_VERSION_20261029.json`。
-- 合并前 UI7 选中 `20261029-a-plus-09`，构建源码 `0e4b48e56909bfad23cf606b631278f498ef69c5`，工具源码 `2e96accbe524b2908ba6100c28c6ff49fe1d0156`。原主分支 `3385462` 仅有环境管理增量，未合入 A+，此次统一解决这一分叉。
-- **生产 CogNav 不由本轮修改或部署。** `/home/rpp/cognav_ws/objnav_live_round3/robot_live` 由 CogNav 同学维护。仓库 `integrations/cognav/` 是历史隔离候选和参考，不是生产替换包；发布工具明确排除 CogNav。
-- 当前生产 CogNav 尚不能按“已经兼容新链”处理：现有 bridge 使用 `/follow_path`，但只发 Action 不足以满足新增的执行归属续租协议。接入工作由 CogNav 负责人实施，双方联调后确认。
-- 当前仍有启动通信/健康间歇问题和现场定位问题待关闭。不能据此宣布此前“卡住、给新目标仍不动”的现场故障已彻底解决。
+适用版本：`codex/navigation-environment-snapshots` 分支；UI7 发布包 `20261029-unified-01`
 
-**UI7/UI8 区别（用户已确认）：** UI7 已配置为统一分支构建的发布包；22:47 观测到的 `/home/rpp/nav_restore_20261016` 旧导航进程由 **UI8** 启动，与 UI7 是不同入口。本轮没有停止、修改或接管 UI8；旧进程的存在不能说明 UI7 在运行旧版。此次只切换 UI7 注册、重载操作台，未点击 UI7 启动新导航。UI7/UI8 共用机器人资源，今后启动前仍应确认不会同时争用同一运动链。
+## 1. 系统状态与适用范围
 
-## 2. 本轮导航端实现了什么
+当前导航端已实现 NeuPAN 求解进程故障隔离、执行身份绑定、上游任务有效性确认、控制授权以及故障/超时停车机制，并形成可构建的独立发布包。CogNav 生产程序尚未完成与这些机制的适配，完整 CogNav—导航—底盘链路尚未联调通过。
 
-| 层次 | 已实现的主要变化 | 对上游的影响 |
+**新版尚未完成实机运动验证，实际导航效果未知。** 目前无法确认真实环境中的路径跟随、避障、持续运行稳定性、故障后停车时间与距离，也不能确认此前“导航停滞且重新发送目标无效”的现场问题已经解决。代码实现、构建成功及隔离环境测试结果，不构成上述实机效果的证明。
+
+| 项目 | 当前状态 | 对接含义 |
 | --- | --- | --- |
-| Worker/IPC | 保留 spawn 子求解进程隔离；首次致命故障锁存；独立健康发布；退出、协议异常、超时传播；停止使用健康心跳冒充求解结果新鲜度 | Worker 仍活着不代表可以运动；FATAL 后重发目标不能恢复 |
-| 输入/结果绑定 | 原子 execution context 绑定 boot、真实 Action UUID、path/goal version；Source v2 保存扫描、派发和求解等时间；拒绝过期、重复和错误身份 | 无身份的 Path/Goal、旧结果、旧 ledger 不能重建运动权限 |
-| ControllerServer | 将实际 FollowPath goal handle 作为执行身份；接入 begin/end、取消、抢占、故障和 costmap 等待中断；执行线程失活也停止授权 | Action accepted 与最终 SUCCEEDED/CANCELED/ABORTED 是不同阶段；超时不能假定请求没被接受 |
-| NeuPANController/runtime | 显式 run arm、owner 确认/续租、Grant/ACK/COMMIT、路由零速屏障、独立时限、周期只读状态；FATAL 不可由新目标清除 | 上游必须证明当前任务仍有效，不能只维持无条件心跳 |
-| 最终 Guard | 保留独立授权、健康/Source/命令/里程计/定位检查、速度限值和故障停车；HW1 去掉额外障碍 collision geometry 检查 | 节点名仍是 `r1_collision_guard`，不能因为名字含 collision 就删除整个节点 |
-| Nav2 BT | FollowPath owner 随实际 RUNNING tick 续租；halt/取消/终态停租；普通受限重试与不可重试故障区分 | FATAL 不进入无限重试或不断重发同目标；直接用 CogNav FollowPath 时也必须履行相同生命周期义务 |
-| 启动与版本 | UI7 单实例、父进程退出清理、包来源检查；主分支显式加载固定 ROS/underlay；源码/环境采集、恢复和哈希清单 | 不允许从错误 overlay 加载旧 Controller、Guard 或 Python 后声称使用新分支 |
-| 诊断 | 保存首故障、协议身份和测试证据；已提交 ECOS hook 记录原始状态和可重放失败输入 | 诊断结果不改变求解结果、授权或重试策略；诊断日志需要按运行目录管理 |
+| 导航端代码与发布包 | 已实现并构建；发布包使用固定源码版本 | CogNav 应按本文协议适配，不应混用旧控制组件 |
+| UI7 | 已配置为新版发布包入口；本次未通过 UI7 启动运动验证 | 入口配置完成不代表新版已通过现场验收 |
+| UI8 | 旧版导航独立入口 | 不属于本次新版联调对象；联调时需避免两套导航争用底盘 |
+| CogNav 生产适配 | 尚未完成 | 现有 `/follow_path` 调用不能直接视为兼容新版 |
+| 隔离验证 | 有组件、协议和局部 ROS 2 链路验证证据 | 仅支持对应机制在所测条件下的行为结论 |
+| 实机验证 | 未完成 | 导航质量、可靠性和物理停车效果均待验证 |
 
-此外修复了首次 TF 未就绪后 Worker 调度未重新唤醒的具体问题。此修复不等于已确定所有现场停滞和 DDS 超时的共同根因。自动 Worker 替换/自动故障恢复（B 方案）未开放。
+导航系统仍存在启动通信响应超时、Worker 健康状态间歇超时等未关闭问题；现场定位链、完整启动配置及停止阶段异常也需复核。CogNav 接入前应将这些问题作为导航端已知限制，而非通过上层重发目标或放宽时限规避。
 
-## 3. 运动链和职责
+## 2. 系统结构及功能边界
 
 ```text
-CogNav driver（认知决策、参考路径、父任务租约）
-  -> CogNav ROS bridge（接受句柄、取消、状态观察、owner 续租）
-  -> /follow_path（Nav2 ControllerServer）
-  -> NeuPANController <-> Worker/spawn NeuPAN solver
-  -> 原始速度 -> velocity_smoother（所选 profile 启用时）
-  -> 最终 Guard（A+ 授权与故障/超时停车）
-  -> /cmd_vel -> 底盘驱动
+CogNav 决策程序
+  │ 参考路径、父任务有效性
+  ▼
+CogNav ROS bridge
+  │ FollowPath Action、执行归属确认、取消及状态观察
+  ▼
+Nav2 ControllerServer / NeuPANController
+  │ 带执行身份的路径上下文
+  ▼
+Worker 管理进程 ── IPC ── NeuPAN 求解子进程
+  │ 当前任务对应的求解结果
+  ▼
+NeuPANController → 速度平滑器（启用时）→ 最终 Guard → /cmd_vel → 底盘驱动
 ```
 
-常见平滑模式的内部速度话题为 `/neupan_nav2_raw_cmd_vel`、`/neupan_nav2_smoothed_cmd_vel`；direct profile 路径不同。必须以实际 launch/profile/remap 为准。CogNav 不发布上述速度，也不发布 `/cmd_vel`。RViz/Nav2 BT 与 CogNav 不应同时争用导航任务；双方需约定独占任务来源和切换时的取消/清理流程。
+CogNav 负责决策、参考路径及该任务是否仍应执行；导航端负责局部求解、速度生成、授权检查和故障处理。CogNav 通过 Action 提交路径，不直接驱动底盘，也不接管导航内部的结果与授权话题。
 
-NeuPAN 的扫描、双雷达融合、mesh 自过滤、动态机器人几何和避障仍保留。移除的是 HW1 最后一级重复障碍检查，未移除 NeuPAN 自身避障，也未证明任何场景绝对无碰撞风险。`collision_check_enabled` 在 HW1 固定为 false，禁止拿旧配置重新打开。
+| 组件 | 当前职责及主要行为 |
+| --- | --- |
+| Worker 管理进程 | 通过独立子进程运行求解器；发布健康状态；求解失败、进程异常及协议错误按故障语义传播，首次致命故障保留 |
+| NeuPAN 求解器 | 根据路径、扫描和机器人几何生成局部轨迹与速度；现有扫描、自过滤及避障功能保留 |
+| ControllerServer | 以实际 FollowPath 目标句柄作为执行身份，管理开始、取消、抢占、完成和失败 |
+| NeuPANController | 检查求解结果身份与时间、上游任务有效性及 Guard 握手；周期发布执行状态 |
+| 最终 Guard | 独立检查授权、Worker/结果状态、命令时效、里程计、定位及速度限值，并在条件不满足时输出零速度 |
+| Nav2 BT | 通过 Nav2 导航入口调用时管理 FollowPath、执行归属续租及受限重试；CogNav 直接调用 FollowPath 时须自行实现对应义务 |
 
-## 4. CogNav 对外接口
+HW1 已移除最终 Guard 中额外的障碍几何检查，`collision_check_enabled=false`。**Guard 节点本身仍是速度链的必要组成部分**，其授权及故障/超时处理保留。节点名称仍为 `r1_collision_guard`。NeuPAN 自身避障、双雷达输入和机器人 mesh 自过滤不因此移除；真实避障效果仍须实机验证。
 
-以下是当前 A+ 配置/协议，联调前还要核对有效参数。所有 JSON 话题均需严格校验 schema、字段类型、有限数值、boot/UUID、序列及时间；缺失或旧 schema 不能当作健康。
+## 3. 与 CogNav 有关的行为变化
 
-| 接口 | 类型 | 发布/调用方与用途 |
+### 3.1 Action 接受与运动许可分离
+
+FollowPath 返回 accepted，仅表示导航端接受了该目标请求。允许非零速度还需要满足显式启用、上游执行归属确认、当前求解结果有效、定位/里程计有效以及 Guard 授权等条件。
+
+因此，“Action 已接受但机器人不动”不能直接判断为求解器卡死。需联合检查执行状态、首故障、owner 确认、求解结果及 Guard 停止原因。
+
+### 3.2 使用真实执行身份关联路径、结果与授权
+
+导航端将实际 Action UUID、控制组件启动身份以及路径/目标版本关联。旧目标的结果、旧进程的消息或重复消息不能作为当前目标的运动依据。
+
+Worker 健康心跳和求解结果新鲜度独立判断：管理进程仍存活，不代表求解子进程仍正常产出，也不代表旧结果可以继续使用。结果重复发布不能延长其有效时间。
+
+### 3.3 致命故障采用锁存语义
+
+FATAL 表示当前运行周期进入不可自动恢复的故障状态。新目标、重复路径、bridge 重建或健康消息恢复，均不能清除该状态。自动 Worker 替换及自动故障恢复未启用。
+
+普通取消、正常完成和允许重试的失败，应与 FATAL 区分。发生 FATAL 后，CogNav 应停止提交新计划，保留原始原因，由导航负责人按受控恢复流程处理；不能将反复发送目标作为恢复策略。
+
+### 3.4 上游任务必须持续有效
+
+CogNav bridge 需要向导航端确认：当前 Action 确实属于自己，父决策任务仍有效且仍要求执行。该确认称为 **owner 续租**。
+
+仅保持 bridge 进程或定时器存活不足以续租。父决策程序失联、输入过期、取消或任务结束后必须停止续租，避免上游已停止而底层仍执行旧路径。
+
+## 4. ROS 2 接口契约
+
+以下为当前发布配置中的名称。若联调使用 namespace 或 remap，须由双方确认完整映射，不能仅依据源码默认值。
+
+### 4.1 路径执行接口
+
+| 项目 | 定义 |
+| --- | --- |
+| Action | `/follow_path` |
+| 类型 | `nav2_msgs/action/FollowPath` |
+| `controller_id` | `FollowPath` |
+| `goal_checker_id` | `general_goal_checker` |
+| 导航参考坐标系 | 当前配置为 `map`；以实际有效参数为准 |
+| 客户端责任 | 校验路径坐标、有限数值、有效四元数和所需 TF；维护请求、句柄、取消及终态 |
+
+CogNav 应区分发送中、已接受、执行中、取消中和终态。发送响应超时不证明目标被拒绝，取消请求已发送也不证明取消完成。旧请求状态未解决前，不应直接创建重复执行。
+
+### 4.2 状态观察接口
+
+下列话题均为 `std_msgs/msg/String`，内容为 JSON。消费者须按 `schema` 选择消息，并校验字段、时间、序列和身份；消息缺失、过期或无法解析不能视为正常。
+
+| 话题 | schema | 用途 |
 | --- | --- | --- |
-| `/follow_path` | `nav2_msgs/action/FollowPath` | CogNav bridge 发路径；controller_id=`FollowPath`，goal_checker_id=`general_goal_checker` |
-| `/neupan_controller_status` | `std_msgs/msg/String`，`r1_neupan_execution_status_v1` | Controller 发，只读；约 50 ms 周期，Action 结束后仍发布 |
-| `/neupan_worker_health` | `std_msgs/msg/String`，`r1_neupan_worker_health_v1` | Worker 发；观察 boot/generation、状态及首故障，不代表结果新鲜 |
-| `/r1_collision_guard/status` | `std_msgs/msg/String`，`r1_collision_guard_status_v1` | Guard 发；观察授权/停止/故障原因，不能只看节点在线 |
-| `/r1_localization_health` | `std_msgs/msg/String`，`r1_localization_health_v1` | 定位健康，须与实际 TF/odom 一起确认 |
-| `/neupan_execution_owner` | `std_msgs/msg/String`，`r1_neupan_execution_owner_v1` | CogNav bridge 仅为自己已接受、仍执行的 Action 发确认/续租 |
-| `/neupan_controller/can_retry` | `std_srvs/srv/Trigger` | 查询当下是否允许重试，不是 arm，不保证之后永远可重试 |
-| `/neupan_controller/revoke_uncertain_execution` | `std_srvs/srv/Trigger` | 执行状态不确定时的只撤销通道；run-wide 锁存，可影响当前其他目标，不能当普通 cancel 用 |
-| `/neupan_controller/arm` | `std_srvs/srv/Trigger` | 操作员/导航端显式启用 run；需要 idle、停止证据、有效状态且无 FATAL；CogNav 不自动调用 |
+| `/neupan_controller_status` | `r1_neupan_execution_status_v1` | 判断插件/执行状态、执行身份及故障锁存；约 50 ms 周期，Action 结束后继续发布 |
+| `/neupan_worker_health` | `r1_neupan_worker_health_v1` | 判断 Worker 启动身份、代次、状态及首故障；不能替代结果有效性判断 |
+| `/r1_collision_guard/status` | `r1_collision_guard_status_v1` | 判断最终授权与停止/故障原因 |
+| `/r1_localization_health` | `r1_localization_health_v1` | 判断定位健康，配合 TF、里程计及输入时效检查 |
 
-内部 `/neupan_execution_context`（context v1）、`/neupan_planner_result`（Source v2）、`/neupan_motion_grant`（grant v1）、`/neupan_path` 和 `/neupan_goal` 由导航端管理，CogNav 可观察但不得发布、伪造、重放或接管。后两者不是 CogNav 绕开 Action 的入口。
+Controller 状态关键字段为：
 
-Controller 周期状态的关键字段：`authority_boot_id`、`controller_boot_id`、`sequence`、`monotonic`、`plugin_active`、`execution_active`、`fault_latched`、`fault_reason`、`navigation_attempt_id`。同一话题可能含其他诊断消息，必须按 schema 筛选。首次 fault_reason 应保留给上层显示，不能被后续泛化超时覆盖。
+| 字段 | 含义 |
+| --- | --- |
+| `authority_boot_id` | 当前 ControllerServer 执行权威的启动身份 |
+| `controller_boot_id` | 当前控制插件的启动身份 |
+| `navigation_attempt_id` | 当前实际 FollowPath UUID |
+| `sequence`、`monotonic` | 消息序列与同机单调时钟时间 |
+| `plugin_active`、`execution_active` | 插件是否激活、是否存在活动执行 |
+| `fault_latched`、`fault_reason` | 是否锁存故障及其原因 |
 
-### 4.1 owner 协议是接入必需项
+状态话题只提供观察信息，不授予运动权限。同一话题可能含其他 schema 的诊断消息；不能将任意消息到达都当作目标状态刷新。组件启动身份或 Worker 代次意外变化时，应中止旧执行关联，重新确认系统状态。
 
-获得 **accepted goal handle 后**，从实际 `goal_id.uuid` 的 16 字节编码出 32 位小写十六进制字符串。不能用 CogNav plan_seq、自造 UUID 或无补零的展示字符串代替。再等待 Controller 新鲜状态/context 与该 UUID 匹配，取得两个当前 boot，发布：
+### 4.3 执行归属确认：owner 协议
+
+发布话题：`/neupan_execution_owner`，类型：`std_msgs/msg/String`。
+
+必须先获得 accepted goal handle，再从 `goal_id.uuid` 的 16 字节得到**32 位小写十六进制字符串**，作为 `navigation_attempt_id`。不能使用 CogNav 计划编号或自行生成的替代 UUID。编码示意：`bytes(goal_handle.goal_id.uuid).hex()`。
+
+bridge 从新鲜 Controller 状态取得与该 UUID 对应的两个 boot ID 后，发送：
 
 ```json
 {
   "schema": "r1_neupan_execution_owner_v1",
-  "authority_boot_id": "实际当前 ControllerServer boot",
-  "controller_boot_id": "实际当前插件 boot",
+  "authority_boot_id": "当前 ControllerServer 的启动身份",
+  "controller_boot_id": "当前控制插件的启动身份",
   "navigation_attempt_id": "00112233445566778899aabbccddeeff00",
-  "owner_id": "本次 bridge 实例的唯一 ID",
+  "owner_id": "当前 bridge 实例的唯一标识",
   "sequence": 1,
   "monotonic": 123456.789
 }
 ```
 
-示例值不能照抄到运行系统。当前 owner 实现：begin 后 1 秒内需首个确认，之后来源时间年龄不超过 0.5 秒；参考候选每 0.1 秒尝试续租。序列为正整数并严格递增，时间也要递增；重发相同包不会延长租约，同序列冲突或 owner 身份变化会导致故障。
+以上为结构示例，运行值必须来自实际目标和当前进程。
 
-这使用**同一台机器人操作系统的 monotonic/steady clock**，不是 ROS time、墙上时间或远端笔记本时钟。若 CogNav 算法跑在其他主机，应由机器人本机 bridge 在核实父任务新鲜度后生成 owner；不能直接复制远端 monotonic。当前协议不提供跨主机时钟同步或网络身份认证。
-
-每次续租必须同时满足：句柄已接受且任务仍 executing、未取消/退出、Worker/Controller/Guard 状态当前且匹配、父 driver 租约有效、定位及所需机器人输入新鲜。**不能把无条件 owner 定时器放在独立线程里一直续租。** driver 卡死、输入停止、bridge 退出、取消或终态时必须停租；只剩健康发布线程存活不能代表上层任务仍有效。
-
-### 4.2 Goal、取消和故障处理顺序
-
-1. 导航端完成启动、来源和定位核对，现场人员按约定显式 arm；CogNav 只读确认准入条件。
-2. CogNav 验证路径 frame、TF、有限坐标、有效四元数、时间和父任务身份；发送 FollowPath。当前导航 frame 配置为 `map`，实际以有效参数为准。
-3. 分开管理发送中、accepted、executing、canceling、terminal。发送响应超时不是拒绝证据；保留旧请求身份，不直接再发第二份目标。
-4. accepted 后绑定真实 UUID，完成首个 owner 并在有条件的执行循环中续租。新 Action 必须重新绑定；Controller 内部同 UUID 路径版本变化不允许上游自造身份。
-5. 正常取消先停租，再请求精确 goal handle 的 cancel 并等待终态；若返回/执行归属不确定，使用双方约定的撤销处置，而非假装旧目标已经消失。撤销是整轮锁存，不是温和暂停。
-6. 收到 FATAL、boot/generation 意外变化、状态过期或执行不确定时：停租、阻止新计划、保留首故障和旧 UUID，取消未解决目标；不能靠重建 bridge、改 session 或重复目标解除导航端锁存。
-7. 健康的普通终态与 FATAL 区分处理。普通重试受 `can_retry` 和上层有限策略约束；FATAL 按导航端受控整套恢复流程处理，再显式 arm 和创建新 Action。禁止自动清 ledger、只重启 Worker 或改 fault 字段“恢复”。
-
-参考协议源码：`packages/navigation_neupan_bridge/EXECUTION_OWNERSHIP.md`、`execution_owner_lease.hpp` 和 `packages/r1_neupan_runtime/`。历史候选 `integrations/cognav/robot_live/cognav_bridge.py` / `neupan_failstop.py` 可供 CogNav 同学比较实现，但必须先比较生产 baseline 漂移，不能整目录覆盖生产代码。完整 CogNav driver 联调未验证。
-
-## 5. 哪些内容 CogNav 同学可以改，哪些不能自行改
-
-| 范围 | 负责人及边界 |
+| 约束 | 当前实现 |
 | --- | --- |
-| CogNav 决策、父 driver lease、spool、ROS bridge 的 Action/owner/状态适配 | CogNav 负责人维护；接入本协议并提交自己的变更，不由导航端覆盖 |
-| Worker、IPC、Source/health/context、runtime 协议与锁存 | 导航端负责；CogNav 不改字段语义、刷新旧时间或屏蔽 FATAL |
-| Nav2 ControllerServer、NeuPANController、BT owner/取消逻辑 | 导航端负责；禁止换回旧 server/plugin 来绕过 owner，禁止将无限重试当恢复 |
-| Guard、速度链/remap、唯一最终发布者、授权握手 | 导航端负责；禁止删 Guard、旁路到 `/cmd_vel`、伪造 Grant/ACK/COMMIT 或健康 |
-| UI7 配置、启动脚本、ROS overlay、固定 release、解释器和 solver 环境 | 导航端统一发布；CogNav 不在原地改 release/install、不改 `.rpprc` 或共享 venv 去试兼容 |
-| 地图、雷达外参、机器人模型、mesh、自过滤、底盘/定位参数、限速和时限 | 需双方提出问题后由对应负责人联合确认；不得为“先动起来”临时关闭定位/新鲜度检查或放宽超时 |
-| 现场启动、arm、急停释放、底盘运动和验收 | 现场操作员与导航负责人协调；这份文档不授权自动执行 |
+| 首次确认期限 | 执行 begin 后 1 秒内；不是客户端收到响应后重新计时 |
+| 持续确认时效 | 确认后来源时间年龄不得超过 0.5 秒 |
+| 参考发送周期 | 0.1 秒；每次发送前均重新检查准入条件 |
+| 序列 | 正整数，严格递增；相同消息重放不能续租 |
+| 时间 | 有限数值且递增；不能用接收时间替换原时间以延长有效期 |
+| 身份 | 必须匹配当前 boot 和实际 Action；同一执行中 owner 身份不可随意更换 |
+| 协议错误 | 同序列内容冲突、owner 身份冲突等可能触发故障；晚到确认不能清除已锁存故障 |
 
-“把门禁撤掉”仅指用户要求移除 UI7 的**发布批准启动检查**，已完成；不代表移除运行时 arm、owner、Guard、故障/超时停车。快照/发布清单里的 false 验收状态不得改成 true 以消除提示。旧配置里部分 collision 注释属于历史语境，当前 HW1 行为以 collision=false 代码路径为准。
+此协议依赖**同一操作系统的 monotonic/steady clock**。不能使用 ROS time、UTC 时间或另一台主机的 monotonic 数值。若 CogNav 决策在远端运行，应由机器人本机 bridge 在核实远端父任务有效性后生成 owner。
 
-## 6. 验证结果和仍未完成的事项
+每次续租至少检查：目标已接受且仍执行、没有取消/退出请求、组件状态当前且身份匹配、父决策程序租约有效、定位及所需观测输入有效。不能通过无条件独立心跳维持续租，否则父程序卡死时可能错误保留执行权限。
 
-已完成过 Worker/协议单测、隔离 ROS Action 链和真实 spawn 求解器的定向验证，覆盖 FATAL、失源、取消/抢占、owner 失联、重放、握手丢失、部分/完整重启、BT tick 停止等局部场景。最后一次去额外碰撞层的整套安装链为 3/3；Guard 授权定向回归 15/15。它们使用合成输入、隔离 ROS 域和无底盘驱动配置，不能替代现场验收。
+### 4.4 管理服务
 
-历史无额外观测工具的完整 43 场景为 40/43，3 项 Navigator configure 响应超时仍保留 OPEN；另有启动 `worker_health_stale` 等间歇故障。后续定向通过没有把这些历史失败关闭。新统一版本的构建/静态验证记录另见版本记录，不能继承旧版本的“全量通过”结论。
+| 服务 | 类型 | 语义与调用边界 |
+| --- | --- | --- |
+| `/neupan_controller/arm` | `std_srvs/srv/Trigger` | 显式启用当前运行周期；要求空闲、停止证据及有效状态且无致命故障。由现场/导航端管理，CogNav 不自动调用 |
+| `/neupan_controller/can_retry` | `std_srvs/srv/Trigger` | 只查询当前重试许可；不是启用命令，也不是永久许可 |
+| `/neupan_controller/revoke_uncertain_execution` | `std_srvs/srv/Trigger` | 执行归属不确定时撤销当前运行周期。具有 run-wide 锁存效应，可能终止更新的目标；不能替代日常 cancel |
 
-曾在急停条件下做过无目标、未 arm、最终输出隔离的启动观察：491 个输出样本全零，观察时真实 `/cmd_vel` 无发布者。但仍待 `map -> base` 定位链就绪，存在 costmap inflation 提示、停止阶段 planner 异常及不完整的图发现；这些都没有被称为已解决。
+正常取消应针对精确 goal handle 请求取消，并跟踪最终结果。取消开始后停止 owner 续租；若取消与续租超时发生竞争，系统可能进入故障终态，不能预设一定返回 CANCELED。执行状态无法确认时，按双方约定采取撤销和停止接入流程，不能假设旧目标已消失。
 
-尚待双方协调：
+## 5. CogNav 侧需完成的适配
 
-1. CogNav 生产 bridge 的 owner/状态/父租约适配及完整 driver 联调。
-2. 启动 DDS 响应/Worker 健康间歇问题定位与关闭；不能通过放宽时限掩盖。
-3. 全启动有效参数、包/库/Python 来源和唯一速度发布者核对；UI7 入口切换不证明运行图正确。
-4. 现场定位、正常导航、障碍处理、取消/抢占、故障后再发目标、停车时间/距离和驱动 watchdog 验收。
-5. 完整隔离恢复/回滚演练；保留的旧包是恢复材料，不是已验收可靠版本。
+当前生产入口位于 `/home/rpp/cognav_ws/objnav_live_round3/robot_live`，由 CogNav 负责人维护。需要完成以下功能后，才能将其视为新版导航的兼容客户端：
 
-先在无底盘输出的隔离环境验证：正常 accepted→owner→完成；driver/输入/bridge 停止时停租；Worker FATAL 和旧目标重发不恢复；取消/抢占准确终结；响应超时不重复发目标；新旧 boot/UUID 不混用。场景分别保存 UUID、boot、首故障、Action 终态和最终速度证据。进入真实机器人测试由现场另行安排。
+1. **状态准入**：订阅并解析 Worker、Controller、Guard 与定位状态；缺失、过期、故障或身份不一致时禁止提交运动计划，保留首次有效故障原因。
+2. **Action 身份关联**：取得 accepted handle 后绑定实际 UUID，与 Controller 当前状态匹配；新目标重新建立关联，取消或结束后及时退役旧关联。
+3. **有条件 owner 续租**：实现第 4.3 节协议，并将续租条件绑定到父决策任务及机器人输入。父程序、观测或任务失效时停止续租。
+4. **取消与不确定状态处理**：覆盖未收到发送响应、取消等待、bridge 退出等情况；不得在旧执行未解决时盲目提交下一份路径。
+5. **故障与重试区分**：FATAL 后停止新计划；普通失败采用有限重试并查询当前许可。重启 CogNav 本身不能清除底层故障。
+6. **诊断输出**：向上层记录计划编号、实际 Action UUID、组件启动身份、Action 状态、首故障和最后状态时间，便于区分决策未提交、授权未成立和底层执行失败。
 
-## 7. 仓库、快照、日志怎么取
+仓库 `integrations/cognav/` 提供隔离参考实现，包含状态观察、owner 续租与取消处理，但**不是可直接覆盖生产目录的发布包**。应由 CogNav 负责人审查与现有程序的差异后选择性适配；完整生产 driver 的兼容性尚未验证。
 
-- GitHub：`https://github.com/Superandyfre/r1_navigation.git`，统一分支 `codex/navigation-environment-snapshots`。拉取后以交接记录中的具体 SHA 核对；分支可能继续前进。
-- 局域网仓库：`ssh://pinggu@192.168.31.36/home/pinggu/r1_navigation.git`。这只是 Git 仓库，不是机器人导航运行目录。
-- 机器人主源码：`/home/rpp/r1_navigation`；旧 A+ 工作树：`/home/rpp/neupan_failstop_ws/src/r1_navigation`，作为历史来源，不再当作另一套独立主版本。
-- 已有基线 tag `nav-baseline-20261029-01` 指向合并前 `3385462`，保持不移动；不能用它声称已包含本次统一改动。
-- 大文件基线：`/home/rpp/navigation_snapshots/20261029-baseline-01`（约 1.7 GB）。Git 只保存索引/哈希；大文件未上传 GitHub 或 192.168.31.36。恢复说明见 `docs/restore.md`。
-- 基线状态为 captured=true、built/restored/navigation_validated/offline_complete=false。采集有 16 个节点参数查询失败/超时、513 个原目标缺失的符号链接；无正常导航 rosbag、无完整离线系统安装闭包。此次代码合并不追溯修改该基线。
-- 历史证据目录：`/home/rpp/neupan_failstop_ws/reports/neupan_failstop_20261027`。旧大测试场景已经归档到 `final-cleanup-20261029/historical-test-artifacts.tar.gz`，不要将已清理路径不存在误判为当时测试不存在，也不要声称已重新运行旧包。
-- ECOS 诊断目录由启动时 `ECOS diagnostics:` 输出标明，可用 `RPP_ECOS_DIAGNOSTICS_DIR` 指定。每 PID 轮转有上限，但历次运行目录总量不自动限额；先保留故障输入和版本身份，再由导航负责人清理。
-- 主工作树中另有未提交的 planner/solver recovery 实验修改。本次统一构建仅采用已提交源码，不擅自提交或部署这些修改；`git diff` 非空不能直接当作已交付内容。
+## 6. 修改权限与协作边界
 
-## 8. 联调前双方交换的信息
+| 范围 | 维护责任与限制 |
+| --- | --- |
+| CogNav 决策、父任务租约、spool、ROS bridge | CogNav 侧维护，可按接口契约修改；接口语义变更须双方确认 |
+| Worker/IPC、求解结果身份与时间、故障锁存 | 导航侧维护；CogNav 不屏蔽故障、不修改结果时间、不清除运行状态以恢复运动 |
+| ControllerServer、NeuPANController、Nav2 BT、owner/授权协议 | 导航侧维护；不得换回旧组件绕过新版检查，不得用无限重试掩盖失败 |
+| Guard 与速度链 | 导航侧维护；不得删除 Guard、绕过平滑/授权链或新增 `/cmd_vel` 发布者 |
+| UI7、发布目录、ROS 环境加载、Python/求解器依赖 | 导航侧统一维护；不得原地修改 release/install、全局环境或共享虚拟环境以试配 |
+| 地图、定位、TF、标定、模型、mesh 自过滤、限速和超时 | 由对应负责人确认后调整；不得为使机器人运动而临时关闭检查或放宽时限 |
+| arm、故障恢复、底盘运动及实机验收 | 现场人员与导航负责人协调；CogNav 不自动解除故障或执行整套重启 |
 
-CogNav 同学提供：生产 bridge/driver commit 与工作区差异、实际启动命令/解释器、运行主机、父租约和 spool schema/时限、路径 frame/TF 来源、取消/超时/重试策略、当前使用的 action 和话题 remap。
+CogNav 不应发布导航内部的 `/neupan_execution_context`、`/neupan_planner_result`、`/neupan_motion_grant`、`/neupan_path` 或 `/neupan_goal`。这些接口可以只读观测，不能作为绕开 Action 的控制入口。
 
-导航端提供：统一源码 SHA、UI7 固定发布目录和 manifest/hash、实际 ROS 域/profile/参数、节点/Action/topic 图、包/动态库/Python 来源、首故障与诊断示例、未关闭问题列表和现场安排。
+当前平滑模式内部速度话题为 `/neupan_nav2_raw_cmd_vel`、`/neupan_nav2_smoothed_cmd_vel`，最终输出为 `/cmd_vel`；其他 profile 以实际映射为准。CogNav 不发布这些速度。RViz/Nav2 BT、CogNav 和 UI8 旧导航之间必须明确任务独占关系，避免同时控制同一底盘。
 
-双方共同确认：同一时刻谁拥有导航任务、accepted UUID 如何绑定、何时停租/取消/撤销、FATAL 如何展示及恢复、哪些测试只隔离运行、何时允许现场验收。CogNav 侧的接入提交与导航版本需成对记录，不能只说“用了最新分支”。
+UI7 当前不以发布验收批准作为启动前置条件，但运行时 arm、owner、授权握手和故障停车仍有效。**允许启动不代表验收通过，也不代表允许旁路运行时检查。**
+
+## 7. 联调与实机验证要求
+
+已有验证支持部分协议和故障传播行为，但尚未建立完整现场结论。需区分以下证据：
+
+- Action 进入终态：证明软件任务结束。
+- 最终速度输出为零：证明所观测软件输出归零。
+- 实际底盘停止：须通过真实里程计、驱动和现场测量确认；前两项不能代替该结论。
+
+建议先进行不接底盘输出的双方联调，至少确认正常提交与完成、父程序失联、输入过期、取消、目标抢占、Worker FATAL、旧目标重发、响应超时及 bridge 重启。每个场景独立记录执行身份、首故障、Action 结果和速度输出，避免仅凭“节点正常”或“有心跳”判断通过。
+
+完成软件联调并处理导航端已知问题后，再由现场安排实机测试：
+
+| 待验证项 | 需要确认的实际结果 |
+| --- | --- |
+| 启动和定位 | 正确加载新版组件，定位与 TF 稳定，无冲突的速度发布者 |
+| 正常导航 | 可接受路径并稳定执行，目标到达、跟踪误差及持续运行表现满足现场要求 |
+| 避障 | 真实障碍、机器人几何和自过滤条件下的行为符合预期 |
+| 取消/抢占 | 旧任务确实停止，新任务不会继承错误权限 |
+| 故障处理 | 求解失效、失源、进程失联等情况下的真实停车时间与距离满足要求 |
+| 恢复与回滚 | 整套恢复后版本、配置和权限一致，不复用旧执行授权 |
+
+**上述实机项目当前均不能视为通过。新版是否改善现场停滞问题、是否具备预期导航效果，需要测试后给出结论。**
+
+## 8. 版本定位与联调资料
+
+| 项目 | 地址或标识 |
+| --- | --- |
+| 主仓库 | `https://github.com/Superandyfre/r1_navigation.git` |
+| 协作分支 | `codex/navigation-environment-snapshots` |
+| 机器人主源码 | `/home/rpp/r1_navigation` |
+| UI7 发布包 | `/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-01` |
+| 发布包构建源码 | `dc5c6a736efdbfb86772910563e9d24317d6ed28` |
+| 发布清单 | 发布包内 `releases/a-plus/manifest.json` |
+| 版本定位记录 | `docs/UI7_UNIFIED_VERSION_20261029.json` |
+| 执行归属协议 | `packages/navigation_neupan_bridge/EXECUTION_OWNERSHIP.md` |
+| CogNav 参考适配 | `integrations/cognav/README.md` 及 `integrations/cognav/robot_live/` |
+
+分支后续可能前进，联调应记录双方具体 commit 及实际发布清单，不使用“最新版本”作为唯一版本标识。Git 源码不包含全部地图、依赖环境和安装产物；需要恢复机器人环境时由导航端按 `docs/restore.md` 提供对应材料。
+
+联调前 CogNav 侧提供：driver/bridge 版本、启动命令和运行主机、路径坐标系、父任务租约与输入时效、取消/重试策略、Action/topic 映射。导航侧提供：实际发布身份、有效参数、运行组件来源、定位与状态样本、已知问题及现场条件。双方先确认任务独占、失联处理和故障恢复边界，再开始接入测试。
