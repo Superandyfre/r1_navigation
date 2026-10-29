@@ -46,16 +46,20 @@ class RevokeLoss(chain.FailstopChainROS):
         marker=time.monotonic()
         if mode=='cancel':self.future(handle.cancel_goal_async())
         elif mode=='success':self.position=4.
+        elif mode=='fatal':self.fatal=True
         expected={'cancel':GoalStatus.STATUS_CANCELED,'success':GoalStatus.STATUS_SUCCEEDED,
-                  'ordinary_failure':GoalStatus.STATUS_ABORTED}[mode]
+                  'ordinary_failure':GoalStatus.STATUS_ABORTED,'fatal':GoalStatus.STATUS_ABORTED}[mode]
         self.assertEqual(self.future(result,12).status,expected)
         marker=time.monotonic()
         self.until(lambda:any(e['dropped'] for e in self.relay_events))
         self.assertFalse(any(j['state']=='REVOKE' for t,j in self.grants))
         self.until(lambda:time.monotonic()>marker+.75)
+        reason='worker_fault_latched' if mode=='fatal' else 'navigation_authority_stale'
         self.until(lambda:any(j['authorization_state']=='FAULT_LATCHED' and
-                             j['authorization_reason']=='navigation_authority_stale'
+                             j['authorization_reason']==reason
                              for t,j in self.statuses if t>marker))
+        if mode=='fatal':
+            self.assertTrue(any(j['state']=='FAULT_LATCHED' for _,j in self.healths))
         settled=time.monotonic()
         raw=self.node.create_publisher(Twist,chain.PREFIX+'raw',20)
         smooth=self.node.create_publisher(Twist,chain.PREFIX+'smooth',20)
@@ -73,9 +77,9 @@ class RevokeLoss(chain.FailstopChainROS):
         self.position=0.
         retry=self.goal();self.assertEqual(self.future(retry.get_result_async()).status,GoalStatus.STATUS_ABORTED)
         (self.report/'revoke-loss-result.json').write_text(json.dumps(dict(mode=mode,
-            original_action={'cancel':'CANCELED','success':'SUCCEEDED','ordinary_failure':'ABORTED'}[mode],
+            original_action={'cancel':'CANCELED','success':'SUCCEEDED','ordinary_failure':'ABORTED','fatal':'ABORTED'}[mode],
             dropped_revokes=sum(e['dropped'] for e in self.relay_events),
-            guard_reason='navigation_authority_stale',authority_timeout_seconds=.5,
+            guard_reason=reason,authority_timeout_seconds=.5,
             zero_assertion_after_terminal_seconds=.75,zero_samples=len(rows),
             replayed_old_grant_source_with_fresh_commands=True,new_goal='ABORTED',
             physical_motion=False,worker=self.worker_mode),indent=2))
@@ -83,7 +87,8 @@ class RevokeLoss(chain.FailstopChainROS):
     def test_cancel_revoke_lost(self):self.exercise_loss('cancel')
     def test_success_revoke_lost(self):self.exercise_loss('success')
     def test_ordinary_failure_revoke_lost(self):self.exercise_loss('ordinary_failure')
+    def test_fatal_revoke_lost(self):self.exercise_loss('fatal')
 
 def load_tests(loader,tests,pattern):
-    return unittest.TestSuite(RevokeLoss(name) for name in ['test_cancel_revoke_lost','test_success_revoke_lost','test_ordinary_failure_revoke_lost'])
+    return unittest.TestSuite(RevokeLoss(name) for name in ['test_cancel_revoke_lost','test_success_revoke_lost','test_ordinary_failure_revoke_lost','test_fatal_revoke_lost'])
 if __name__=='__main__':unittest.main()
