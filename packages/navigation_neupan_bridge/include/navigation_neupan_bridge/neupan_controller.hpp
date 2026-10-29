@@ -66,6 +66,7 @@ private:
   std::string motion_grant_topic_{"/neupan_motion_grant"};
   std::string motion_arm_service_{"/neupan_controller/arm"};
   std::string motion_retry_service_{"/neupan_controller/can_retry"};
+  std::string motion_revoke_service_{"/neupan_controller/revoke_uncertain_execution"};
   std::string odom_topic_{"/odom"};
   std::int64_t context_sequence_{0};
   std::int64_t runtime_status_sequence_{0};
@@ -74,7 +75,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr execution_context_pub_, motion_grant_pub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr worker_health_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
-  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_service_, retry_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr arm_service_, retry_service_, revoke_service_;
   rclcpp::TimerBase::SharedPtr runtime_timer_;
   struct Envelope
   {

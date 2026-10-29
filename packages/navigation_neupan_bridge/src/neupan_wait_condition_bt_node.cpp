@@ -15,6 +15,7 @@
 #include "behaviortree_cpp_v3/bt_factory.h"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "nav2_behavior_tree/bt_conversions.hpp"
+#include "nav2_behavior_tree/plugins/action/follow_path_action.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -25,6 +26,50 @@ namespace navigation_neupan_bridge
 
 using Pose = geometry_msgs::msg::PoseStamped;
 using Goals = std::vector<Pose>;
+
+class NeuPANFollowPath : public nav2_behavior_tree::FollowPathAction
+{
+public:
+  NeuPANFollowPath(const std::string & name, const BT::NodeConfiguration & config)
+  : FollowPathAction(name, "follow_path", config)
+  {
+    revoke_ = node_->create_client<std_srvs::srv::Trigger>(
+      "/neupan_controller/revoke_uncertain_execution", rmw_qos_profile_services_default,
+      callback_group_);
+  }
+
+  BT::NodeStatus tick() override
+  {
+    const auto pending = future_goal_handle_;
+    const auto status = FollowPathAction::tick();
+    if (status == BT::NodeStatus::FAILURE && pending &&
+      pending->wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+    {
+      // Keep the unresolved handle visible to the base result callback while
+      // revocation spins the executor; it must not dereference a null handle.
+      future_goal_handle_ = pending;
+      revokeUncertain();
+    }
+    return status;
+  }
+
+  void halt() override
+  {
+    if (future_goal_handle_) {revokeUncertain();}
+    FollowPathAction::halt();
+  }
+
+private:
+  void revokeUncertain()
+  {
+    auto request = revoke_->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+    const auto result = callback_group_executor_.spin_until_future_complete(request, server_timeout_);
+    if (result != rclcpp::FutureReturnCode::SUCCESS || !request.get()->success) {
+      RCLCPP_ERROR(node_->get_logger(), "Uncertain FollowPath revoke not confirmed; release blocked");
+    }
+  }
+  rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr revoke_;
+};
 
 bool sameGoal(const Pose & left, const Pose & right)
 {
@@ -242,6 +287,7 @@ private:
 
 BT_REGISTER_NODES(factory)
 {
+  factory.registerNodeType<navigation_neupan_bridge::NeuPANFollowPath>("NeuPANFollowPath");
   factory.registerNodeType<navigation_neupan_bridge::AcceptNeuPANPath>("AcceptNeuPANPath");
   factory.registerNodeType<navigation_neupan_bridge::IsNeuPANWaiting>("IsNeuPANWaiting");
   factory.registerNodeType<navigation_neupan_bridge::CanRetryNeuPANExecution>("CanRetryNeuPANExecution");

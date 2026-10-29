@@ -125,6 +125,7 @@ void NeuPANController::configure(
     std::make_pair("motion_grant_topic", &motion_grant_topic_),
     std::make_pair("motion_arm_service", &motion_arm_service_),
     std::make_pair("motion_retry_service", &motion_retry_service_),
+    std::make_pair("motion_revoke_service", &motion_revoke_service_),
     std::make_pair("arm_odom_frame", &arm_odom_frame_),
     std::make_pair("arm_base_frame", &arm_base_frame_),
     std::make_pair("odom_topic", &odom_topic_)})
@@ -217,6 +218,17 @@ void NeuPANController::configure(
       response->success = active_ && !shadow_mode_ && execution_->retryAllowed(monotonicNow());
       response->message = response->success ? "neupan_retry_permitted" : "neupan_retry_denied";
     });
+  // Deny-only, idempotent run-wide latch: a late/duplicate request may stop a
+  // newer execution, but can never authorize one or clear the original fault.
+  revoke_service_ = node_->create_service<std_srvs::srv::Trigger>(motion_revoke_service_,
+    [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      execution_->fail("follow_path_execution_uncertain");
+      endExecutionLocked("follow_path_execution_uncertain");
+      response->success = true;
+      response->message = "run_revoked_restart_required";
+    });
   runtime_timer_ = node_->create_wall_timer(std::chrono::milliseconds(50),
     std::bind(&NeuPANController::runtimeTick, this));
 
@@ -257,6 +269,7 @@ void NeuPANController::cleanup()
   runtime_timer_.reset();
   arm_service_.reset();
   retry_service_.reset();
+  revoke_service_.reset();
   worker_health_sub_.reset();
   odom_sub_.reset();
   execution_context_pub_.reset();

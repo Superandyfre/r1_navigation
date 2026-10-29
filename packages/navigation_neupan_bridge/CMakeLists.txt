@@ -58,6 +58,9 @@ target_compile_features(neupan_wait_condition_bt_node PUBLIC cxx_std_17)
 target_compile_definitions(neupan_wait_condition_bt_node PRIVATE BT_PLUGIN_EXPORT)
 ament_target_dependencies(neupan_wait_condition_bt_node
   behaviortree_cpp_v3 nav2_behavior_tree nav_msgs rclcpp std_msgs std_srvs)
+find_library(NEUPAN_FOLLOW_PATH_BT_LIBRARY nav2_follow_path_action_bt_node
+  PATHS "${nav2_behavior_tree_DIR}/../../../lib" REQUIRED)
+target_link_libraries(neupan_wait_condition_bt_node "${NEUPAN_FOLLOW_PATH_BT_LIBRARY}")
 
 add_executable(r1_localization_monitor src/r1_localization_monitor.cpp)
 target_compile_features(r1_localization_monitor PUBLIC cxx_std_17)
