@@ -6,6 +6,7 @@ real NeuPAN optimization/model acceptance test.
 """
 import json
 import os
+from pathlib import Path
 import signal
 import threading
 import time
@@ -24,6 +25,26 @@ def main():
     assert os.environ.get('ROS_LOCALHOST_ONLY') == '1'
     rclpy.init()
     node=N116Node()
+    # Isolated instrumentation: do not allocate an extra health snapshot or
+    # refresh its source timestamp. Buffer real publication attempts and flush
+    # only at orderly teardown, avoiding per-heartbeat disk IO.
+    health_sends=[]
+    original_health_pub=node.worker_health_pub
+    class HealthRecorder:
+        def publish(self,message):
+            started=time.monotonic()
+            payload=json.loads(message.data)
+            row=dict(started=started,payload=payload,published=False)
+            try:
+                original_health_pub.publish(message)
+                row['published']=True
+            except Exception as exc:
+                row['error']=repr(exc)
+                raise
+            finally:
+                row['ended']=time.monotonic()
+                health_sends.append(row)
+    node.worker_health_pub=HealthRecorder()
     fatal=threading.Event()
     counter=0
     def startup(*args,**kwargs):
@@ -72,7 +93,12 @@ def main():
     try:
         while not stopping.is_set():executor.spin_once(timeout_sec=.05)
     finally:
-        node.finalize();executor.shutdown(timeout_sec=2);node.destroy_node();rclpy.shutdown()
+        node.finalize();executor.shutdown(timeout_sec=2)
+        output=Path(str(node.get_parameter('n115_output_dir').value))
+        output.mkdir(parents=True,exist_ok=True)
+        (output/'health-send-trace.json').write_text(json.dumps(dict(
+            initial_constructor_publish_recorded=False,records=health_sends),indent=2))
+        node.destroy_node();rclpy.shutdown()
 
 
 if __name__=='__main__':main()
