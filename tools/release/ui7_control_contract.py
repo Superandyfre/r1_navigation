@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from launch_parameter_contract import compile_contract
 
 
-def button_options(environment):
+def button_options(environment, collision_default='true'):
     allowed = {'RPP_NEUPAN_SCAN_SOURCE', 'RPP_NEUPAN_USE_MESH_SELF_FILTER',
                'RPP_NEUPAN_COLLISION_CHECK_ENABLED', 'RPP_NEUPAN_COLLISION_CHECK_DEFAULT'}
     if set(environment) - allowed or any(not isinstance(v, str) for v in environment.values()):
@@ -23,7 +23,7 @@ def button_options(environment):
     scan = environment.get('RPP_NEUPAN_SCAN_SOURCE') or 'dual'
     mesh = environment.get('RPP_NEUPAN_USE_MESH_SELF_FILTER') or 'true'
     collision = environment.get('RPP_NEUPAN_COLLISION_CHECK_ENABLED') or (
-        environment.get('RPP_NEUPAN_COLLISION_CHECK_DEFAULT') or 'true')
+        environment.get('RPP_NEUPAN_COLLISION_CHECK_DEFAULT') or collision_default)
     if scan not in ('dual', 'livox_only') or mesh not in ('true', 'false') or collision not in ('true', 'false'):
         raise ValueError('invalid_UI7_environment_override')
     return dict(scan_source=scan, use_mesh_self_filter=mesh, collision_check_enabled=collision)
@@ -49,6 +49,13 @@ def trace(bundle, calibration, environment):
     inputs = {}
     button = bundle / 'tools/starterbutton/start_navigation_high_sampling_neupan.sh'
     inputs[str(button)] = hashlib.sha256(button.read_bytes()).hexdigest()
+    script = button.read_text()
+    if '${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-false}' in script:
+        collision_default = 'false'
+    elif '${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-true}' in script:
+        collision_default = 'true'
+    else:
+        raise ValueError('unreviewed_UI7_collision_default_expression')
     registration_path = bundle / 'tools/starterbutton/navigation7_button.json'
     inputs[str(registration_path)] = hashlib.sha256(registration_path.read_bytes()).hexdigest()
     registration = json.loads(registration_path.read_text())
@@ -58,7 +65,7 @@ def trace(bundle, calibration, environment):
         if not separator or name in registered_environment:
             raise ValueError('unsupported_UI7_registration_assignment')
         registered_environment[name] = value
-    button_options(registered_environment)
+    button_options(registered_environment, collision_default)
     def load(filename):
         path = navigation / 'launch' / filename
         inputs[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -82,9 +89,9 @@ def trace(bundle, calibration, environment):
         return child
     # Caller-supplied values represent explicitly reviewed effective overrides
     # after external startup configuration, not assumed UI application priority.
-    button_options(environment)
+    button_options(environment, collision_default)
     effective_environment = dict(registered_environment, **environment)
-    options = button_options(effective_environment)
+    options = button_options(effective_environment, collision_default)
     context = LaunchContext()
     context.launch_configurations.update(options)
     context.launch_configurations.update(dict(local_controller_mode='neupan', start_arm_drivers='false',

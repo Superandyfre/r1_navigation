@@ -138,6 +138,7 @@ class FailstopChainROS(unittest.TestCase):
             costmap=config['local_costmap']['local_costmap']['ros__parameters']
             costmap['plugins'].append('test_current_layer')
             costmap['test_current_layer']={'plugin':'navigation_neupan_bridge/ControlledCurrentLayer'}
+        config['r1_collision_guard']['ros__parameters'].update(getattr(self, 'guard_parameters_override', {}))
         path=self.report/'params.yaml';path.write_text(yaml.safe_dump(config))
         if self.real_node:
             packages=WS/'src/r1_navigation/packages'

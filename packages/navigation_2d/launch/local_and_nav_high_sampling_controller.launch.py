@@ -86,7 +86,7 @@ def generate_launch_description():
             description="Collision-guard output; use an isolated topic for no-motion integration tests.",
         ),
         DeclareLaunchArgument(
-            "collision_check_enabled", default_value="true", choices=["false", "true"],
-            description="Enable final obstacle collision checks."),
+            "collision_check_enabled", default_value="false", choices=["false"],
+            description="HW1 uses NeuPAN collision avoidance; the final node enforces runtime authorization only."),
         OpaqueFunction(function=_select),
     ])

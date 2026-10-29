@@ -47,7 +47,7 @@ def select_parameters(document, name):
     return flatten(selected.get('ros__parameters', {}))
 
 
-def compile_contract(bundle, calibration, profile='smoothed', mesh=True, collision=True, scan_source='dual'):
+def compile_contract(bundle, calibration, profile='smoothed', mesh=True, collision=False, scan_source='dual'):
     from ament_index_python.packages import get_package_share_directory
     from launch import LaunchContext
     from launch.actions import DeclareLaunchArgument

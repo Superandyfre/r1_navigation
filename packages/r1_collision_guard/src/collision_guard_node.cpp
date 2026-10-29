@@ -196,7 +196,8 @@ public:
       joint_state_timeout_sec_ <= 0.0 || arm_stow_tolerance_rad_ <= 0.0 ||
       arm_motion_tolerance_radps_ < 0.0 || arm_settle_time_sec_ < 0.0 ||
       scan_history_size_ < 2 ||
-      footprint_points.size() < 6 || footprint_points.size() % 2 != 0)
+      (collision_check_enabled_ &&
+      (footprint_points.size() < 6 || footprint_points.size() % 2 != 0)))
     {
       throw std::runtime_error("invalid R1 collision guard parameters");
     }
@@ -206,18 +207,20 @@ public:
     {
       throw std::runtime_error("arm stow guard requires matching joint names and positions");
     }
-    if (use_exact_mesh_components_ &&
+    if (collision_check_enabled_ && use_exact_mesh_components_ &&
       (!require_dynamic_footprint_ || mesh_self_filter_preapplied_))
     {
       throw std::runtime_error("exact mesh guard requires a live footprint and raw scan");
     }
-    std::vector<Point2D> footprint;
-    footprint.reserve(footprint_points.size() / 2);
-    for (size_t index = 0; index < footprint_points.size(); index += 2) {
-      footprint.push_back({footprint_points[index], footprint_points[index + 1]});
+    if (collision_check_enabled_) {
+      std::vector<Point2D> footprint;
+      footprint.reserve(footprint_points.size() / 2);
+      for (size_t index = 0; index < footprint_points.size(); index += 2) {
+        footprint.push_back({footprint_points[index], footprint_points[index + 1]});
+      }
+      base_footprint_ = footprint;
+      logic_ = std::make_unique<GuardLogic>(config, std::move(footprint));
     }
-    base_footprint_ = footprint;
-    logic_ = std::make_unique<GuardLogic>(config, std::move(footprint));
 
     worker_health_sub_ = create_subscription<std_msgs::msg::String>(
       worker_health_topic, rclcpp::QoS(20), [this](std_msgs::msg::String::ConstSharedPtr msg) {
@@ -260,9 +263,11 @@ public:
     source_command_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       source_command_topic, rclcpp::QoS(20),
       std::bind(&CollisionGuardNode::sourceCommandCallback, this, std::placeholders::_1));
-    scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
-      scan_topic, rclcpp::SensorDataQoS(),
-      std::bind(&CollisionGuardNode::scanCallback, this, std::placeholders::_1));
+    if (collision_check_enabled_) {
+      scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
+        scan_topic, rclcpp::SensorDataQoS(),
+        std::bind(&CollisionGuardNode::scanCallback, this, std::placeholders::_1));
+    }
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       odom_topic, rclcpp::QoS(50),
       std::bind(&CollisionGuardNode::odomCallback, this, std::placeholders::_1));
@@ -274,10 +279,12 @@ public:
         topic, rclcpp::QoS(20),
         std::bind(&CollisionGuardNode::jointStateCallback, this, std::placeholders::_1)));
     }
-    dynamic_footprint_sub_ = create_subscription<geometry_msgs::msg::PolygonStamped>(
-      dynamic_footprint_topic, rclcpp::QoS(20),
-      std::bind(&CollisionGuardNode::dynamicFootprintCallback, this, std::placeholders::_1));
-    if (use_exact_mesh_components_) {
+    if (collision_check_enabled_) {
+      dynamic_footprint_sub_ = create_subscription<geometry_msgs::msg::PolygonStamped>(
+        dynamic_footprint_topic, rclcpp::QoS(20),
+        std::bind(&CollisionGuardNode::dynamicFootprintCallback, this, std::placeholders::_1));
+    }
+    if (collision_check_enabled_ && use_exact_mesh_components_) {
       mesh_components_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
         mesh_components_topic, rclcpp::QoS(10),
         std::bind(&CollisionGuardNode::meshComponentsCallback, this, std::placeholders::_1));
@@ -302,15 +309,11 @@ public:
             result.reason = "authorization configuration requires controlled restart";
             return result;
           }
-          if (name != "collision_check_enabled") {continue;}
-          if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_BOOL) {
+          if (name == "collision_check_enabled") {
             result.successful = false;
-            result.reason = "collision_check_enabled must be a boolean";
+            result.reason = "collision-check profile is fixed at startup; controlled restart required";
             return result;
           }
-          collision_check_enabled_ = parameter.as_bool();
-          RCLCPP_WARN(get_logger(), "collision checking %s",
-            collision_check_enabled_ ? "enabled" : "disabled");
         }
         return result;
       });
@@ -692,9 +695,9 @@ private:
       decision = fault("localization_status_stale");
     } else if (require_localization_ready_ && localization_health.state != "READY") {
       decision = fault("localization_" + localization_health.state + ":" + localization_health.reason);
-    } else if (require_dynamic_footprint_ && dynamic_footprint_stale) {
+    } else if (collision_check_enabled_ && require_dynamic_footprint_ && dynamic_footprint_stale) {
       decision = fault("dynamic_footprint_stale");
-    } else if (use_exact_mesh_components_ && mesh_components_stale) {
+    } else if (collision_check_enabled_ && use_exact_mesh_components_ && mesh_components_stale) {
       decision = fault("mesh_components_stale");
     } else if (require_arms_stowed_ && arm_state_stale) {
       decision = fault("arm_joint_state_stale");
@@ -717,7 +720,8 @@ private:
       decision = fault("source_command_nonfinite");
     } else if (!command_available || std::chrono::duration<double>(steady_now - command_received).count() > command_timeout_sec_) {
       decision = fault("command_stale");
-    } else if (!scan_available || std::chrono::duration<double>(steady_now - scan_received).count() > scan_timeout_sec_) {
+    } else if (collision_check_enabled_ &&
+      (!scan_available || std::chrono::duration<double>(steady_now - scan_received).count() > scan_timeout_sec_)) {
       decision = fault("scan_stale");
     } else if (odom_history.empty() ||
       std::chrono::duration<double>(steady_now - odom_history.back().received).count() > odom_timeout_sec_) {
@@ -834,6 +838,7 @@ private:
     // nonfinite requested input, so the safety status itself stays parseable.
     nlohmann::json payload = {
       {"schema", "r1_collision_guard_status_v1"},
+      {"collision_check_enabled", collision_check_enabled_},
       {"state", stateName(decision.state)}, {"reason", decision.reason},
       {"requested_linear_x", command.linear.x}, {"requested_angular_z", command.angular.z},
       {"output_linear_x", decision.linear_x}, {"output_angular_z", decision.angular_z},
@@ -841,7 +846,7 @@ private:
       {"collision_time_sec", decision.collision_time_sec},
       {"collision_point_x", decision.collision_point.x}, {"collision_point_y", decision.collision_point.y},
       {"localization_state", localization_health.state}, {"localization_reason", localization_health.reason},
-      {"arm_state", require_dynamic_footprint_ ?
+      {"arm_state", (!collision_check_enabled_ && !require_arms_stowed_) ? "NOT_REQUIRED" : require_dynamic_footprint_ ?
         (dynamic_footprint_ready ? "DYNAMIC_PROJECTION_READY" : "DYNAMIC_PROJECTION_STALE") :
         (!arm_state.available ? "MISSING" : !arm_state.valid ? "INVALID" :
         !arm_state.stowed ? "NOT_STOWED" : arm_state.moving ? "MOVING" : "STOWED")},
@@ -850,7 +855,7 @@ private:
       {"dynamic_footprint_ready", dynamic_footprint_ready},
       {"dynamic_footprint_age_sec", dynamic_footprint_age_sec},
       {"mesh_self_filter_preapplied", mesh_self_filter_preapplied_},
-      {"exact_mesh_components_enabled", use_exact_mesh_components_},
+      {"exact_mesh_components_enabled", collision_check_enabled_ && use_exact_mesh_components_},
       {"mesh_component_count", mesh_component_count_},
       {"mesh_components_age_sec", mesh_components_available_ ?
         std::chrono::duration<double>(steady_now - mesh_components_received_).count() : -1.0},

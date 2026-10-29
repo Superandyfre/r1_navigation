@@ -117,9 +117,9 @@ and `NEUPAN_CHAIN_WORKER=actual-solver`, then run:
 /usr/bin/python3 tools/release/accept_candidate_ros.py --candidate /absolute/candidate --suite navigator
 ```
 
-Suites: chain, navigator, restart, startup-tf, revoke-loss,
+Suites: chain, collisionoff, navigator, restart, startup-tf, revoke-loss,
 handshake-loss, source-recovery, owner-loss, owner-protocol,
-navigator-owner, navigator-freeze, pending-halt, ack-delay, or all (39 cases,
+navigator-owner, navigator-freeze, pending-halt, ack-delay, or all (42 cases,
 sequential). CogNav is excluded by user instruction; its historical fixtures
 and evidence remain archived. New bundles omit integrations/cognav. Never run multiple
 suites concurrently in domain192. The runner verifies the entire saved install
@@ -134,7 +134,7 @@ acceptance; running them never approves deployment. Preserve raw logs and traces
 Controller/Guard/smoother/actual Worker parameter services before the fixture's
 arm request. It checks pinned fixture launch values, rejects a wrong shadow-mode
 pin, then verifies normal solver output and cancel. It does not certify the
-production UI7 overrides or runtime remaps and is not in the default 39 cases.
+production UI7 overrides or runtime remaps and is not in the default suite.
 
 `effective_parameters.py --pins /absolute/reviewed-pins.json --output
 /absolute/new-report.json` reads ListParameters/GetParameters without setting
@@ -220,6 +220,16 @@ event solely to construct control include descriptions; no arm state probe,
 Node/LaunchService or hardware driver is executed. The tool does not source
 `.rpprc` or certify hardware admission. Review the selected environment and
 external shell configuration separately; a draft never grants motion.
+
+User-directed HW1 profile revision: the duplicate final obstacle checker is
+removed from the NeuPAN navigation path. HW1 launches accept only
+`collision_check_enabled=false`; the button defaults false and rejects an
+enable request. With that profile the final runtime node does not construct
+GuardLogic or subscribe to scan/mesh/footprint, and their absence cannot block
+motion. NeuPAN's own obstacle inputs remain required. Authorization, Worker
+health/source freshness, command freshness/non-finite checks and the existing
+odom/localization checks remain active. The profile cannot change live.
+Historical bundles before this revision do not contain this behavior.
 
 The separate `--suite navigator-tick-loss` is not part of standard `all`: it
 requires a deliberately test-only BT decorator, never installed in a candidate.

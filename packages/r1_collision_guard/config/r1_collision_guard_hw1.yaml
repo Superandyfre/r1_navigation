@@ -1,5 +1,7 @@
 r1_collision_guard:
   ros__parameters:
+    # HW1: NeuPAN handles obstacles; this node retains A+ authorization/watchdogs.
+    collision_check_enabled: false
     base_frame_id: base_link
     odom_frame_id: odom
     scan_topic: /scan_neupan
@@ -29,7 +31,7 @@ r1_collision_guard:
     # The live arm projection, not a fixed stow pose, is the navigation
     # footprint. Missing projection data fails closed at the final velocity gate.
     require_arms_stowed: false
-    require_dynamic_footprint: true
+    require_dynamic_footprint: false
     dynamic_footprint_topic: /r1_arm_footprint
     dynamic_footprint_timeout_sec: 0.50
     # The exact mesh guard uses the raw fused scan and removes only returns

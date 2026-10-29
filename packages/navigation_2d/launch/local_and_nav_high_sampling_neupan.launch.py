@@ -195,8 +195,8 @@ def generate_launch_description():
             description="Use the dual-arm mesh self-return filter for NeuPAN obstacle scanning.",
         ),
         DeclareLaunchArgument(
-            "collision_check_enabled", default_value="true", choices=["false", "true"],
-            description="Enable final obstacle collision checks."),
+            "collision_check_enabled", default_value="false", choices=["false"],
+            description="HW1 uses NeuPAN collision avoidance; the final node enforces runtime authorization only."),
         DeclareLaunchArgument(
             "mesh_projection_margin_m", default_value="0.06",
             description="Local mesh-only LiDAR self-return edge tolerance in metres.",

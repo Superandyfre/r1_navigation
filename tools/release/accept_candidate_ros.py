@@ -65,7 +65,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate',required=True,type=Path)
     parser.add_argument('--bundle',type=Path,help='Verify and run the relocated bundle instead of candidate/install')
-    parser.add_argument('--suite',choices=['chain','navigator','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','navigator-owner','navigator-freeze','navigator-tick-loss','navigator-configure-churn','pending-halt','ack-delay','effective-parameters','all'],default='all')
+    parser.add_argument('--suite',choices=['chain','collisionoff','navigator','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','navigator-owner','navigator-freeze','navigator-tick-loss','navigator-configure-churn','pending-halt','ack-delay','effective-parameters','all'],default='all')
     args=parser.parse_args()
     if args.suite=='effective-parameters' and not args.bundle:
         parser.error('effective-parameters admission checks require a pinned --bundle manifest')
@@ -115,7 +115,7 @@ def main():
     print(json.dumps(dict(candidate=str(candidate),build_source_sha=inventory['source_sha'],
         bundle=str(bundle) if bundle else None,
         worker_import=worker.__file__,inventory_verified_files=len(inventory['files']),suite=args.suite)),flush=True)
-    modules=dict(chain='failstop_chain_ros',navigator='failstop_navigator_ros',
+    modules=dict(chain='failstop_chain_ros',collisionoff='failstop_collisionoff_ros',navigator='failstop_navigator_ros',
                  restart='failstop_full_restart_ros',
                  **{'startup-tf':'failstop_startup_tf_ros','revoke-loss':'failstop_revoke_loss_ros',
                     'handshake-loss':'failstop_handshake_loss_ros',
@@ -125,7 +125,7 @@ def main():
                     'navigator-freeze':'failstop_navigator_freeze_ros',
                     'ack-delay':'failstop_navigator_ack_delay_ros'})
     # This extra fixture needs a manually compiled, test-only decorator. Keep
-    # the BUILD_TESTING=OFF candidate's standard all43 independent of adapters.
+    # the BUILD_TESTING=OFF candidate's standard suite independent of adapters.
     if args.suite=='navigator-tick-loss':
         modules['navigator-tick-loss']='failstop_navigator_tick_loss_ros'
     if args.suite=='navigator-configure-churn':

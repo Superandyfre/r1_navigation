@@ -248,9 +248,14 @@ class GuardAuthorizationROS(unittest.TestCase):
         self.input_enabled=False
         self.assert_stopped('command_stale')
 
-    def test_dynamic_footprint_loss_keeps_original_safety_check(self):
+    def test_disabled_collision_profile_does_not_gate_on_footprint(self):
         self.footprint_enabled=False
-        self.assert_stopped('dynamic_footprint_stale')
+        start=time.monotonic()
+        while time.monotonic()<start+.7:self.tick()
+        rows=[r for r in self.outputs if r[0]>start+.55]
+        self.assertTrue(rows)
+        self.assertTrue(all(v>.05 for _,v,w in rows),rows)
+        self.assertEqual(self.statuses[-1]['reason'],'collision_check_disabled')
 
     def test_old_input_is_not_laundered_by_fresh_result_publication(self):
         self.input_age=.8

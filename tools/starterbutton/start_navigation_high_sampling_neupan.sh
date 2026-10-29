@@ -48,11 +48,11 @@ fi
 left_arm_ip="${RPP_LEFT_ARM_IP:-192.168.11.60}"
 right_arm_ip="${RPP_RIGHT_ARM_IP:-192.168.11.61}"
 arm_local_ip="${RPP_ARM_LOCAL_IP:-192.168.11.11}"
-# UI 7 is the production dual-LiDAR / live-arm-footprint profile. Operators
-# may still override these values explicitly for a diagnostic session.
+# UI 7 uses dual LiDAR and the live arm mesh for NeuPAN input filtering.
+# The separate final obstacle checker is removed from this HW1 profile.
 scan_source="${RPP_NEUPAN_SCAN_SOURCE:-dual}"
 mesh_self_filter="${RPP_NEUPAN_USE_MESH_SELF_FILTER:-true}"
-collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-true}}"
+collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-false}}"
 
 if [[ "${scan_source}" != "livox_only" && "${scan_source}" != "dual" ]]; then
   echo "RPP_NEUPAN_SCAN_SOURCE must be livox_only or dual" >&2
@@ -64,8 +64,8 @@ if [[ "${mesh_self_filter}" != "false" && "${mesh_self_filter}" != "true" ]]; th
   exit 1
 fi
 
-if [[ "${collision_check_enabled}" != "false" && "${collision_check_enabled}" != "true" ]]; then
-  echo "RPP_NEUPAN_COLLISION_CHECK_ENABLED must be true or false" >&2
+if [[ "${collision_check_enabled}" != "false" ]]; then
+  echo "HW1 duplicate collision checks were removed; RPP_NEUPAN_COLLISION_CHECK_ENABLED must be false" >&2
   exit 1
 fi
 
