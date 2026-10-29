@@ -9,3 +9,15 @@ log*/
 
 # Per-robot overrides are never committed. The approved baseline record is tracked.
 config/calibration/*.local.json
+
+# Local snapshot payloads never enter Git. snapshots/ holds metadata only.
+navigation_snapshots/
+snapshots/*/payload/
+snapshots/*/sources/
+snapshots/*/patches/
+*.bundle
+*.bag
+*.db3
+*.mcap
+n1_results/
+neupan_hw*_torch_runtime.json

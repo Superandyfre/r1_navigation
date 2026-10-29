@@ -5,7 +5,7 @@ script_dir="$(dirname "${script_file}")"
 source "${script_dir}/run_once.sh"
 single_instance_or_exit "starterbutton-navigation-high-sampling-neupan"
 
-source ~/.rpprc
+source "${script_dir}/navigation_environment.bash" || exit 1
 navigation_repo="$(cd "${script_dir}/../.." && pwd)"
 if [[ ! -f "${navigation_repo}/install/local_setup.bash" ]]; then
   echo "R1 navigation install is missing: ${navigation_repo}/install" >&2

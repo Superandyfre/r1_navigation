@@ -40,3 +40,11 @@ See `docs/MIGRATION.md` for the reversible workspace cutover procedure.
 ## Previous UI 7 source snapshot
 
 See [navigation7 synchronization record](docs/NAVIGATION7_SYNC_20261009.md) for the active robot source, entry scripts, validation, and research reuse limits.
+
+## 整套环境版本与恢复
+
+主仓库同时维护 `deployment/` 依赖/环境清单、`config/` 机器人配置、
+`snapshots/<ID>/` 小型索引和 `tools/snapshot`、`tools/restore` 工具。
+大文件与离线源文件位于 `/home/rpp/navigation_snapshots/<ID>/`，不进入普通Git历史。
+源码提交、已采集快照与导航验证通过的发布版分别标记；参见 [恢复说明](docs/restore.md)。
+当前UI7实际发布版本以快照记录为准，不能从这个工作树的HEAD推断运行版本。

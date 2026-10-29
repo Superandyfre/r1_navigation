@@ -1,0 +1,21 @@
+{
+  "schema": "r1_snapshot_profile_v1",
+  "snapshot_store": "/home/rpp/navigation_snapshots",
+  "main_repository": "/home/rpp/r1_navigation",
+  "additional_repository": "/home/rpp/neupan_failstop_ws/src/r1_navigation",
+  "underlay_sources": "/home/rpp/rpp_ws/src",
+  "underlay_install": "/home/rpp/rpp_ws/install",
+  "ros_prefix": "/opt/ros/humble",
+  "python": "/home/rpp/venvs/neupan_ros_humble/bin/python",
+  "python_environment": "/home/rpp/venvs/neupan_ros_humble",
+  "ui_config": "/home/rpp/rpp_tools/starterbutton/.starterButton/config/config.json",
+  "ui_button": "7.双雷达NeuPAN导航",
+  "navigation_packages": ["navigation_2d", "navigation_neupan_bridge", "nav2_controller", "r1_collision_guard", "r1_neupan_integration", "r1_lidar_preprocess", "r1_description", "robot_bringup"],
+  "assets": {
+    "maps": "/home/rpp/rpp_data/map_high_sampling",
+    "calibration": "/home/rpp/rpp_ws/config",
+    "ui_tools": "/home/rpp/rpp_tools/starterbutton/.bin",
+    "global_environment": "/home/rpp/.rpprc",
+    "global_environment_include": "/home/rpp/rpp_tools/rpp_easy_tools/robotplusplus_deploy_tool/global_env.config"
+  }
+}
