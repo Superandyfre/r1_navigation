@@ -61,3 +61,21 @@ immutable and verify the remaining release/runtime inventory separately. It is
 not yet integrated with the UI7 startup/arm workflow. Tests cover actual isolated
 ROS process maps (candidate accepted and preserved old core refused), wrong
 start_ticks, temporary mapped-file replacement and terminated process refusal.
+
+## Development UI7 entry
+
+The candidate `tools/starterbutton/start_navigation_high_sampling_neupan.sh`
+sources `release_gate.sh` after sourcing its overlay and before spawning ROS.
+The gate requires `${navigation_repo}/releases/a-plus/manifest.json`, or the
+explicit `RPP_NEUPAN_RELEASE_MANIFEST` path, and runs deployment checks. There is
+no diagnostic-mode bypass in that entry. No approved manifest is shipped; the
+current development tree is intentionally refused. Tests run the real helper
+against missing, corrupt and unapproved manifests, verify no sentinel command
+runs, and check placement before process creation. They do not execute the full
+startup script or replace the production button registration.
+
+The production `/home/rpp/r1_navigation` UI7 entry remains unchanged. This is a
+candidate integration only. Its eventual release still needs a complete reviewed
+inventory, Worker interpreter/import checks, effective configuration and runtime
+map checks before arm, plus release/rollback and operator-approved hardware
+acceptance. Static preflight alone does not establish these facts.

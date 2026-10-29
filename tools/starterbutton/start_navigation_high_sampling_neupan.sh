@@ -28,6 +28,10 @@ done
 # must not inherit an interactive Conda Python when starting ROS executables.
 export PATH=/usr/bin:/bin:$PATH
 
+# Candidate A+ entry: refuse incomplete/mixed releases before launching ROS.
+source "${script_dir}/release_gate.sh"
+neupan_release_gate "${navigation_repo}" || exit $?
+
 # Starterbutton runs outside the interactive GNOME session, so it does not
 # inherit the Xwayland connection variables required by the RViz node in the
 # launch file. Recover them from the active local Xwayland process.
