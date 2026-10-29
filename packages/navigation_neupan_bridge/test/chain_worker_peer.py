@@ -4,6 +4,7 @@
 Domain192 test-only peer. Never imports/runs a hardware driver. This is not a
 real NeuPAN optimization/model acceptance test.
 """
+import json
 import os
 import signal
 import threading
@@ -44,7 +45,20 @@ def main():
     if not real_solver:
         node.client.startup=startup
         node.client.solve=solve
+    source_paused=threading.Event()
+    original_source_pub=node.planner_result_pub
+    class SourceGate:
+        def publish(self, message):
+            if not source_paused.is_set():original_source_pub.publish(message)
+    node.planner_result_pub=SourceGate()
+    ack=node.create_publisher(String,'/test_failstop_chain/inject_ack',20)
     def inject(msg):
+        request=json.loads(msg.data)
+        if 'hold_source' in request:
+            if request['hold_source']:source_paused.set()
+            else:source_paused.clear()
+            ack.publish(String(data=json.dumps(request)))
+            return
         if real_solver:
             process=node.client.process
             if process is not None and process.is_alive():process.kill()

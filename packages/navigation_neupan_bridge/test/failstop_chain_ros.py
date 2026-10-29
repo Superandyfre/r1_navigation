@@ -53,6 +53,8 @@ class FailstopChainROS(unittest.TestCase):
         self.sources=[]
         self.healths=[]
         self.runtime_statuses=[]
+        self.grants=[]
+        self.inject_acks=[]
         self.sequence = 0
         self.next_pulse = 0.
         self.worker_mode=os.environ.get('NEUPAN_CHAIN_WORKER','synthetic')
@@ -65,7 +67,9 @@ class FailstopChainROS(unittest.TestCase):
         def context(msg):
             self.context=json.loads(msg.data)
             self.contexts.append((time.monotonic(),self.context))
-        self.subs = [self.node.create_subscription(String,PREFIX+'diagnostics',lambda m:self.runtime_statuses.append((time.monotonic(),json.loads(m.data))),20),
+        self.subs = [self.node.create_subscription(String,PREFIX+'grant',lambda m:self.grants.append((time.monotonic(),json.loads(m.data))),20),
+                     self.node.create_subscription(String,PREFIX+'inject_ack',lambda m:self.inject_acks.append((time.monotonic(),json.loads(m.data))),20),
+                     self.node.create_subscription(String,PREFIX+'diagnostics',lambda m:self.runtime_statuses.append((time.monotonic(),json.loads(m.data))),20),
                      self.node.create_subscription(String,PREFIX+'health',lambda m:self.healths.append((time.monotonic(),json.loads(m.data))),20),
                      self.node.create_subscription(String,PREFIX+'source',lambda m:self.sources.append((time.monotonic(),json.loads(m.data))),20),
                      self.node.create_subscription(String,PREFIX+'context',context,20),
@@ -73,7 +77,7 @@ class FailstopChainROS(unittest.TestCase):
         for name, rows in [('output',self.outputs),('raw',self.raw),('smooth',self.smooth)]:
             self.subs.append(self.node.create_subscription(Twist,PREFIX+name,
                 lambda m,rows=rows:rows.append((time.monotonic(),m.linear.x,m.angular.z)),20))
-        plugin = dict(plugin='navigation_neupan_bridge/NeuPANController',shadow_mode=False,
+        plugin = dict(plugin=getattr(self,'controller_plugin','navigation_neupan_bridge/NeuPANController'),shadow_mode=False,
             require_localization_ready=False,require_gate_match=False,navigation_frame='map',
             max_linear=.20,max_reverse=.20,max_angular=.40,
             worker_health_timeout=.5,navigation_authority_timeout=.5,planner_input_timeout=.75,
@@ -200,7 +204,7 @@ class FailstopChainROS(unittest.TestCase):
                 except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=3)
         for log in self.logs:log.close()
         (self.report/'trace.json').write_text(json.dumps(dict(status=self.statuses,output=self.outputs,
-            raw=self.raw,smooth=self.smooth,context=self.contexts,source=self.sources,health=self.healths,runtime_status=self.runtime_statuses),indent=2))
+            raw=self.raw,smooth=self.smooth,context=self.contexts,source=self.sources,health=self.healths,runtime_status=self.runtime_statuses,grant=self.grants,inject_ack=self.inject_acks),indent=2))
         self.node.destroy_node();rclpy.shutdown()
 
     def publish(self,key,payload):
