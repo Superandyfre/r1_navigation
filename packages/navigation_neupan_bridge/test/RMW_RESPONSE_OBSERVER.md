@@ -60,3 +60,10 @@ activates Navigator, sends a goal, starts a driver, or claims solver provenance.
 Saved process maps must contain the actual selected BT library. This reduced
 experiment excludes the Controller/Worker/Guard/smoother coexistence of the full
 acceptance harness; a pass is not a fix or full startup acceptance.
+Add `--with-chain` for a second diagnostic with one persistent, actual isolated
+Controller/Guard/smoother/Worker-node fixture sending synthetic inputs in a
+separate process. It sends no goals, so the lazy solver is not expected to start.
+Only Navigator remains configure-only; background components are activated by
+the reused chain fixture. This changes coexistence but still does not recreate
+the full suite's repeated chain teardown/startup or prior motion traffic. Keep
+the two reports separate and do not infer a cause from passes alone.
