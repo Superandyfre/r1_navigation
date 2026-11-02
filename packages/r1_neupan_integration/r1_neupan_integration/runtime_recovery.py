@@ -25,6 +25,8 @@ class RecoveryTransaction:
                 if self.cancelled.is_set() or time.monotonic() >= deadline:
                     raise RuntimeError('recovery_cancelled_or_expired')
                 operation(deadline, self.cancelled)
+                if self.cancelled.is_set() or time.monotonic() >= deadline:
+                    raise RuntimeError("recovery_cancelled_or_expired")
             step('capture_owned_runtime',self.backend.capture)
             step('revoke',self.backend.revoke)
             step('verify_stopped',self.backend.verify_stopped)

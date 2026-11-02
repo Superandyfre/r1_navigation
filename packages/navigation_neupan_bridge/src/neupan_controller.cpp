@@ -94,6 +94,7 @@ void NeuPANController::configure(
   declareIfMissing(node_, plugin_name_ + ".localization_startup_timeout", localization_startup_timeout_sec_);
   declareIfMissing(node_, plugin_name_ + ".require_localization_ready", require_localization_ready_);
   declareIfMissing(node_, plugin_name_ + ".auto_arm_on_ready", auto_arm_on_ready_);
+  declareIfMissing(node_, plugin_name_ + ".detect_base_nonresponse", detect_base_nonresponse_);
 
   node_->get_parameter(plugin_name_ + ".navigation_frame", navigation_frame_);
   node_->get_parameter(plugin_name_ + ".path_topic", path_topic_);
@@ -121,6 +122,7 @@ void NeuPANController::configure(
   node_->get_parameter(plugin_name_ + ".localization_startup_timeout", localization_startup_timeout_sec_);
   node_->get_parameter(plugin_name_ + ".require_localization_ready", require_localization_ready_);
   node_->get_parameter(plugin_name_ + ".auto_arm_on_ready", auto_arm_on_ready_);
+  node_->get_parameter(plugin_name_ + ".detect_base_nonresponse", detect_base_nonresponse_);
 
   for (auto pair : {std::make_pair("worker_health_topic", &worker_health_topic_),
     std::make_pair("execution_context_topic", &execution_context_topic_),
@@ -196,6 +198,18 @@ void NeuPANController::configure(
       if (msg->header.stamp.sec < 0 || msg->header.stamp.nanosec >= 1000000000u) {
         stopped_odometry_.reset(); return;
       }
+      const auto & p = msg->pose.pose;
+      const double yaw = tf2::getYaw(p.orientation);
+      const auto stamp_age = node_->now().nanoseconds() -
+        (static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL + msg->header.stamp.nanosec);
+      if (msg->header.frame_id == arm_odom_frame_ && msg->child_frame_id == arm_base_frame_ &&
+        stamp_age >= 0 && stamp_age <= 200000000 && std::isfinite(p.position.x) &&
+        std::isfinite(p.position.y) && std::isfinite(yaw))
+      {
+        motion_odom_stamp_ = msg->header.stamp.sec + msg->header.stamp.nanosec * 1e-9;
+        motion_odom_received_ = monotonicNow(); motion_x_ = p.position.x;
+        motion_y_ = p.position.y; motion_yaw_ = yaw;
+      } else {motion_odom_received_ = 0; stall_monitor_.reset();}
       const auto & v = msg->twist.twist;
       const std::int64_t stamp = static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL +
         msg->header.stamp.nanosec;
@@ -316,6 +330,7 @@ void NeuPANController::beginExecution(const std::string & authority, const std::
   if (shadow_mode_) {return;}
   std::lock_guard<std::mutex> lock(mutex_);
   if (!active_) {throw nav2_core::PlannerException("controller_inactive");}
+  stall_monitor_.reset();
   execution_->begin(authority, attempt, monotonicNow());
   owner_lease_.begin(authority, execution_->boot(), attempt, monotonicNow());
   path_published_ = false; goal_published_ = false; plan_valid_ = false;
@@ -548,6 +563,14 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
     if (!shadow_mode_) {
       if (execution_->faulted()) {throw nav2_core::PlannerException(execution_->fault());}
       if (!execution_->active()) {throw nav2_core::PlannerException("execution_not_current");}
+      const double now = monotonicNow();
+      if (detect_base_nonresponse_ && motion_odom_received_ > 0 && now - motion_odom_received_ <= .2) {
+        const bool permitted_output = final_output_nonzero_ &&
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - guard_status_.received_at).count() <= .2;
+        if (stall_monitor_.observe(now, permitted_output, motion_odom_stamp_,
+          motion_x_, motion_y_, motion_yaw_))
+        {throw nav2_core::PlannerException("base_command_no_odometry_progress");}
+      } else {stall_monitor_.reset();}
       const auto planning = execution_->plannerState();
       if (planning == "exhausted") {
         throw nav2_core::PlannerException("neupan_solver_recovery_exhausted");
@@ -955,6 +978,14 @@ void NeuPANController::guardStatusCallback(const std_msgs::msg::String::SharedPt
   }
   std::lock_guard<std::mutex> lock(mutex_);
   guard_status_ = std::move(candidate);
+  try {
+    const auto payload = nlohmann::json::parse(message->data);
+    const double linear = payload.at("output_linear_x").get<double>();
+    const double angular = payload.at("output_angular_z").get<double>();
+    final_output_nonzero_ = payload.value("authorization_state", "") == "ARMED" &&
+      std::isfinite(linear) && std::isfinite(angular) &&
+      (std::abs(linear) > .005 || std::abs(angular) > .005);
+  } catch (const std::exception &) {final_output_nonzero_ = false;}
 }
 
 void NeuPANController::localizationHealthCallback(const std_msgs::msg::String::SharedPtr message)

@@ -54,3 +54,10 @@ def test_owned_group_removes_child_after_leader_dies(tmp_path):
             group.stop(time.monotonic()+3,threading.Event())
             assert not group.members()
         finally:group.stop(time.monotonic()+3,threading.Event())
+
+
+def test_cancel_after_enable_cannot_report_success():
+    backend=Mock();transaction=RecoveryTransaction(backend)
+    backend.enable_idle.side_effect=lambda *args:transaction.cancelled.set()
+    assert not transaction.run()[0]
+    backend.abort.assert_called_once()

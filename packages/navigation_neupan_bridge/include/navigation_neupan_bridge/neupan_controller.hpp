@@ -6,6 +6,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include "r1_neupan_runtime/stall_monitor.hpp"
 #include <string>
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -109,6 +110,10 @@ private:
     std::chrono::steady_clock::time_point received_at{};
   };
 
+  r1_neupan_runtime::StallMonitor stall_monitor_;
+  double motion_odom_stamp_{0}, motion_odom_received_{0}, motion_x_{0}, motion_y_{0}, motion_yaw_{0};
+  bool final_output_nonzero_{false};
+  bool detect_base_nonresponse_{true};
   struct GuardStatus
   {
     std::string state;

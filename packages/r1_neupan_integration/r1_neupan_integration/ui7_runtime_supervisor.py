@@ -20,8 +20,8 @@ from r1_neupan_integration.runtime_recovery import RecoveryTransaction, OwnedPro
 
 
 class Supervisor(Node):
-    def __init__(self):
-        super().__init__('ui7_runtime_supervisor')
+    def __init__(self, **node_arguments):
+        super().__init__('ui7_runtime_supervisor', **node_arguments)
         self.group=ReentrantCallbackGroup();self.data_lock=threading.Lock();self.rows={}
         self.logs=[];self.runtime=None;self.rebuilding=False;self.closing=threading.Event()
         self.transaction=RecoveryTransaction(self,timeout=45.)
@@ -45,7 +45,7 @@ class Supervisor(Node):
                           ('controller','/neupan_controller_status'),('localization','/r1_localization_health')]:
             sub(String,topic,key,True)
         sub(Twist,self.values['cmd_vel_out_topic'],'output');sub(Odometry,'/odom','odom')
-        sub(LaserScan,'/scan_neupan' if self.values['use_mesh_self_filter']=='true' else '/scan_neupan','scan')
+        sub(LaserScan,'/scan_neupan_mesh_shadow' if self.values['use_mesh_self_filter']=='true' else '/scan_neupan','scan')
         sub(PolygonStamped,'/r1_arm_footprint','footprint')
         self.clients={key:self.create_client(Trigger,topic,callback_group=self.group) for key,topic in
                       [('controller','/neupan_controller/revoke_uncertain_execution'),
@@ -62,7 +62,9 @@ class Supervisor(Node):
             monotonic=time.monotonic()))))
 
     def recover(self,request,response):
-        response.success,response.message=self.transaction.run();return response
+        response.success,response.message=self.transaction.run()
+        if response.success:self.rebuilding=False
+        return response
 
     def cancel(self,request,response):
         self.transaction.cancelled.set();response.success=True;response.message='cancellation_requested';return response
@@ -182,7 +184,6 @@ class Supervisor(Node):
         self.verify_stopped(deadline,cancel)
         with self.data_lock:
             if self.rows['controller'][1].get('execution_active'):raise RuntimeError('unexpected_new_goal_during_recovery')
-        self.rebuilding=False
 
     def abort(self):
         if self.rebuilding and self.runtime is not None:
