@@ -14,7 +14,13 @@ from std_msgs.msg import String
 from std_srvs.srv import Trigger
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.action import ActionClient
+from rclpy.node import Node
+from nav_msgs.msg import Odometry
+from unittest.mock import Mock
 from nav2_msgs.action import FollowPath
+if os.environ.get('NEUPAN_DEVELOPMENT_SUPERVISOR')=='1':
+    import r1_neupan_integration
+    r1_neupan_integration.__path__.insert(0,str(Path(__file__).resolve().parents[2]/'r1_neupan_integration/r1_neupan_integration'))
 from r1_neupan_integration.ui7_runtime_supervisor import Supervisor
 from r1_neupan_integration.runtime_recovery import OwnedProcessGroup
 from failstop_restart_ros import PartialRestart
@@ -58,7 +64,7 @@ class ManagedRecovery(PartialRestart):
                '/r1_arm_footprint':'footprint','/r1_localization_health':'localization',
                '/neupan_worker_health':'health','/neupan_controller_status':'diagnostics',
                '/r1_collision_guard/status':'status','/neupan_controller/arm':'arm',
-               '/neupan_controller/revoke_uncertain_execution':'revoke',
+
                '/r1_collision_guard/stop_for_recovery':'guard_stop',
                '/neupan_runtime/recover':'recover','/neupan_runtime/cancel_recovery':'cancel_recovery'}
         args=['--ros-args','-p','report_dir:='+str(self.report/'supervisor')]
@@ -69,6 +75,19 @@ class ManagedRecovery(PartialRestart):
         self.supervisor_executor=MultiThreadedExecutor(num_threads=4);self.supervisor_executor.add_node(self.supervisor)
         self.supervisor_thread=threading.Thread(target=self.supervisor_executor.spin);self.supervisor_thread.start()
         self.addCleanup(self.stop_supervisor)
+        # Sensor production must stay independent of service/lifecycle waits,
+        # matching physical odometry instead of making freshness test-load dependent.
+        self.sensor_peer=Node('managed_recovery_odometry_peer')
+        self.sensor_odom=self.sensor_peer.create_publisher(Odometry,chain.PREFIX+'odom',10)
+        self.pubs['odom']=Mock()
+        self.sensor_stop=threading.Event()
+        def odometry():
+            while not self.sensor_stop.is_set():
+                msg=Odometry();msg.header.frame_id='odom';msg.child_frame_id='base_link'
+                msg.header.stamp=self.sensor_peer.get_clock().now().to_msg()
+                msg.pose.pose.orientation.w=1.;msg.pose.pose.position.x=self.position
+                self.sensor_odom.publish(msg);self.sensor_stop.wait(.02)
+        self.sensor_thread=threading.Thread(target=odometry);self.sensor_thread.start()
         self.extra_pubs=dict(localization=self.node.create_publisher(String,chain.PREFIX+'localization',10),
                              footprint=self.node.create_publisher(PolygonStamped,chain.PREFIX+'footprint',10))
         self.activate_restarted('velocity_smoother');self.activate_restarted('controller_server')
@@ -84,6 +103,8 @@ class ManagedRecovery(PartialRestart):
         self.extra_pubs['footprint'].publish(msg)
 
     def stop_supervisor(self):
+        if hasattr(self,'sensor_stop'):
+            self.sensor_stop.set();self.sensor_thread.join(timeout=1);self.sensor_peer.destroy_node()
         self.supervisor.transaction.cancelled.set()
         self.supervisor.close()
         self.supervisor_executor.shutdown(timeout_sec=3)
@@ -94,13 +115,22 @@ class ManagedRecovery(PartialRestart):
         self.until(lambda:any(v>.04 for _,v,w in self.outputs) or result.done(),50)
         self.assertFalse(result.done())
         old=dict(self.context);old_group=self.supervisor.runtime
-        self.publish('inject',{'fault':'worker_crash'})
+        if self._testMethodName=='test_dead_guard_rebuild_waits_new_goal':
+            matches=[]
+            for pid in old_group.members():
+                try:args=(Path('/proc')/str(pid)/'cmdline').read_bytes().split(b'\0')
+                except FileNotFoundError:continue
+                if args and args[0].decode()==str(chain.GUARD):matches.append(pid)
+            self.assertEqual(len(matches),1)
+            os.kill(matches[0],signal.SIGKILL)
+        else:self.publish('inject',{'fault':'worker_crash'})
         self.assertEqual(self.future(result).status,GoalStatus.STATUS_ABORTED)
         client=self.node.create_client(Trigger,chain.PREFIX+'recover');self.until(client.service_is_ready)
         future=client.call_async(Trigger.Request())
         # Existing lifecycle helper in production performs these transitions.
         # The isolated fixture supplies equivalent activation explicitly.
-        self.until(lambda:self.supervisor.transaction.phase in ('verify_new_idle','failed:start_new'),10)
+        self.until(lambda:self.supervisor.transaction.phase=='verify_new_idle' or future.done(),10)
+        if future.done():self.assertTrue(future.result().success,future.result().message)
         self.activate_restarted('velocity_smoother');self.activate_restarted('controller_server')
         answer=self.future(future,40)
         self.assertTrue(answer.success,answer.message)
@@ -118,5 +148,10 @@ class ManagedRecovery(PartialRestart):
             no_old_goal_resume=True,physical_motion=False),indent=2))
 
 
+    def test_dead_guard_rebuild_waits_new_goal(self):
+        self.test_fault_rebuild_waits_new_goal()
+
+
 def load_tests(loader,tests,pattern):
-    return unittest.TestSuite([ManagedRecovery('test_fault_rebuild_waits_new_goal')])
+    return unittest.TestSuite(ManagedRecovery(name) for name in
+        ['test_fault_rebuild_waits_new_goal','test_dead_guard_rebuild_waits_new_goal'])

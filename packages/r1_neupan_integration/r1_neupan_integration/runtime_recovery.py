@@ -88,3 +88,4 @@ class OwnedProcessGroup:
             while self.members() and time.monotonic()<end:time.sleep(.02)
         if self.process is not None:self.process.poll()
         if self.members():raise RuntimeError('old_processes_did_not_exit')
+        self.group=None

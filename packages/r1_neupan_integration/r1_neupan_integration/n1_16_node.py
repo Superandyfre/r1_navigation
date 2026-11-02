@@ -957,7 +957,8 @@ class N116Node(N115Node):
             except RecoverableSolveError as exc:
                 with self.state_lock:
                     # An old solve cannot put a replacement execution into retry.
-                    if self._require_execution_context and self._execution_store.active != execution_context:
+                    if self._require_execution_context and (self._execution_store.active is None or
+                            self._execution_store.active.identity != execution_context.identity):
                         self._publish_failsafe_stop()
                         return
                     exhausted = self._solve_budget.failure()
@@ -965,7 +966,10 @@ class N116Node(N115Node):
                 self._publish_failsafe_stop()
                 self._publish_worker_health()
                 self._status("solver_recovery_exhausted" if exhausted else "solver_retry",
-                             str(exc), request_id=exc.request_id)
+                             str(exc), request_id=exc.request_id,
+                             failures_used=self._solve_budget.used,
+                             retry_limit=self._solve_budget.limit,
+                             recovery_seconds_limit=self._solve_budget.seconds)
                 return
             except BridgeProtocolError as exc:
                 self._handle_fatal_error(exc.code, str(exc))

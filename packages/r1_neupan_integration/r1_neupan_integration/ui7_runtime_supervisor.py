@@ -24,6 +24,7 @@ class Supervisor(Node):
         super().__init__('ui7_runtime_supervisor', **node_arguments)
         self.group=ReentrantCallbackGroup();self.data_lock=threading.Lock();self.rows={}
         self.logs=[];self.runtime=None;self.rebuilding=False;self.closing=threading.Event()
+        self.recovery_zero=False
         self.transaction=RecoveryTransaction(self,timeout=45.)
         parameters=dict(calibration_record='',scan_source='dual',use_mesh_self_filter='true',
                         mesh_projection_margin_m='0.06',command_profile='smoothed',cmd_vel_out_topic='/cmd_vel',
@@ -47,23 +48,26 @@ class Supervisor(Node):
         sub(Twist,self.values['cmd_vel_out_topic'],'output');sub(Odometry,'/odom','odom')
         sub(LaserScan,'/scan_neupan_mesh_shadow' if self.values['use_mesh_self_filter']=='true' else '/scan_neupan','scan')
         sub(PolygonStamped,'/r1_arm_footprint','footprint')
-        self.clients={key:self.create_client(Trigger,topic,callback_group=self.group) for key,topic in
+        self.recovery_clients={key:self.create_client(Trigger,topic,callback_group=self.group) for key,topic in
                       [('controller','/neupan_controller/revoke_uncertain_execution'),
                        ('guard','/r1_collision_guard/stop_for_recovery'),('arm','/neupan_controller/arm')]}
         self.recover_service=self.create_service(Trigger,'/neupan_runtime/recover',self.recover,callback_group=self.group)
         self.cancel_service=self.create_service(Trigger,'/neupan_runtime/cancel_recovery',self.cancel,callback_group=self.group)
+        self.zero_pub=self.create_publisher(Twist,self.values['cmd_vel_out_topic'],10)
         self.status_pub=self.create_publisher(String,'/neupan_runtime/recovery_status',10)
         self.timer=self.create_timer(.1,self.status,callback_group=self.group)
         self.launch_runtime(auto_arm=True)
 
     def status(self):
+        if self.recovery_zero:self.zero_pub.publish(Twist())
         self.status_pub.publish(String(data=json.dumps(dict(schema='r1_runtime_recovery_v1',
-            phase=self.transaction.phase,runtime_alive=bool(self.runtime and self.runtime.members()),
+            phase=self.transaction.phase,runtime_leader_alive=bool(self.runtime and self.runtime.process.poll() is None),
             monotonic=time.monotonic()))))
 
     def recover(self,request,response):
         response.success,response.message=self.transaction.run()
-        if response.success:self.rebuilding=False
+        if response.success:
+            self.rebuilding=False;self.recovery_zero=False
         return response
 
     def cancel(self,request,response):
@@ -77,7 +81,7 @@ class Supervisor(Node):
             time.sleep(.02)
 
     def call(self,key,deadline,cancel):
-        client=self.clients[key];end=min(deadline,time.monotonic()+1.)
+        client=self.recovery_clients[key];end=min(deadline,time.monotonic()+1.)
         self.wait(client.service_is_ready,end,cancel)
         future=client.call_async(Trigger.Request());self.wait(future.done,end,cancel)
         if not future.result().success:raise RuntimeError('deny:'+key+':'+future.result().message)
@@ -104,6 +108,10 @@ class Supervisor(Node):
             except RuntimeError:
                 if cancel.is_set():raise
         if not successes:raise RuntimeError('no_independent_revoke_ack')
+        # Independent deny-only final output also covers an already dead Guard.
+        # Fresh stopped odometry remains mandatory before any process rebuild.
+        self.recovery_zero=True
+        self.zero_pub.publish(Twist())
 
     def stopped(self):
         now=time.monotonic()
@@ -130,7 +138,15 @@ class Supervisor(Node):
             previous=stamp
             if since is None:since=time.monotonic()
             return time.monotonic()-since>=.3
-        self.wait(stable,min(deadline,time.monotonic()+3.),cancel)
+        try:self.wait(stable,min(deadline,time.monotonic()+3.),cancel)
+        except RuntimeError:
+            with self.data_lock:
+                t,odom=self.rows.get('odom',(0,None));out_t,out=self.rows.get('output',(0,None))
+                debug=dict(now=time.monotonic(),odom_received=t,output_received=out_t,
+                           odom=str(odom),output=str(out),ros_now=self.get_clock().now().nanoseconds,
+                           since=since,previous=previous)
+            (self.report/'stopped-failure.json').write_text(json.dumps(debug,indent=2))
+            raise
 
     def save_evidence(self,deadline,cancel):
         with self.data_lock:rows={key:dict(received=t,payload=row) for key,(t,row) in self.rows.items() if isinstance(row,dict)}
