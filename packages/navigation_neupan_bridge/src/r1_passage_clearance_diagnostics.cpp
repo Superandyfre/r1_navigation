@@ -23,7 +23,7 @@
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "visualization_msgs/msg/marker_array.hpp"
-#include "navigation_neupan_bridge/passage_clearance_state.hpp"
+#include "navigation_neupan_bridge/scan_side_clearance.hpp"
 
 namespace
 {
@@ -57,8 +57,11 @@ public:
     clearance_m_ = declare_parameter<double>("planning_clearance_m", 0.15);
     probe_distance_m_ = declare_parameter<double>("probe_distance_m", 0.45);
     probe_half_width_m_ = declare_parameter<double>("probe_half_width_m", 0.35);
+    input_timeout_sec_ = declare_parameter<double>("input_timeout_sec", 2.0);
     publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 5.0);
-    if (clearance_m_ < 0.0 || probe_distance_m_ < 0.0 || probe_half_width_m_ <= 0.0 ||
+    if (!std::isfinite(clearance_m_) || !std::isfinite(probe_distance_m_) ||
+      !std::isfinite(probe_half_width_m_) || !std::isfinite(publish_rate_hz_) ||
+      !std::isfinite(input_timeout_sec_) || input_timeout_sec_ <= 0.0 || clearance_m_ < 0.0 || probe_distance_m_ < 0.0 || probe_half_width_m_ <= 0.0 ||
       publish_rate_hz_ <= 0.0)
     {
       throw std::invalid_argument("passage diagnostic parameters must be nonnegative and finite");
@@ -95,7 +98,8 @@ private:
   bool transformPoint(const geometry_msgs::msg::Point & source, const std::string & source_frame,
     Point2D * target) const
   {
-    if (source_frame.empty() || source_frame == base_frame_) {
+    if (source_frame.empty()) {return false;}
+    if (source_frame == base_frame_) {
       target->x = source.x;
       target->y = source.y;
       return finite(*target);
@@ -103,7 +107,7 @@ private:
     try {
       geometry_msgs::msg::Point transformed;
       tf2::doTransform(source, transformed,
-        tf_buffer_.lookupTransform(base_frame_, source_frame, tf2::TimePointZero));
+        tf_buffer_.lookupTransform(base_frame_, source_frame, measurement_time_));
       target->x = transformed.x;
       target->y = transformed.y;
       return finite(*target);
@@ -209,6 +213,14 @@ private:
       publishUnavailable("waiting_for_scan_path_or_footprint");
       return;
     }
+    const auto reference = now();
+    for (const auto & stamp : {scan->header.stamp, path->header.stamp, footprint->header.stamp}) {
+      const double age = (reference - rclcpp::Time(stamp)).seconds();
+      if (rclcpp::Time(stamp).nanoseconds() == 0 || age < -0.1 || age > input_timeout_sec_) {
+        publishUnavailable("stale_or_invalid_input_stamp"); return;
+      }
+    }
+    measurement_time_ = rclcpp::Time(scan->header.stamp);
     Point2D tangent;
     if (!pathDirection(*path, &tangent)) {
       publishUnavailable("path_transform_or_direction_unavailable");
@@ -222,10 +234,16 @@ private:
     const Point2D normal{-tangent.y, tangent.x};
     double footprint_left = -std::numeric_limits<double>::infinity();
     double footprint_right = std::numeric_limits<double>::infinity();
+    std::vector<navigation_neupan_bridge::SidePoint> side_polygon, scan_points;
     std::vector<Point2D> footprint_points;
     footprint_points.reserve(footprint->polygon.points.size() + 1U);
     for (const auto & point : footprint->polygon.points) {
-      const Point2D local{point.x, point.y};
+      geometry_msgs::msg::Point source; source.x=point.x; source.y=point.y; source.z=point.z;
+      Point2D local;
+      if (!transformPoint(source, footprint->header.frame_id, &local)) {
+        publishUnavailable("footprint_transform_unavailable"); return;
+      }
+      side_polygon.push_back({local.x,local.y});
       footprint_points.push_back(local);
       const double lateral = local.x * normal.x + local.y * normal.y;
       footprint_left = std::max(footprint_left, lateral);
@@ -252,6 +270,7 @@ private:
         publishUnavailable("scan_transform_unavailable");
         return;
       }
+      scan_points.push_back({local.x,local.y});
       const double longitudinal = local.x * tangent.x + local.y * tangent.y;
       if (std::abs(longitudinal - probe_distance_m_) > probe_half_width_m_) {
         continue;
@@ -270,13 +289,11 @@ private:
     const double available_width = measured ? left_wall - right_wall : 0.0;
     const double left_clearance = measured ? left_wall - footprint_left : 0.0;
     const double right_clearance = measured ? footprint_right - right_wall : 0.0;
-    const std::string state = navigation_neupan_bridge::passageClearanceState(
-      measured, available_width, required_width,
-      left_clearance, right_clearance, clearance_m_);
-    const bool clear = state == "CLEAR";
-    const float red = clear ? 0.1F : 1.0F;
-    const float green = clear ? 1.0F : 0.15F;
-    const float blue = 0.1F;
+    const auto sides = navigation_neupan_bridge::sampledSideClearance(side_polygon,scan_points);
+    // Projection extrema from different scan locations are not fitted walls.
+    // Do not classify traversability or call these robot left/right gaps.
+    const std::string state = "PROJECTION_ONLY";
+    const float red=0.8F, green=0.8F, blue=0.2F;
 
     visualization_msgs::msg::MarkerArray markers;
     addLine(&markers, 0, footprint_points, 1.0F, 0.85F, 0.0F, 0.035F);
@@ -290,9 +307,9 @@ private:
     addLine(&markers, 2, {{0.0, 0.0}, {tangent.x * 0.6, tangent.y * 0.6}}, 0.2F, 0.7F, 1.0F, 0.025F);
 
     std::ostringstream label;
-    label << std::fixed << std::setprecision(2) << state << "  required=" << required_width << "m";
+    label << std::fixed << std::setprecision(2) << state << "  projected_required=" << required_width << "m";
     if (measured) {
-      label << "  L=" << left_clearance << "m R=" << right_clearance << "m";
+      label << "  route_margin_L=" << left_clearance << "m route_margin_R=" << right_clearance << "m";
     }
     addText(&markers, label.str(), red, green, blue);
     marker_pub_->publish(markers);
@@ -300,30 +317,35 @@ private:
     std_msgs::msg::String status;
     std::ostringstream json;
     json << std::fixed << std::setprecision(4)
-         << "{\"schema\":\"r1_passage_clearance_v1\",\"state\":\"" << state
-         << "\",\"footprint_width_m\":" << footprint_width
+         << "{\"schema\":\"r1_passage_clearance_v2\",\"state\":\"" << state
+         << "\",\"diagnostic_only\":true,\"projection_axis\":\"path_tangent\",\"footprint_width_m\":" << footprint_width
          << ",\"planning_clearance_m\":" << clearance_m_
          << ",\"required_width_m\":" << required_width
-         << ",\"available_width_m\":";
+         << ",\"route_projected_span_m\":";
     if (measured) {
       json << available_width;
     } else {
       json << "null";
     }
-    json << ",\"left_clearance_m\":";
+    json << ",\"route_projected_left_margin_m\":";
     if (measured) {
       json << left_clearance;
     } else {
       json << "null";
     }
-    json << ",\"right_clearance_m\":";
+    json << ",\"route_projected_right_margin_m\":";
     if (measured) {
       json << right_clearance;
     } else {
       json << "null";
     }
     json << ",\"probe_distance_m\":" << probe_distance_m_
-         << ",\"probe_half_width_m\":" << probe_half_width_m_ << "}";
+         << ",\"probe_half_width_m\":" << probe_half_width_m_;
+    json << ",\"robot_side_sample_axis\":\"base_link_y_at_same_x\",\"robot_left_sampled_margin_m\":";
+    if (sides.left_samples) {json << sides.left;} else {json << "null";}
+    json << ",\"robot_right_sampled_margin_m\":";
+    if (sides.right_samples) {json << sides.right;} else {json << "null";}
+    json << ",\"left_samples\":" << sides.left_samples << ",\"right_samples\":" << sides.right_samples << "}";
     status.data = json.str();
     status_pub_->publish(status);
   }
@@ -331,14 +353,19 @@ private:
   void publishUnavailable(const std::string & reason)
   {
     std_msgs::msg::String status;
-    status.data = "{\"schema\":\"r1_passage_clearance_v1\",\"state\":\"WAIT\",\"reason\":\"" + reason + "\"}";
+    status.data = "{\"schema\":\"r1_passage_clearance_v2\",\"state\":\"WAIT\",\"reason\":\"" + reason + "\"}";
     status_pub_->publish(status);
+    visualization_msgs::msg::MarkerArray markers;
+    visualization_msgs::msg::Marker clear; clear.action=visualization_msgs::msg::Marker::DELETEALL;
+    markers.markers.push_back(clear); marker_pub_->publish(markers);
   }
 
   std::string base_frame_;
   std::string scan_topic_;
   std::string path_topic_;
   std::string footprint_topic_;
+  rclcpp::Time measurement_time_{0,0,RCL_ROS_TIME};
+  double input_timeout_sec_{2.0};
   double clearance_m_{0.15};
   double probe_distance_m_{0.45};
   double probe_half_width_m_{0.12};
