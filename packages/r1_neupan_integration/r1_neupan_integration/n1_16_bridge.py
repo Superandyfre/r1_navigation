@@ -35,7 +35,9 @@ from r1_neupan_integration.n2_pre_semantics import (
 )
 
 
-N116_SCHEMA = 4.0
+from r1_neupan_integration.solver_status import RECOVERY_PROTOCOL, RecoverableSolveError
+
+N116_SCHEMA = 5.0
 DEFAULT_TIMEOUT_SEC = 0.25
 REQUIRED_OUTPUTS = {"action", "ref_state", "opt_state"}
 
@@ -95,6 +97,8 @@ class ProductionWholeCoreClient:
         self.samples: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self.status_counts: dict[str, int] = {}
+        self._execution_key = None
+        self._reset_solver_state = True
         self.request_id = 0
         self.requests_sent = 0
         self.requests_completed = 0
@@ -223,6 +227,8 @@ class ProductionWholeCoreClient:
                 raise BridgeProtocolError("worker_startup_failure", repr(self.ready))
             if int(self.ready.get("worker_generation", -1)) != int(self.worker_generation):
                 raise BridgeProtocolError("generation_mismatch", "READY generation mismatch")
+            if self.ready.get("recovery_protocol") != RECOVERY_PROTOCOL:
+                raise BridgeProtocolError("worker_protocol_mismatch", "solver recovery handshake mismatch")
             self.health.ready(self.worker_generation)
         except Exception as exc:
             code = exc.code if isinstance(exc, BridgeProtocolError) else "worker_startup_failure"
@@ -341,6 +347,7 @@ class ProductionWholeCoreClient:
         local_reference_id: int = 0,
         bypass_mode: bool = False,
         bypass_route_clear: bool = False,
+        execution_key: tuple | None = None,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         if self.health.fault is not None:
             raise BridgeProtocolError("worker_fault_latched", "full controlled restart required")
@@ -348,10 +355,14 @@ class ProductionWholeCoreClient:
             self._fail("bridge_closed", "bridge is closed")
         if self._quarantined or self.process is None or not self.process.is_alive():
             self._fail("worker_crash", "worker is not alive; no fallback is permitted")
+        if execution_key != self._execution_key:
+            self._execution_key = execution_key
+            self._reset_solver_state = True
         self.request_id += 1
         request_id = self.request_id
         request = {
             "type": "solve",
+            "reset_solver_state": self._reset_solver_state,
             "request_id": request_id,
             "cycle_id": int(cycle_id),
             "scan_counter": int(scan_counter),
@@ -441,12 +452,27 @@ class ProductionWholeCoreClient:
                 actual_code = "stale_response" if stale else code
                 self._fail(actual_code, f"{field} expected {expected}, got {actual}",
                            request_id=request_id, expected=expected, actual=actual)
-        if response.get("status") != "return-success":
-            self._fail("worker_response_failure", str(response.get("exception")), request_id=request_id)
+        if response.get("recovery_protocol") != RECOVERY_PROTOCOL:
+            self._fail("worker_protocol_mismatch", "solver recovery response mismatch", request_id=request_id)
         worker_sequence = int(response.get("worker_sequence", -1))
         if worker_sequence <= self._last_worker_sequence:
             self._fail("stale_response", "worker sequence did not advance", request_id=request_id)
         self._last_worker_sequence = worker_sequence
+        if response.get("status") == "recoverable_solver_failure":
+            evidence = response.get("solver_failure")
+            if (not isinstance(evidence, dict) or evidence.get("exitFlag") != -1
+                    or not all(isinstance(evidence.get(k), (int, float))
+                               and np.isfinite(evidence[k]) for k in ("pres", "dres", "gap", "iter"))
+                    or response.get("outputs") != {} or response.get("finite") is not False):
+                self._fail("malformed_response", "invalid numerical failure evidence", request_id=request_id)
+            self._reset_solver_state = True
+            self.requests_completed += 1
+            self._safe_event("recoverable_solver_failure", str(response.get("exception")),
+                             request_id=request_id, solver_failure=evidence)
+            raise RecoverableSolveError(str(response.get("exception")), request_id)
+        if response.get("status") != "return-success":
+            self._fail("worker_response_failure", str(response.get("exception")), request_id=request_id)
+        self._reset_solver_state = False
         if not response.get("finite"):
             self._fail("nan_inf", "worker marked response non-finite", request_id=request_id)
         packed = response.get("outputs")

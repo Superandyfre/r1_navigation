@@ -881,7 +881,7 @@ private:
       if (command_epoch != command_epoch_) {return;}
       payload.update(nlohmann::json{
         {"authorization_protocol", "r1_neupan_motion_grant_v1"},
-        {"source_protocol", "r1_neupan_planner_source_v2"}, {"build_revision", R1_FAILSTOP_BUILD_REVISION},
+        {"health_protocol", r1_neupan_runtime::kHealthSchema}, {"source_protocol", "r1_neupan_planner_source_v2"}, {"build_revision", R1_FAILSTOP_BUILD_REVISION},
         {"command_barrier_ready", command_barrier_.ready(monotonicNow(),
           source_command_timeout_sec_, command_timeout_sec_)},
         {"sequence", ++status_sequence_}, {"monotonic", monotonicNow()},

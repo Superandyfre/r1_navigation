@@ -131,6 +131,23 @@ public:
 
   BT::NodeStatus tick() override
   {
+    Pose task; Goals tasks;
+    const bool one = bool(getInput("navigation_goal", task));
+    const bool many = bool(getInput("navigation_goals", tasks));
+    if (one != budget_one_ || many != budget_many_ ||
+      (one && task != budget_parent_) || (many && tasks != budget_parents_))
+    {
+      budget_one_ = one; budget_many_ = many; budget_parent_ = task; budget_parents_ = tasks;
+      task_failures_ = 0; recovery_deadline_.reset();
+    }
+    // This object survives FollowPath halts/replacements within the BT task.
+    // Route revisions never reset the parent request budget.
+    if (task_failures_ >= 2 || (status() != BT::NodeStatus::RUNNING && recovery_deadline_ &&
+      std::chrono::steady_clock::now() >= *recovery_deadline_))
+    {
+      if (status() == BT::NodeStatus::RUNNING) {halt();}
+      return BT::NodeStatus::FAILURE;
+    }
     const auto pending = future_goal_handle_;
     const auto status = FollowPathAction::tick();
     if (update_failed_) {
@@ -162,6 +179,14 @@ public:
       future_goal_handle_ = pending;
       revokeUncertain();
     }
+    if (status == BT::NodeStatus::FAILURE) {
+      ++task_failures_;
+      if (!recovery_deadline_) {
+        recovery_deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+      }
+    } else if (status == BT::NodeStatus::SUCCESS) {
+      recovery_deadline_.reset();
+    }
     return status;
   }
 
@@ -173,6 +198,11 @@ public:
   }
 
 private:
+  Pose budget_parent_;
+  Goals budget_parents_;
+  bool budget_one_{false}, budget_many_{false};
+  unsigned task_failures_{0};
+  std::optional<std::chrono::steady_clock::time_point> recovery_deadline_;
   void readParent()
   {
     has_parent_ = bool(getInput("navigation_goal", parent_));

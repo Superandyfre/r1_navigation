@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 
-HEALTH_SCHEMA = 'r1_neupan_worker_health_v1'
+HEALTH_SCHEMA = 'r1_neupan_worker_health_v2'
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,8 @@ class WorkerHealth:
         self._goal_version = -1
         self._last_success = -1
         self._attempt = None
+        self._planner_state = "ready"
+        self._planner_failed_request = -1
 
     @property
     def fault(self) -> FatalFault | None:
@@ -53,6 +55,8 @@ class WorkerHealth:
     def bind_execution(self, attempt: str | None, generation: int, path: int, goal: int) -> None:
         with self._lock:
             if self._fault is None:
+                if attempt != self._attempt:
+                    self._planner_state = "ready"
                 self._attempt = attempt
                 self._generation = generation
                 self._path_version = path
@@ -68,6 +72,13 @@ class WorkerHealth:
         with self._lock:
             if self._fault is None and self._state != 'SHUTTING_DOWN':
                 self._last_success = int(request_id)
+                self._planner_state = "ready"
+
+    def planning_failure(self, request_id: int, exhausted: bool) -> None:
+        with self._lock:
+            if self._fault is None:
+                self._planner_state = "exhausted" if exhausted else "retry"
+                self._planner_failed_request = max(self._planner_failed_request, int(request_id))
 
     def latch(self, code: str, generation: int, request_id: int = -1) -> FatalFault:
         with self._lock:
@@ -100,6 +111,8 @@ class WorkerHealth:
                 'path_version': fault.path_version if fault else self._path_version,
                 'goal_version': fault.goal_version if fault else self._goal_version,
                 'last_successful_request_id': self._last_success,
+                'planner_state': self._planner_state,
+                'planner_failed_request_id': self._planner_failed_request,
                 'fault_id': fault.fault_id if fault else None,
                 'fault_code': fault.code if fault else None,
                 'failed_request_id': fault.failed_request_id if fault else None,

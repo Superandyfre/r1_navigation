@@ -262,7 +262,7 @@ class FailstopChainROS(unittest.TestCase):
             scan.range_min=.05;scan.range_max=8.;scan.ranges=[7.]*315;self.pubs['scan'].publish(scan)
             if self.source_enabled:self.pubs['worker_scan'].publish(scan)
             active=self.context is not None and self.context['state']=='ACTIVE'
-            health=dict(schema='r1_neupan_worker_health_v1',boot_id='synthetic-worker',worker_generation=1,
+            health=dict(schema='r1_neupan_worker_health_v2',planner_state='ready',planner_failed_request_id=-1,boot_id='synthetic-worker',worker_generation=1,
                 sequence=self.sequence,monotonic=now,state='FAULT_LATCHED' if self.fatal else ('RUNNING' if active else 'STARTING'),
                 navigation_attempt_id=self.context['navigation_attempt_id'] if self.context else None,
                 path_version=self.context['path_version'] if self.context else 0,

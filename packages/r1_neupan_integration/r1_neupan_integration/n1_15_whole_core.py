@@ -931,6 +931,9 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
         if ecos_sampler is not None:
             ecos_sampler.set_phase("warmup")
         import torch
+        from r1_neupan_integration.solver_status import EcosOutcome, RECOVERY_PROTOCOL
+        ecos_outcome = EcosOutcome()
+        ecos_outcome.install()
 
         warmup_rows = []
         warmup_state = _unpack_array(spec["warmup_state"])
@@ -940,8 +943,17 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
         for sequence in range(int(spec["warmup_count"])):
             started_wall = time.perf_counter_ns()
             started_cpu = time.process_time_ns()
-            with torch.set_grad_enabled(True):
-                planner(warmup_state, warmup_points)
+            ecos_outcome.begin()
+            try:
+                with torch.set_grad_enabled(True):
+                    planner(warmup_state, warmup_points)
+            except Exception as exc:
+                if not ecos_outcome.numerical_failure(exc):
+                    raise
+                # Warmup is not an executable plan. Stop warmup and reset;
+                # the first online request must produce its own valid result.
+                warmup_rows.append({"sequence": sequence, "solver_failure": dict(ecos_outcome.info)})
+                break
             warmup_rows.append({
                 "sequence": sequence,
                 "wall_ms": (time.perf_counter_ns() - started_wall) / 1_000_000.0,
@@ -967,6 +979,7 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
         conn.send_bytes(pickle.dumps({
             "type": "ready",
             "status": "READY",
+            "recovery_protocol": RECOVERY_PROTOCOL,
             "pid": os.getpid(),
             "worker_generation": worker_generation,
             "start_method": "spawn",
@@ -1034,6 +1047,8 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
             ):
                 fault_injected = True
                 os._exit(42)
+            if request.get("reset_solver_state", False):
+                _reset_planner_state(planner)
             requested_path_version = int(request.get("path_version", path_version))
             requested_goal_version = int(request.get("goal_version", -1))
             requested_goal = (_unpack_array(request["goal"])
@@ -1106,6 +1121,8 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
             action = None
             info = getattr(planner, "info", {})
             recorder.begin(request, planner, state, points)
+            ecos_outcome.begin()
+            solver_failure = None
             try:
                 with torch.set_grad_enabled(True):
                     action, info = planner(
@@ -1118,6 +1135,10 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
             except Exception as exc:
                 status = "exception"
                 exception = f"{type(exc).__name__}: {exc}"
+                if ecos_outcome.numerical_failure(exc):
+                    status = "recoverable_solver_failure"
+                    solver_failure = {k: ecos_outcome.info[k] for k in ("exitFlag", "pres", "dres", "gap", "iter")}
+                    _reset_planner_state(planner)
             core_wall_finished = time.perf_counter_ns()
             core_cpu_finished = time.process_time_ns()
             core_finished_monotonic = time.monotonic()
@@ -1138,6 +1159,8 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                 "scan_stamp_sec": float(request.get("scan_stamp_sec", -1.0)),
                 "status": status,
                 "exception": exception,
+                "recovery_protocol": RECOVERY_PROTOCOL,
+                "solver_failure": solver_failure,
                 "finite": finite,
                 "outputs": packed,
                 "info": {

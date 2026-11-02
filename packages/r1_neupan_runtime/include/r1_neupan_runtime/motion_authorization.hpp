@@ -18,7 +18,7 @@
 namespace r1_neupan_runtime
 {
 using Json = nlohmann::json;
-inline constexpr char kHealthSchema[] = "r1_neupan_worker_health_v1";
+inline constexpr char kHealthSchema[] = "r1_neupan_worker_health_v2";
 inline constexpr char kSourceSchema[] = "r1_neupan_planner_source_v2";
 inline constexpr char kGrantSchema[] = "r1_neupan_motion_grant_v1";
 
@@ -187,6 +187,11 @@ public:
         failed_worker_boots_.insert(boot);
         if (ever_prepared_) {latch("worker_fault_latched"); return;}
       } else if (failed_worker_boots_.count(boot)) {return;}
+      const auto planner_state = requiredString(j, "planner_state");
+      if (planner_state != "ready" && planner_state != "retry" && planner_state != "exhausted") {
+        throw std::runtime_error("invalid_planner_state");
+      }
+      requiredInt(j, "planner_failed_request_id", -1);
       health_payload_ = j;
       health_boot_ = boot;
       health_generation_ = generation;
@@ -305,7 +310,12 @@ public:
     if (source_stale_since_ && now - *source_stale_since_ > config_.recovery_timeout) {
       latch("planner_result_recovery_timeout"); return evaluate(now);
     }
-    if (!freshSource(now)) {
+    // A failed solve revokes even a still-fresh previous nonzero result.
+    // Health never renews a source. Clearing retry still requires a result
+    // newer than the failed request, with the current route/attempt identity.
+    const bool planning_failed = health_payload_.value("planner_state", "ready") != "ready" ||
+      (source_ && source_->request <= health_payload_.value("planner_failed_request_id", -1LL));
+    if (planning_failed || !freshSource(now)) {
       if (committed_ && !source_stale_since_) {source_stale_since_ = now;}
       return {false, false, "SOURCE_STALE_HOLD", "planner_result_stale"};
     }

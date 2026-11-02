@@ -11,7 +11,7 @@ Json context()
 }
 Json health(double now = 100., int sequence = 1)
 {
-  return {{"schema", kHealthSchema}, {"boot_id", "worker-a"}, {"sequence", sequence},
+  return {{"schema", kHealthSchema}, {"planner_state", "ready"}, {"planner_failed_request_id", -1}, {"boot_id", "worker-a"}, {"sequence", sequence},
     {"worker_generation", 7}, {"navigation_attempt_id", "attempt-a"},
     {"state", "RUNNING"}, {"monotonic", now}, {"fault_id", nullptr}, {"fault_code", nullptr}};
 }
@@ -269,4 +269,17 @@ TEST(SourceProtocolVectors, PythonProducerAndCppConsumerShareStrictContract) {
       EXPECT_THROW(parseSource(row.at("source"), row.at("received").get<double>()), std::exception);
     }
   }
+}
+
+TEST_F(Gate, NumericalFailureImmediatelyBlocksOldFreshNonzeroSource) {
+  armed();ASSERT_TRUE(gate.evaluate(100.).allowed);
+  auto failed = health(100.01,2);
+  failed["planner_state"]="retry";failed["planner_failed_request_id"]=2;
+  gate.health(failed,100.01);
+  EXPECT_FALSE(gate.evaluate(100.01).allowed);EXPECT_FALSE(gate.faulted());
+  auto ready=health(100.02,3);ready["planner_failed_request_id"]=2;
+  gate.health(ready,100.02);
+  EXPECT_FALSE(gate.evaluate(100.02).allowed);
+  gate.source(source(100.03,3),100.03);
+  EXPECT_TRUE(gate.evaluate(100.03).allowed);EXPECT_FALSE(gate.faulted());
 }

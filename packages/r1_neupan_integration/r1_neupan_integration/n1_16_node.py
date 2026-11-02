@@ -34,6 +34,7 @@ from r1_neupan_integration.n1_16_bridge import (
     ProductionWholeCoreClient,
 )
 from r1_neupan_integration.n1_15_whole_core import same_terminal_pose
+from r1_neupan_integration.solver_status import RecoverableSolveError, SolveBudget
 from r1_neupan_integration.command_stabilizer import (
     BidirectionalCommandStabilizer,
     CommandStabilizerConfig,
@@ -240,6 +241,7 @@ class N116Node(N115Node):
                 "shadow_force_robot_tf_failure requires "
                 "shadow_tf_fault_injection_allowed=true"
             )
+        self._solve_budget = SolveBudget()
         self._freeze_planner_result = False
         self._active_request = False
         self._active_lock = threading.Lock()
@@ -657,6 +659,7 @@ class N116Node(N115Node):
                 if self.client.health.fault is not None:
                     return
                 self._execution_store = candidate
+                self._solve_budget.bind(context.identity if context is not None else None)
                 self.path_version += 1  # internal geometry epoch, not authority version
                 if context is None:
                     self.path_matrix = None
@@ -794,6 +797,11 @@ class N116Node(N115Node):
             with self.state_lock:
                 execution_context = self._execution_store.active if self._require_execution_context else None
                 if self._require_execution_context and execution_context is None:
+                    return
+                if self._solve_budget.expired():
+                    self.client.health.planning_failure(self.client.request_id, True)
+                    self._publish_worker_health()
+                    self._publish_failsafe_stop()
                     return
                 if self.path_matrix is None:
                     self._trace_wait_state("global_path", path_version=self.path_version)
@@ -941,10 +949,24 @@ class N116Node(N115Node):
                     local_reference_id=(
                         local_detour.identifier if local_detour is not None else 0
                     ),
+                    execution_key=execution_context.identity if execution_context is not None else None,
                     bypass_mode=bypass_requested,
                     bypass_route_clear=bool(
                         route_decision is not None and not route_decision.route_blocked),
                 )
+            except RecoverableSolveError as exc:
+                with self.state_lock:
+                    # An old solve cannot put a replacement execution into retry.
+                    if self._require_execution_context and self._execution_store.active != execution_context:
+                        self._publish_failsafe_stop()
+                        return
+                    exhausted = self._solve_budget.failure()
+                    self.client.health.planning_failure(exc.request_id, exhausted)
+                self._publish_failsafe_stop()
+                self._publish_worker_health()
+                self._status("solver_recovery_exhausted" if exhausted else "solver_retry",
+                             str(exc), request_id=exc.request_id)
+                return
             except BridgeProtocolError as exc:
                 self._handle_fatal_error(exc.code, str(exc))
                 return
@@ -961,6 +983,7 @@ class N116Node(N115Node):
                 self._publish_failsafe_stop()
                 return
 
+            self._solve_budget.success()
             # Classify the trajectory before any geometry runs. On a normal
             # arrive the core packs an empty opt_state; the >=3-state collision
             # helpers raise on that, and the exception used to escape run() and

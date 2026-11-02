@@ -28,7 +28,8 @@ public:
     try {
       requireSchema(j, "r1_collision_guard_status_v1");
       if (requiredString(j, "authorization_protocol") != kGrantSchema ||
-        requiredString(j, "source_protocol") != kSourceSchema)
+        requiredString(j, "source_protocol") != kSourceSchema ||
+        requiredString(j, "health_protocol") != kHealthSchema)
       {throw std::runtime_error("guard_protocol_mismatch");}
       const auto boot = requiredString(j, "guard_boot_id");
       const auto sequence = requiredInt(j, "sequence", 1);
@@ -220,6 +221,14 @@ public:
     if (fault_.empty()) {
       fault_ = reason; armed_ = false; monitor_.latch(reason);
     }
+  }
+  std::string plannerState() const
+  {
+    if (!active_ || health_payload_.is_null() ||
+      health_payload_.value("navigation_attempt_id", Json()) != attempt_ ||
+      health_payload_.value("path_version", -1LL) != path_ ||
+      health_payload_.value("goal_version", -1LL) != goal_) {return "ready";}
+    return health_payload_.value("planner_state", "ready");
   }
   bool retryAllowed(double now)
   {

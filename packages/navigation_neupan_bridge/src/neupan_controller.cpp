@@ -548,6 +548,15 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
     if (!shadow_mode_) {
       if (execution_->faulted()) {throw nav2_core::PlannerException(execution_->fault());}
       if (!execution_->active()) {throw nav2_core::PlannerException("execution_not_current");}
+      const auto planning = execution_->plannerState();
+      if (planning == "exhausted") {
+        throw nav2_core::PlannerException("neupan_solver_recovery_exhausted");
+      }
+      if (planning == "retry") {
+        geometry_msgs::msg::TwistStamped stopped;
+        stopped.header = pose.header; stopped.header.stamp = node_->now();
+        return stopped;
+      }
     }
     if (!plan_valid_) {
       throw nav2_core::PlannerException("NeuPAN path unavailable");

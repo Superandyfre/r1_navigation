@@ -117,7 +117,7 @@ class GuardAuthorizationROS(unittest.TestCase):
             self.pubs['scan'].publish(scan)
             if self.health_enabled:
                 self.health_seq+=1
-                self.publish_json('health',dict(schema='r1_neupan_worker_health_v1',boot_id=self.worker_boot,
+                self.publish_json('health',dict(schema='r1_neupan_worker_health_v2',planner_state='ready',planner_failed_request_id=-1,boot_id=self.worker_boot,
                     sequence=self.health_seq,state='RUNNING',worker_generation=self.generation,
                     navigation_attempt_id='attempt-a',monotonic=now,fault_id=None,fault_code=None))
             if self.source_enabled:
@@ -211,7 +211,7 @@ class GuardAuthorizationROS(unittest.TestCase):
 
     def test_fatal_wins_and_late_running_and_results_cannot_clear(self):
         now=time.monotonic();self.health_seq+=1
-        self.publish_json('health',dict(schema='r1_neupan_worker_health_v1',boot_id=self.worker_boot,
+        self.publish_json('health',dict(schema='r1_neupan_worker_health_v2',planner_state='ready',planner_failed_request_id=-1,boot_id=self.worker_boot,
             sequence=self.health_seq,state='FAULT_LATCHED',worker_generation=7,navigation_attempt_id='attempt-a',
             monotonic=now,fault_id='fault-a',fault_code='worker_response_failure'))
         self.assert_stopped('worker_fault_latched')

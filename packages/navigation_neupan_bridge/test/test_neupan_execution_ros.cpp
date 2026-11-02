@@ -85,7 +85,7 @@ TEST(NeuPANExecutionROS, RealCallbacksHandshakeThenFatalRetiresContext)
       const double now = monotonicNow();
       Json status{{"schema", "r1_collision_guard_status_v1"},
         {"authorization_protocol", r1_neupan_runtime::kGrantSchema},
-        {"source_protocol", r1_neupan_runtime::kSourceSchema}, {"guard_boot_id", "test-guard"},
+        {"health_protocol", r1_neupan_runtime::kHealthSchema}, {"source_protocol", r1_neupan_runtime::kSourceSchema}, {"guard_boot_id", "test-guard"},
         {"sequence", ++sequence}, {"monotonic", now}, {"authorization_state", "DISARMED"},
         {"physical_safety_state", "PASS"}, {"command_barrier_ready", true}, {"output_linear_x", 0.}, {"output_angular_z", 0.},
         {"state", "PASS"}, {"reason", "clear"}};
@@ -113,7 +113,7 @@ TEST(NeuPANExecutionROS, RealCallbacksHandshakeThenFatalRetiresContext)
           owner[key] = context.at(key);
         }
         publish(owner_pub, owner);
-        Json health{{"schema", r1_neupan_runtime::kHealthSchema}, {"boot_id", "test-worker"},
+        Json health{{"schema", r1_neupan_runtime::kHealthSchema}, {"planner_state", "ready"}, {"planner_failed_request_id", -1}, {"boot_id", "test-worker"},
           {"worker_generation", 1}, {"sequence", sequence}, {"monotonic", now},
           {"state", fatal ? "FAULT_LATCHED" : "RUNNING"},
           {"navigation_attempt_id", context.at("navigation_attempt_id")},

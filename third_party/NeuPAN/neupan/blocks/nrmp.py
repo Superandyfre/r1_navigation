@@ -308,6 +308,10 @@ class NRMP(torch.nn.Module):
         define the optimization problem
         """
 
+        # Uniform positive objective scaling preserves every minimizer and
+        # constraint. Avoid ECOS loss of accuracy with the 2000:0.05 cost
+        # coefficients observed in the field cone regression.
+        self.objective_scale = 0.1
         prob = self.construct_prob()
 
         self.nrmp_layer = to_device(
@@ -320,10 +324,10 @@ class NRMP(torch.nn.Module):
         dune_cost, dune_constraints = self.dune_cost_cons()
 
         if self.no_obs:
-            prob = cp.Problem(cp.Minimize(nav_cost), nav_constraints)
+            prob = cp.Problem(cp.Minimize(self.objective_scale * nav_cost), nav_constraints)
         else:
             prob = cp.Problem(
-                cp.Minimize(nav_cost + dune_cost), nav_constraints + dune_constraints
+                cp.Minimize(self.objective_scale * (nav_cost + dune_cost)), nav_constraints + dune_constraints
             )
 
         assert prob.is_dcp(dpp=True)

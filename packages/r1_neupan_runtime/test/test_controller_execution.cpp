@@ -6,7 +6,7 @@ namespace
 Json guard(double now = 100., int seq = 1, std::string state = "DISARMED", std::string grant = "")
 {
   return {{"schema", "r1_collision_guard_status_v1"}, {"authorization_protocol", kGrantSchema},
-    {"source_protocol", kSourceSchema}, {"guard_boot_id", "guard-a"}, {"sequence", seq},
+    {"health_protocol", kHealthSchema}, {"source_protocol", kSourceSchema}, {"guard_boot_id", "guard-a"}, {"sequence", seq},
     {"monotonic", now},
     {"authorization_state", state}, {"physical_safety_state", "PASS"},
     {"command_barrier_ready", true}, {"grant_id", grant},
@@ -19,7 +19,7 @@ Json health(
   double now = 100., int seq = 1, std::string attempt = "attempt-a", int path = 1,
   int goal = 0)
 {
-  return {{"schema", kHealthSchema}, {"boot_id", "worker-a"}, {"sequence", seq}, {"monotonic", now},
+  return {{"schema", kHealthSchema}, {"planner_state", "ready"}, {"planner_failed_request_id", -1}, {"boot_id", "worker-a"}, {"sequence", seq}, {"monotonic", now},
     {"state", "RUNNING"}, {"worker_generation", 7}, {"navigation_attempt_id", attempt},
     {"path_version", path}, {"goal_version", goal}};
 }
