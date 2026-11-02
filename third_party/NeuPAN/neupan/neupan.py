@@ -299,7 +299,13 @@ class neupan(torch.nn.Module):
                         self.bypass_lateral_scale if guide.phase == "side" else 1.0, True,
                         min_speed,
                     )
-                except SolverError:
+                except SolverError as error:
+                    # Proven infeasible candidates may be rejected locally.
+                    # Numerical/runtime errors must reach the Worker boundary;
+                    # it owns raw ECOS evidence and bounded retry semantics.
+                    if str(error) not in ("Solver ecos returned status Infeasible",
+                                          "Solver ecos returned status Infeasible Inaccurate"):
+                        raise
                     solver_failures += 1
                     self.info["bypass_candidates"].append(
                         {"phase": guide.phase, "side": guide.side, "reason": "solver_error"})

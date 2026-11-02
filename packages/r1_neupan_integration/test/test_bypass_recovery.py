@@ -100,6 +100,24 @@ class ActualSolverRecoveryTests(unittest.TestCase):
         self.assertFalse(info['stop'])
         self.assertGreater(float(action[0, 0]), .01)
 
+    def test_bypass_does_not_swallow_unclassified_solver_error(self):
+        from diffcp.cone_program import SolverError
+        from neupan import neupan
+        root = Path(__file__).resolve().parents[3]
+        config = yaml.safe_load((root/'packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml').read_text())
+        config['pan']['dune_checkpoint'] = str(root/'packages/r1_neupan_integration/config/models/dune_model_5000.pth')
+        config['ipath']['loop'] = False
+        core = neupan(**{k: v for k, v in config.items() if k not in ('robot', 'ipath', 'pan', 'adjust')},
+            robot_kwargs=config['robot'], ipath_kwargs=config['ipath'],
+            pan_kwargs=config['pan'], adjust_kwargs=config['adjust'])
+        core.update_initial_path_from_goal(np.zeros((3, 1)), np.array([[2.], [0.], [0.]]))
+        core.bypass_guide = BypassGuide(np.zeros(2), np.array([1., 0.]), 1, .5, .5,
+                                       np.array([2., 0., 0.]), phase='final')
+        with patch.object(core.pan, 'forward', side_effect=SolverError('Solver ecos errored.')):
+            with self.assertRaises(SolverError):
+                core(np.zeros((3, 1)), np.array([[0., 1., 2.], [2., 2., 2.]]),
+                     bypass_mode=True, bypass_route_clear=False)
+
 
 if __name__ == '__main__':
     unittest.main()
