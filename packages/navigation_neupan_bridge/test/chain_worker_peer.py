@@ -138,10 +138,24 @@ def main():
         def publish(self, message):
             if not source_paused.is_set():original_source_pub.publish(message)
     node.planner_result_pub=SourceGate()
+    remaining_diagnostic_failures = 0
+    original_semantic_pub = node.semantic_pub
+    class SemanticGate:
+        def publish(self, message):
+            nonlocal remaining_diagnostic_failures
+            if remaining_diagnostic_failures:
+                remaining_diagnostic_failures -= 1
+                raise ValueError('isolated diagnostic publication failure')
+            original_semantic_pub.publish(message)
+    node.semantic_pub = SemanticGate()
     ack=node.create_publisher(String,'/test_failstop_chain/inject_ack',20)
     def inject(msg):
-        nonlocal remaining_solver_failures
+        nonlocal remaining_solver_failures, remaining_diagnostic_failures
         request=json.loads(msg.data)
+        if 'diagnostic_failures' in request:
+            remaining_diagnostic_failures = int(request['diagnostic_failures'])
+            ack.publish(String(data=json.dumps(request)))
+            return
         if 'solver_failures' in request:
             remaining_solver_failures = int(request['solver_failures'])
             ack.publish(String(data=json.dumps(request)))

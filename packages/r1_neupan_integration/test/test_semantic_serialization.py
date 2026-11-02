@@ -2,11 +2,27 @@
 import json
 import unittest
 import numpy as np
-from r1_neupan_integration.n1_16_node import encode_semantic, deviation_diagnostic
+from r1_neupan_integration.n1_16_node import (
+    encode_semantic, deviation_diagnostic, publish_diagnostics_safely)
 from r1_neupan_integration.path_validation import max_path_deviation_m, TemporalPathDeviationGuard
 
 
 class SemanticSerialization(unittest.TestCase):
+    def test_failed_diagnostics_do_not_skip_next_publication(self):
+        errors = []
+        self.assertFalse(publish_diagnostics_safely(
+            lambda: encode_semantic({'unexpected': np.inf}), errors.append))
+        self.assertEqual(len(errors), 1)
+        published = []
+        self.assertTrue(publish_diagnostics_safely(
+            lambda: published.append(encode_semantic({'cycle': 2})), errors.append))
+        self.assertEqual(json.loads(published[0]), {'cycle': 2})
+
+    def test_failed_error_report_is_also_isolated(self):
+        def broken():
+            raise RuntimeError('diagnostic publisher unavailable')
+        self.assertFalse(publish_diagnostics_safely(broken, lambda exc: broken()))
+
     def test_empty_arrival_horizon_diagnostic_does_not_poison_scheduler(self):
         deviation = max_path_deviation_m(np.empty((3, 0)), np.zeros((3, 3)))
         guard = TemporalPathDeviationGuard(.1, .3, 2)

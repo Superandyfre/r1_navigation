@@ -65,7 +65,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate',required=True,type=Path)
     parser.add_argument('--bundle',type=Path,help='Verify and run the relocated bundle instead of candidate/install')
-    parser.add_argument('--suite',choices=['solver-bt-recovery','base-nonresponse','managed-recovery','solver-recovery','chain','collisionoff','auto-arm','route-update','navigator','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','navigator-owner','navigator-freeze','navigator-tick-loss','navigator-configure-churn','pending-halt','ack-delay','effective-parameters','all'],default='all')
+    parser.add_argument('--suite',choices=['diagnostic-isolation','solver-bt-recovery','base-nonresponse','managed-recovery','solver-recovery','chain','collisionoff','auto-arm','route-update','navigator','restart','startup-tf','revoke-loss','handshake-loss','source-recovery','owner-loss','owner-protocol','navigator-owner','navigator-freeze','navigator-tick-loss','navigator-configure-churn','pending-halt','ack-delay','effective-parameters','all'],default='all')
     args=parser.parse_args()
     if args.suite=='effective-parameters' and not args.bundle:
         parser.error('effective-parameters admission checks require a pinned --bundle manifest')
@@ -124,6 +124,8 @@ def main():
                     'navigator-owner':'failstop_navigator_owner_ros','pending-halt':'failstop_navigator_halt_pending_ros',
                     'navigator-freeze':'failstop_navigator_freeze_ros',
                     'ack-delay':'failstop_navigator_ack_delay_ros'})
+    if args.suite=='diagnostic-isolation':
+        modules['diagnostic-isolation']='failstop_diagnostic_isolation_ros'
     if args.suite=='solver-bt-recovery':
         modules['solver-bt-recovery']='failstop_solver_bt_recovery_ros'
     if args.suite=='base-nonresponse':

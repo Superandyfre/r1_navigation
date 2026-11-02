@@ -130,6 +130,8 @@ class AtomicNodeTests(unittest.TestCase):
         self.node = N116Node.__new__(N116Node)
         self.node._require_execution_context = True
         self.node._execution_store = ExecutionContextStore()
+        from r1_neupan_integration.solver_status import SolveBudget
+        self.node._solve_budget = SolveBudget()
         self.node.client = SimpleNamespace(worker_generation=7, health=WorkerHealth())
         self.node.state_lock = threading.Lock()
         self.node.map_frame = 'map'

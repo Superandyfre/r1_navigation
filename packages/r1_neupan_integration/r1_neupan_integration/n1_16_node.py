@@ -57,6 +57,19 @@ def encode_semantic(payload: dict[str, Any]) -> str:
     return json.dumps(payload, default=numeric_default, allow_nan=False, sort_keys=True)
 
 
+def publish_diagnostics_safely(publish, report_error) -> bool:
+    """Only for the post-validation diagnostic block, never motion publication."""
+    try:
+        publish()
+        return True
+    except Exception as exc:
+        try:
+            report_error(exc)
+        except Exception:
+            pass  # logging/DDS failure cannot turn diagnostics into a fatal fault
+        return False
+
+
 def deviation_diagnostic(value: float) -> float | None:
     """An empty horizon has no measured deviation (the guard still sees inf)."""
     return float(value) if np.isfinite(value) else None
@@ -712,6 +725,31 @@ class N116Node(N115Node):
         self.status_pub.publish(msg)
         self.get_logger().error(f"N1.16 bridge {code}: {message}")
 
+    def _report_diagnostic_failure(self, exc: Exception, cycle_id: int, record: dict) -> None:
+        # Preserve failure evidence even if the normal semantic publication died.
+        import traceback
+        self._diagnostic_failure_count = getattr(self, "_diagnostic_failure_count", 0) + 1
+        payload = dict(schema=N116_SCHEMA, status="diagnostics_degraded",
+                       code="diagnostic_publication_failed", cycle_id=int(cycle_id),
+                       failure_count=self._diagnostic_failure_count,
+                       message=f"{type(exc).__name__}: {exc}", monotonic=time.monotonic())
+        record["diagnostic_error"] = dict(payload)
+        # A malformed semantic payload must not poison later durable export.
+        record.pop("cycle_evidence", None)
+        now = time.monotonic()
+        if now - getattr(self, "_last_diagnostic_error_report", -1e9) < 5.0:
+            return
+        self._last_diagnostic_error_report = now
+        text = json.dumps(payload, sort_keys=True, allow_nan=False)
+        try:
+            with (self.client.output_dir / "diagnostic_events.jsonl").open("a") as stream:
+                stream.write(text + "\n")
+        except OSError:
+            pass
+        self.get_logger().warning(text + "\n" + traceback.format_exc())
+        message = String(); message.data = text
+        self.status_pub.publish(message)
+
     def _publish_failsafe_stop(self) -> None:
         # A zero command is the only command emitted after a bridge failure;
         # no planner output or stale plan is published.
@@ -1353,248 +1391,252 @@ class N116Node(N115Node):
                 else:
                     planner_result_publish_monotonic = -1.0
             record["planner_result"] = planner_result
-            timing["main_validation_complete_monotonic"] = main_validation_complete_monotonic
-            timing["planner_result_publish_monotonic"] = planner_result_publish_monotonic
-            timing["main_publish_ms"] = (time.perf_counter() - publish_started) * 1000.0
-            timing["main_full_cycle_ms"] = (output_publish - cycle_start) * 1000.0
-            timing_record = {
-                "schema": N116_SCHEMA, "cycle_id": float(cycle_id),
-                "scan_counter": float(scan_counter), "scan_stamp_sec": scan_stamp,
-                "scan_receive_monotonic": scan_receive,
-                "path_version": float(nav2_path_version),
-                "goal_version": float(goal_version), "tf_stamp_sec": tf_stamp,
-                "cycle_start_monotonic": float(cycle_start),
-                "worker_core_start_monotonic": float(timing.get("worker_core_start_monotonic", cycle_start)),
-                "worker_core_end_monotonic": float(timing.get("worker_core_end_monotonic", output_publish)),
-                "output_publish_monotonic": float(output_publish),
-                "planner_result_monotonic": float(planner_result_monotonic),
-                "main_validation_complete_monotonic": float(main_validation_complete_monotonic),
-                "planner_result_publish_monotonic": float(planner_result_publish_monotonic),
-            }
-            for field in N116_TIMING_FIELDS:
-                if field not in timing_record:
-                    timing_record[field] = float(
-                        timing.get(field, -1.0 if field.endswith("_monotonic") else 0.0)
-                    )
-            timing_message = Float64MultiArray()
-            timing_message.data = [float(timing_record[field]) for field in N116_TIMING_FIELDS]
-            self.timing_pub.publish(timing_message)
-            record["timing_record"] = timing_record
-            semantic = dict(record.get("semantic", {}))
-            dune_min_value = semantic.get("dune_min_distance_m")
-            if stop_requested and isinstance(dune_min_value, (int, float)) and dune_min_value < 0.0:
-                self.infeasible_cycles += 1
-            else:
-                self.infeasible_cycles = 0
-            if isinstance(semantic.get("initial_path"), np.ndarray):
-                semantic["initial_path"] = semantic["initial_path"].tolist()
-            semantic.update({
-                "schema": "r1_n2_pre_semantics_v1",
-                "cycle_id": int(cycle_id),
-                "scan_counter": int(scan_counter),
-                "path_version": int(nav2_path_version),
-                "planner_path_version": int(path_version),
-                "goal_version": int(goal_version),
-                "state": state.tolist(),
-                "input_path": path.tolist(),
-                "goal": None if goal is None else goal.tolist(),
-                "action": action.tolist(),
-                "ref_state": outputs["ref_state"].tolist(),
-                "ref_speed": outputs.get("ref_speed", np.empty((0,))).tolist(),
-                "opt_state": outputs.get("opt_state", np.empty((0,))).tolist(),
-                "optimized_velocity": outputs.get("optimized_velocity", np.empty((0,))).tolist(),
-                "distance": outputs.get("distance", np.empty((0,))).tolist(),
-                "min_planner_distance": (
-                    float(np.min(outputs["distance"]))
-                    if outputs.get("distance") is not None and outputs["distance"].size else None
-                ),
-                "scan_filter": scan_filter,
-                "infeasible_cycles": int(self.infeasible_cycles),
-                "recovery_reverse_requested": recovery_reverse_requested,
-                "recovery_reverse_active": recovery_reverse_active,
-                "obstacle_motion": {
-                    "enabled": self.obstacle_motion_enabled,
-                    "local_detour_enabled": self.local_detour_enabled,
-                    "reverse_escape_enabled": self.reverse_escape_enabled,
-                    "neupan_bypass_enabled": self.neupan_bypass_enabled,
-                    "neupan_bypass_requested": bypass_requested,
-                    "neupan_bypass_verified": verified_neupan_bypass,
-                    "neupan_bypass_phase": bypass_phase,
-                    "neupan_bypass_side": int(record.get("info", {}).get("bypass_side", 0)),
-                    "neupan_bypass_clearance_m": record.get("info", {}).get("bypass_clearance_m"),
-                    "neupan_bypass_solver_failures": int(record.get("info", {}).get("bypass_solver_failures", 0)),
-                    "bypass_recovery_exhausted": bool(record.get("info", {}).get("bypass_recovery_exhausted", False)),
-                    "state": obstacle_state,
-                    "reason": (
-                        record.get("info", {}).get("stop_reason", "bypass_no_valid_candidate")
-                        if bypass_requested and stop_requested else
-                        motion_decision.reason if motion_decision is not None else "disabled"
-                    ),
-                    "route_blocked": bool(
-                        motion_decision.route_blocked if motion_decision is not None else False
-                    ),
-                    "original_route_blocked": bool(
-                        route_decision.route_blocked if route_decision is not None else False
-                    ),
-                    "local_detour_id": (
-                        local_detour.identifier if local_detour is not None else None
-                    ),
-                    "local_detour_side": (
-                        local_detour.side if local_detour is not None else None
-                    ),
-                    "local_detour_phase": detour_phase,
-                    "local_detour_search": self.local_detour_planner.last_status,
-                    "guided_detour_command": guided_detour_command,
-                    "worker_stop_requested": stop_requested,
-                    "reverse_escape_state": escape_state,
-                    "free_distance_m": (
-                        motion_decision.free_distance_m
-                        if motion_decision is not None and np.isfinite(motion_decision.free_distance_m)
-                        else None
-                    ),
-                    "optimized_free_distance_m": (
-                        optimized_free_distance if np.isfinite(optimized_free_distance)
-                        else None
-                    ),
-                    "command_free_distance_m": (
-                        command_free_distance if np.isfinite(command_free_distance)
-                        else None
-                    ),
-                    "command_stopping_distance_m": stopping_distance,
-                    "reference_speed_profile": (
-                        motion_decision.speed_profile.tolist()
-                        if motion_decision is not None else None
-                    ),
-                    "verified_local_detour": verified_local_detour,
-                    "unsafe_prediction": unsafe_prediction,
-                    "odom_age_sec": float(odom_age_sec),
-                },
-                "scan_timing_ms": {
-                    key: float(value) for key, value in scan_metrics.items()
-                },
-                "dune": {
-                    "min_distance_m": semantic.get("dune_min_distance_m"),
-                    "obstacle_points_count": semantic.get("dune_obstacle_points_count"),
-                },
-                "forward_only": {
-                    "enabled": self.forward_only_enabled,
-                    "state": decision.state if decision is not None else "IDLE",
-                    "reason": (
-                        decision.reason if decision is not None else
-                        ("legacy_clamp" if not self.forward_only_enabled else "no_action")
-                    ),
-                    "raw_linear_x": float(raw_linear_x),
-                    "raw_angular_z": float(raw_angular_z),
-                    "actuator_linear_x": float(command.linear.x),
-                    "actuator_angular_z": float(command.angular.z),
-                    "path_yaw_error_rad": (
-                        float(decision.yaw_error_rad) if decision is not None else None
-                    ),
-                    "observed_front_clearance_m": (
-                        decision.observed_front_clearance_m if decision is not None else None
-                    ),
-                    "required_front_clearance_m": (
-                        float(decision.required_front_clearance_m)
-                        if decision is not None else None
-                    ),
-                },
-                "command_stabilizer": {
-                    "enabled": self.command_stabilizer_enabled,
-                    "state": stabilization.state if stabilization is not None else "BYPASSED",
-                    "reason": stabilization.reason if stabilization is not None else (
-                        "forward_only" if decision is not None else "no_action"
-                    ),
-                    "raw_linear_x": float(raw_linear_x),
-                    "raw_angular_z": float(raw_angular_z),
-                    "linear_x": float(command.linear.x),
-                    "angular_z": float(command.angular.z),
-                },
-                "path_deviation_guard": {
-                    "blocked": bool(path_deviation_blocked),
-                    "max_horizon_deviation_m": deviation_diagnostic(max_path_deviation_m),
-                    "near_term_deviation_m": deviation_diagnostic(near_term_deviation_m),
-                    "measurement_valid": bool(np.isfinite(max_path_deviation_m)
-                                              and np.isfinite(near_term_deviation_m)),
-                    "warning": bool(path_deviation.warning),
-                    "deviation_violation_cycles": int(path_deviation.violation_cycles),
-                    "reason": path_deviation.reason,
-                    "warn_m": float(self.path_deviation_guard.warn_m),
-                    "stop_m": float(self.path_deviation_guard.stop_m),
-                    "stop_cycles": int(self.path_deviation_guard.stop_cycles),
-                    "near_term_states": int(self.path_deviation_near_term_states),
-                    "legacy_max_horizon_limit_m": float(self.max_path_deviation_m),
-                },
-                "gear_transition_gate": {
-                    "enabled": self.auto_gear_transition_enabled,
-                    "state": (
-                        gear_gate_decision.state if gear_gate_decision is not None
-                        else "BYPASSED"
-                    ),
-                    "reason": (
-                        gear_gate_decision.reason if gear_gate_decision is not None
-                        else "forward_only" if decision is not None else "no_action"
-                    ),
-                    "request_gear": (
-                        gear_gate_decision.request_gear
-                        if gear_gate_decision is not None else None
-                    ),
-                    "observed_linear_x": float(self.observed_linear_x),
-                    "odom_fresh": bool(
-                        self.observed_odom_received_monotonic >= 0.0 and
-                        time.monotonic() - self.observed_odom_received_monotonic <=
-                        self.auto_gear_odom_timeout_sec
-                    ),
-                    "raw_linear_x": float(raw_linear_x),
-                    "raw_angular_z": float(raw_angular_z),
-                    "linear_x": float(command.linear.x),
-                    "angular_z": float(command.angular.z),
-                },
-                "obstacle_points_count": int(points.shape[1]),
-                "pan": {
-                    "iterations": int(timing.get("worker_pan_iterations", 0.0)),
-                    "early_converged": bool(timing.get("worker_pan_early_converged", 0.0)),
-                    "dune_effective_points_count": int(timing.get("worker_dune_effective_points_count", 0.0)),
-                    "nrmp_effective_points_count": int(timing.get("worker_nrmp_effective_points_count", 0.0)),
-                },
-                "goal_distance": float(np.linalg.norm(
-                    state[:2, 0] - (goal[:2, 0] if goal is not None else path[:2, -1])
-                )),
-                "output_publish_monotonic": float(output_publish),
-                "transport_trace": {
-                    key: float(timing[key]) for key in (
-                        "cycle_start_monotonic",
-                        "worker_core_start_monotonic",
-                        "worker_core_end_monotonic",
-                        "transport_request_send_started_monotonic",
-                        "transport_request_send_finished_monotonic",
-                        "transport_wait_started_monotonic",
-                        "transport_response_available_monotonic",
-                        "transport_response_received_monotonic",
-                        "transport_response_decoded_monotonic",
-                    ) if key in timing
-                } | {
-                    "cmd_publish_monotonic": float(cmd_publish_monotonic),
+            def publish_cycle_diagnostics():
+                timing["main_validation_complete_monotonic"] = main_validation_complete_monotonic
+                timing["planner_result_publish_monotonic"] = planner_result_publish_monotonic
+                timing["main_publish_ms"] = (time.perf_counter() - publish_started) * 1000.0
+                timing["main_full_cycle_ms"] = (output_publish - cycle_start) * 1000.0
+                timing_record = {
+                    "schema": N116_SCHEMA, "cycle_id": float(cycle_id),
+                    "scan_counter": float(scan_counter), "scan_stamp_sec": scan_stamp,
+                    "scan_receive_monotonic": scan_receive,
+                    "path_version": float(nav2_path_version),
+                    "goal_version": float(goal_version), "tf_stamp_sec": tf_stamp,
+                    "cycle_start_monotonic": float(cycle_start),
+                    "worker_core_start_monotonic": float(timing.get("worker_core_start_monotonic", cycle_start)),
+                    "worker_core_end_monotonic": float(timing.get("worker_core_end_monotonic", output_publish)),
                     "output_publish_monotonic": float(output_publish),
-                    "main_full_cycle_ms": float(timing.get("main_full_cycle_ms", 0.0)),
-                    "worker_core_total_ms": float(timing.get("worker_core_total_ms", 0.0)),
-                    "scheduler_wakeup_to_cycle_start_ms": float(
-                        timing.get("scheduler_wakeup_to_cycle_start_ms", 0.0)),
-                },
-                "scheduler": self._planner_scheduler.snapshot(),
-                "info": dict(record.get("info", {})),
-                "navigation_mode": self.navigation_mode,
-                "loop": self.navigation_loop,
-                "active_gear": active_gear,
-                "requested_gear": requested_gear,
-                "gear_transition_pending": gear_transition_pending,
-                "gear_values": [int(value) for value in path[3, :].tolist()],
-            })
-            # Keep the same complete numeric evidence in the durable bridge
-            # record and on the semantic topic consumed by the N2 audit.
-            record["cycle_evidence"] = dict(semantic)
-            semantic_message = String()
-            semantic_message.data = encode_semantic(semantic)
-            self.semantic_pub.publish(semantic_message)
+                    "planner_result_monotonic": float(planner_result_monotonic),
+                    "main_validation_complete_monotonic": float(main_validation_complete_monotonic),
+                    "planner_result_publish_monotonic": float(planner_result_publish_monotonic),
+                }
+                for field in N116_TIMING_FIELDS:
+                    if field not in timing_record:
+                        timing_record[field] = float(
+                            timing.get(field, -1.0 if field.endswith("_monotonic") else 0.0)
+                        )
+                timing_message = Float64MultiArray()
+                timing_message.data = [float(timing_record[field]) for field in N116_TIMING_FIELDS]
+                self.timing_pub.publish(timing_message)
+                record["timing_record"] = timing_record
+                semantic = dict(record.get("semantic", {}))
+                dune_min_value = semantic.get("dune_min_distance_m")
+                if stop_requested and isinstance(dune_min_value, (int, float)) and dune_min_value < 0.0:
+                    self.infeasible_cycles += 1
+                else:
+                    self.infeasible_cycles = 0
+                if isinstance(semantic.get("initial_path"), np.ndarray):
+                    semantic["initial_path"] = semantic["initial_path"].tolist()
+                semantic.update({
+                    "schema": "r1_n2_pre_semantics_v1",
+                    "cycle_id": int(cycle_id),
+                    "scan_counter": int(scan_counter),
+                    "path_version": int(nav2_path_version),
+                    "planner_path_version": int(path_version),
+                    "goal_version": int(goal_version),
+                    "state": state.tolist(),
+                    "input_path": path.tolist(),
+                    "goal": None if goal is None else goal.tolist(),
+                    "action": action.tolist(),
+                    "ref_state": outputs["ref_state"].tolist(),
+                    "ref_speed": outputs.get("ref_speed", np.empty((0,))).tolist(),
+                    "opt_state": outputs.get("opt_state", np.empty((0,))).tolist(),
+                    "optimized_velocity": outputs.get("optimized_velocity", np.empty((0,))).tolist(),
+                    "distance": outputs.get("distance", np.empty((0,))).tolist(),
+                    "min_planner_distance": (
+                        float(np.min(outputs["distance"]))
+                        if outputs.get("distance") is not None and outputs["distance"].size else None
+                    ),
+                    "scan_filter": scan_filter,
+                    "infeasible_cycles": int(self.infeasible_cycles),
+                    "recovery_reverse_requested": recovery_reverse_requested,
+                    "recovery_reverse_active": recovery_reverse_active,
+                    "obstacle_motion": {
+                        "enabled": self.obstacle_motion_enabled,
+                        "local_detour_enabled": self.local_detour_enabled,
+                        "reverse_escape_enabled": self.reverse_escape_enabled,
+                        "neupan_bypass_enabled": self.neupan_bypass_enabled,
+                        "neupan_bypass_requested": bypass_requested,
+                        "neupan_bypass_verified": verified_neupan_bypass,
+                        "neupan_bypass_phase": bypass_phase,
+                        "neupan_bypass_side": int(record.get("info", {}).get("bypass_side", 0)),
+                        "neupan_bypass_clearance_m": record.get("info", {}).get("bypass_clearance_m"),
+                        "neupan_bypass_solver_failures": int(record.get("info", {}).get("bypass_solver_failures", 0)),
+                        "bypass_recovery_exhausted": bool(record.get("info", {}).get("bypass_recovery_exhausted", False)),
+                        "state": obstacle_state,
+                        "reason": (
+                            record.get("info", {}).get("stop_reason", "bypass_no_valid_candidate")
+                            if bypass_requested and stop_requested else
+                            motion_decision.reason if motion_decision is not None else "disabled"
+                        ),
+                        "route_blocked": bool(
+                            motion_decision.route_blocked if motion_decision is not None else False
+                        ),
+                        "original_route_blocked": bool(
+                            route_decision.route_blocked if route_decision is not None else False
+                        ),
+                        "local_detour_id": (
+                            local_detour.identifier if local_detour is not None else None
+                        ),
+                        "local_detour_side": (
+                            local_detour.side if local_detour is not None else None
+                        ),
+                        "local_detour_phase": detour_phase,
+                        "local_detour_search": self.local_detour_planner.last_status,
+                        "guided_detour_command": guided_detour_command,
+                        "worker_stop_requested": stop_requested,
+                        "reverse_escape_state": escape_state,
+                        "free_distance_m": (
+                            motion_decision.free_distance_m
+                            if motion_decision is not None and np.isfinite(motion_decision.free_distance_m)
+                            else None
+                        ),
+                        "optimized_free_distance_m": (
+                            optimized_free_distance if np.isfinite(optimized_free_distance)
+                            else None
+                        ),
+                        "command_free_distance_m": (
+                            command_free_distance if np.isfinite(command_free_distance)
+                            else None
+                        ),
+                        "command_stopping_distance_m": stopping_distance,
+                        "reference_speed_profile": (
+                            motion_decision.speed_profile.tolist()
+                            if motion_decision is not None else None
+                        ),
+                        "verified_local_detour": verified_local_detour,
+                        "unsafe_prediction": unsafe_prediction,
+                        "odom_age_sec": float(odom_age_sec),
+                    },
+                    "scan_timing_ms": {
+                        key: float(value) for key, value in scan_metrics.items()
+                    },
+                    "dune": {
+                        "min_distance_m": semantic.get("dune_min_distance_m"),
+                        "obstacle_points_count": semantic.get("dune_obstacle_points_count"),
+                    },
+                    "forward_only": {
+                        "enabled": self.forward_only_enabled,
+                        "state": decision.state if decision is not None else "IDLE",
+                        "reason": (
+                            decision.reason if decision is not None else
+                            ("legacy_clamp" if not self.forward_only_enabled else "no_action")
+                        ),
+                        "raw_linear_x": float(raw_linear_x),
+                        "raw_angular_z": float(raw_angular_z),
+                        "actuator_linear_x": float(command.linear.x),
+                        "actuator_angular_z": float(command.angular.z),
+                        "path_yaw_error_rad": (
+                            float(decision.yaw_error_rad) if decision is not None else None
+                        ),
+                        "observed_front_clearance_m": (
+                            decision.observed_front_clearance_m if decision is not None else None
+                        ),
+                        "required_front_clearance_m": (
+                            float(decision.required_front_clearance_m)
+                            if decision is not None else None
+                        ),
+                    },
+                    "command_stabilizer": {
+                        "enabled": self.command_stabilizer_enabled,
+                        "state": stabilization.state if stabilization is not None else "BYPASSED",
+                        "reason": stabilization.reason if stabilization is not None else (
+                            "forward_only" if decision is not None else "no_action"
+                        ),
+                        "raw_linear_x": float(raw_linear_x),
+                        "raw_angular_z": float(raw_angular_z),
+                        "linear_x": float(command.linear.x),
+                        "angular_z": float(command.angular.z),
+                    },
+                    "path_deviation_guard": {
+                        "blocked": bool(path_deviation_blocked),
+                        "max_horizon_deviation_m": deviation_diagnostic(max_path_deviation_m),
+                        "near_term_deviation_m": deviation_diagnostic(near_term_deviation_m),
+                        "measurement_valid": bool(np.isfinite(max_path_deviation_m)
+                                                  and np.isfinite(near_term_deviation_m)),
+                        "warning": bool(path_deviation.warning),
+                        "deviation_violation_cycles": int(path_deviation.violation_cycles),
+                        "reason": path_deviation.reason,
+                        "warn_m": float(self.path_deviation_guard.warn_m),
+                        "stop_m": float(self.path_deviation_guard.stop_m),
+                        "stop_cycles": int(self.path_deviation_guard.stop_cycles),
+                        "near_term_states": int(self.path_deviation_near_term_states),
+                        "legacy_max_horizon_limit_m": float(self.max_path_deviation_m),
+                    },
+                    "gear_transition_gate": {
+                        "enabled": self.auto_gear_transition_enabled,
+                        "state": (
+                            gear_gate_decision.state if gear_gate_decision is not None
+                            else "BYPASSED"
+                        ),
+                        "reason": (
+                            gear_gate_decision.reason if gear_gate_decision is not None
+                            else "forward_only" if decision is not None else "no_action"
+                        ),
+                        "request_gear": (
+                            gear_gate_decision.request_gear
+                            if gear_gate_decision is not None else None
+                        ),
+                        "observed_linear_x": float(self.observed_linear_x),
+                        "odom_fresh": bool(
+                            self.observed_odom_received_monotonic >= 0.0 and
+                            time.monotonic() - self.observed_odom_received_monotonic <=
+                            self.auto_gear_odom_timeout_sec
+                        ),
+                        "raw_linear_x": float(raw_linear_x),
+                        "raw_angular_z": float(raw_angular_z),
+                        "linear_x": float(command.linear.x),
+                        "angular_z": float(command.angular.z),
+                    },
+                    "obstacle_points_count": int(points.shape[1]),
+                    "pan": {
+                        "iterations": int(timing.get("worker_pan_iterations", 0.0)),
+                        "early_converged": bool(timing.get("worker_pan_early_converged", 0.0)),
+                        "dune_effective_points_count": int(timing.get("worker_dune_effective_points_count", 0.0)),
+                        "nrmp_effective_points_count": int(timing.get("worker_nrmp_effective_points_count", 0.0)),
+                    },
+                    "goal_distance": float(np.linalg.norm(
+                        state[:2, 0] - (goal[:2, 0] if goal is not None else path[:2, -1])
+                    )),
+                    "output_publish_monotonic": float(output_publish),
+                    "transport_trace": {
+                        key: float(timing[key]) for key in (
+                            "cycle_start_monotonic",
+                            "worker_core_start_monotonic",
+                            "worker_core_end_monotonic",
+                            "transport_request_send_started_monotonic",
+                            "transport_request_send_finished_monotonic",
+                            "transport_wait_started_monotonic",
+                            "transport_response_available_monotonic",
+                            "transport_response_received_monotonic",
+                            "transport_response_decoded_monotonic",
+                        ) if key in timing
+                    } | {
+                        "cmd_publish_monotonic": float(cmd_publish_monotonic),
+                        "output_publish_monotonic": float(output_publish),
+                        "main_full_cycle_ms": float(timing.get("main_full_cycle_ms", 0.0)),
+                        "worker_core_total_ms": float(timing.get("worker_core_total_ms", 0.0)),
+                        "scheduler_wakeup_to_cycle_start_ms": float(
+                            timing.get("scheduler_wakeup_to_cycle_start_ms", 0.0)),
+                    },
+                    "scheduler": self._planner_scheduler.snapshot(),
+                    "info": dict(record.get("info", {})),
+                    "navigation_mode": self.navigation_mode,
+                    "loop": self.navigation_loop,
+                    "active_gear": active_gear,
+                    "requested_gear": requested_gear,
+                    "gear_transition_pending": gear_transition_pending,
+                    "gear_values": [int(value) for value in path[3, :].tolist()],
+                })
+                # Keep the same complete numeric evidence in the durable bridge
+                # record and on the semantic topic consumed by the N2 audit.
+                record["cycle_evidence"] = dict(semantic)
+                semantic_message = String()
+                semantic_message.data = encode_semantic(semantic)
+                self.semantic_pub.publish(semantic_message)
+            publish_diagnostics_safely(
+                publish_cycle_diagnostics,
+                lambda exc: self._report_diagnostic_failure(exc, cycle_id, record))
         finally:
             with self._active_lock:
                 self._active_request = False
