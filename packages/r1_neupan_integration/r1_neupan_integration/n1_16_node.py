@@ -55,6 +55,11 @@ def encode_semantic(payload: dict[str, Any]) -> str:
             return value.tolist()
         raise TypeError(f"Unsupported semantic value: {type(value).__name__}")
     return json.dumps(payload, default=numeric_default, allow_nan=False, sort_keys=True)
+
+
+def deviation_diagnostic(value: float) -> float | None:
+    """An empty horizon has no measured deviation (the guard still sees inf)."""
+    return float(value) if np.isfinite(value) else None
 from r1_neupan_integration.local_detour import (
     LocalDetourController, LocalDetourPlanner, ReverseEscapePlanner,
 )
@@ -1506,8 +1511,10 @@ class N116Node(N115Node):
                 },
                 "path_deviation_guard": {
                     "blocked": bool(path_deviation_blocked),
-                    "max_horizon_deviation_m": float(max_path_deviation_m),
-                    "near_term_deviation_m": float(near_term_deviation_m),
+                    "max_horizon_deviation_m": deviation_diagnostic(max_path_deviation_m),
+                    "near_term_deviation_m": deviation_diagnostic(near_term_deviation_m),
+                    "measurement_valid": bool(np.isfinite(max_path_deviation_m)
+                                              and np.isfinite(near_term_deviation_m)),
                     "warning": bool(path_deviation.warning),
                     "deviation_violation_cycles": int(path_deviation.violation_cycles),
                     "reason": path_deviation.reason,

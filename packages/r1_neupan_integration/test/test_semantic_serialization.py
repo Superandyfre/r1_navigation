@@ -2,10 +2,22 @@
 import json
 import unittest
 import numpy as np
-from r1_neupan_integration.n1_16_node import encode_semantic
+from r1_neupan_integration.n1_16_node import encode_semantic, deviation_diagnostic
+from r1_neupan_integration.path_validation import max_path_deviation_m, TemporalPathDeviationGuard
 
 
 class SemanticSerialization(unittest.TestCase):
+    def test_empty_arrival_horizon_diagnostic_does_not_poison_scheduler(self):
+        deviation = max_path_deviation_m(np.empty((3, 0)), np.zeros((3, 3)))
+        guard = TemporalPathDeviationGuard(.1, .3, 2)
+        self.assertTrue(guard.evaluate(deviation).blocked)
+        value = json.loads(encode_semantic({'path_deviation_guard': {
+            'max_horizon_deviation_m': deviation_diagnostic(deviation),
+            'measurement_valid': bool(np.isfinite(deviation))}}))
+        self.assertIsNone(value['path_deviation_guard']['max_horizon_deviation_m'])
+        self.assertFalse(value['path_deviation_guard']['measurement_valid'])
+        self.assertEqual(deviation_diagnostic(.12), .12)
+
     def test_nested_planner_values_preserve_numeric_and_boolean_types(self):
         payload = {'obstacle_motion': {'unsafe_prediction': np.bool_(False),
             'recovery_reverse_requested': np.bool_(True), 'distance': np.float64(.25)},
