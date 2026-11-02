@@ -119,6 +119,19 @@ def main():
     if not real_solver:
         node.client.startup=startup
         node.client.solve=solve
+    # Test-only classification injection AFTER a real Worker/IPC solve.
+    # Numerical classification and raw envelope rejection have separate tests.
+    from r1_neupan_integration.solver_status import RecoverableSolveError
+    remaining_solver_failures = 0
+    original_solve = node.client.solve
+    def recoverable_solve(*args, **kwargs):
+        nonlocal remaining_solver_failures
+        result = original_solve(*args, **kwargs)
+        if remaining_solver_failures:
+            remaining_solver_failures -= 1
+            raise RecoverableSolveError('isolated classified iteration-limit injection', node.client.request_id)
+        return result
+    node.client.solve = recoverable_solve
     source_paused=threading.Event()
     original_source_pub=node.planner_result_pub
     class SourceGate:
@@ -127,7 +140,12 @@ def main():
     node.planner_result_pub=SourceGate()
     ack=node.create_publisher(String,'/test_failstop_chain/inject_ack',20)
     def inject(msg):
+        nonlocal remaining_solver_failures
         request=json.loads(msg.data)
+        if 'solver_failures' in request:
+            remaining_solver_failures = int(request['solver_failures'])
+            ack.publish(String(data=json.dumps(request)))
+            return
         if 'hold_robot_tf' in request:
             if request['hold_robot_tf']:robot_tf_paused.set()
             else:robot_tf_paused.clear()
