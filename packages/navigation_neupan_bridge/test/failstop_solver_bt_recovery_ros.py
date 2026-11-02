@@ -15,6 +15,11 @@ class SolverBTRecovery(NavigatorFailstop):
     def test_parent_task_stops_after_one_replan_and_new_goal_works(self):
         client=ActionClient(self.node,NavigateToPose,'/navigate_to_pose')
         self.until(client.server_is_ready)
+        # Lifecycle activation is not DDS endpoint matching. Keep the isolated
+        # sensor fixture running through discovery before exercising recovery;
+        # do not extend production action/health deadlines.
+        discovery_started=time.monotonic()
+        self.until(lambda:time.monotonic()-discovery_started>=1.2)
         goal=NavigateToPose.Goal();goal.pose=PoseStamped();goal.pose.header.frame_id='map'
         goal.pose.header.stamp=self.node.get_clock().now().to_msg()
         goal.pose.pose.position.x=4.;goal.pose.pose.orientation.w=1.

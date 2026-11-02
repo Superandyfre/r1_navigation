@@ -1,0 +1,83 @@
+{
+  "schema": "r1_solver_recovery_delivery_v1",
+  "date": "2026-11-02",
+  "source_branch": "codex/ui7-solver-recovery",
+  "target_branch": "codex/navigation-environment-snapshots",
+  "integration_status": "separate_branch_preserves_existing_dirty_experiments",
+  "build_source_sha": "33205cd566e3c585f97c500223f640fe94e23900",
+  "solver_tooling_source_sha": "aec45f697b08e162a7debdcbef66c7584954158d",
+  "bundle": "/home/rpp/neupan_failstop_ws/release_bundles/20261102-solver-recovery-04",
+  "manifest_sha256": "ae3953c272e7ca7b3a3c309e862ae475cf624c4a7d8ecbed48e005800bfcfb8e",
+  "current_ui7_pointer": {
+    "schema": "r1_ui7_release_pointer_v1",
+    "bundle": "/home/rpp/neupan_failstop_ws/release_bundles/20261029-unified-03",
+    "manifest_sha256": "f55eb54f3fe67a5649d4ffda76ea0eea4b250903678cef4d49b9a30e58a7779a"
+  },
+  "fixed_ui7_entry": "/home/rpp/neupan_failstop_ws/ui7/start_navigation_ui7_current.sh",
+  "runtime_switched": false,
+  "real_robot_goals_sent": false,
+  "physical_acceptance": false,
+  "build_passed": true,
+  "phases": {
+    "P1": "implemented",
+    "P2": "implemented",
+    "P2b": "implemented_isolated_recovery_passed",
+    "P3": "partial_cone_and_two_normal_scenes_passed_stateful_incident_missing",
+    "P4": "partial_nonresponse_and_bounded_replan_implemented_extra_motion_escape_disabled",
+    "P5": "registered_pointer_check_passed_live_GUI_cache_acceptance_pending",
+    "P6": "isolated_suites_recorded_below_not_full_plan_acceptance",
+    "P7": "not_run"
+  },
+  "limitations": [
+    "Not all ECOS inputs are proven convergent.",
+    "No full stateful incident replay.",
+    "No extra autonomous reverse escape.",
+    "No physical navigation acceptance.",
+    "Cold-start BT action ACK timeout observed twice before failure injection; test discovery settling does not prove production cold-start fixed.",
+    "CogNav owner must coordinate health_v2 monitor support; CogNav code unchanged."
+  ],
+  "tests": {
+    "solver-recovery": {
+      "passed": true,
+      "log": "/home/rpp/neupan_failstop_ws/reports/solver-recovery-20261102/accepted-solver-recovery.log",
+      "sha256": "156e128ec9140ef1d79e63ea9e9398679195be26bdcbb131bedd56b0cddf5120"
+    },
+    "solver-bt-recovery": {
+      "passed": true,
+      "log": "/home/rpp/neupan_failstop_ws/reports/solver-recovery-20261102/discovery-bt.log",
+      "sha256": "eafe2487e5ac2367c454b0f02ad151cdb08fab3b0d37a8e74d502a8d0fa468a7"
+    },
+    "managed-recovery": {
+      "passed": true,
+      "log": "/home/rpp/neupan_failstop_ws/reports/solver-recovery-20261102/final04-managed-recovery.log",
+      "sha256": "319311d3f0f94a4830ea760d6a90c46c55e87e8d066066d3b18e90b4509dde36"
+    },
+    "base-nonresponse": {
+      "passed": true,
+      "log": "/home/rpp/neupan_failstop_ws/reports/solver-recovery-20261102/final04-base-nonresponse.log",
+      "sha256": "33d45a336bf2c24cf31f65f0a5390730c2e24542d2970b2980b2bb41dfeca7d3"
+    },
+    "auto-arm": {
+      "passed": true,
+      "log": "/home/rpp/neupan_failstop_ws/reports/solver-recovery-20261102/final04-auto-arm.log",
+      "sha256": "40080075d838b1a3910818c1e5ff34af84fa384e162b7fd9d471d7c55b62563a"
+    },
+    "solver-bt-recovery-repeat": {
+      "passed": true,
+      "log": "/home/rpp/neupan_failstop_ws/reports/solver-recovery-20261102/discovery-bt-repeat.log",
+      "sha256": "aedf4e58cb4e9701720f488a498206c9831f45ac13d2a91856640a8c75f3c11a"
+    }
+  },
+  "cone-scaling.json": {
+    "path": "/home/rpp/neupan_failstop_ws/reports/solver-recovery-20261102/cone-scaling.json",
+    "sha256": "b686e9fe01ef9a0db203b9d2a71a185daaec31789ea55add204b6400b2292a8c"
+  },
+  "normal-scaling.json": {
+    "path": "/home/rpp/neupan_failstop_ws/reports/solver-recovery-20261102/normal-scaling.json",
+    "sha256": "de354ee0c7f1bd8697e0991d134cfff114f1d0937805521c5efee4afd95d4696"
+  },
+  "cleanup": {
+    "record": "/home/rpp/neupan_failstop_ws/reports/solver-recovery-20261102/cleanup.json",
+    "logical_bytes_removed": 4096695848
+  }
+}
