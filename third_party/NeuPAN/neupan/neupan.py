@@ -77,6 +77,9 @@ class neupan(torch.nn.Module):
         configuration.time_print = kwargs.get("time_print", False)
         self.collision_threshold = kwargs.get("collision_threshold", 0.1)
         self.bypass_enabled = bool(kwargs.get("bypass_enabled", False))
+        # Autonomous backoff remains disabled until rear coverage and the full
+        # arm-footprint sweep have their own acceptance evidence.
+        self.bypass_allow_backoff = bool(kwargs.get("bypass_allow_backoff", False))
         self.bypass_lateral_scale = float(kwargs.get("bypass_lateral_scale", 0.20))
         self.bypass_min_clearance = float(kwargs.get("bypass_min_clearance", 0.05))
         if not 0.0 < self.bypass_lateral_scale <= 1.0 or self.bypass_min_clearance < 0.0:
@@ -254,7 +257,8 @@ class neupan(torch.nn.Module):
                                               footprint_radius, margin, goal_pose,
                                               self.robot.vertices, self.robot.G, self.robot.h)
                             for side in (1, -1)])
-            guides = [guide for guide in guides if guide is not None]
+            guides = [guide for guide in guides if guide is not None and
+                      (self.bypass_allow_backoff or guide.phase != "backoff")]
             if self.bypass_recovery.exhausted:
                 guides = []
 
@@ -372,12 +376,14 @@ class neupan(torch.nn.Module):
                 valid = (
                     np.isfinite(predicted).all() and np.isfinite(controls).all()
                     and clearance >= self.bypass_min_clearance
+                    and (self.bypass_allow_backoff or float(np.min(controls[0])) >= -1e-6)
                     and first_moves
                     and progress > (0.005 if turn_before_pass else
                                     0.01 if guide.phase in ("final", "route_rejoin") else 0.05)
                 )
                 reason = ("nonfinite" if not (np.isfinite(predicted).all() and np.isfinite(controls).all())
                           else "clearance" if clearance < self.bypass_min_clearance
+                          else "reverse_disabled" if not self.bypass_allow_backoff and float(np.min(controls[0])) < -1e-6
                           else "first_motion" if not first_moves
                           else "progress" if not valid else "accepted")
                 self.info["bypass_candidates"].append({
