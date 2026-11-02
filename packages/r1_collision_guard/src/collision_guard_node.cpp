@@ -27,6 +27,7 @@
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/string.hpp"
+#include "std_srvs/srv/trigger.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
 #include "geometry_msgs/msg/polygon_stamped.hpp"
 
@@ -222,6 +223,14 @@ public:
       logic_ = std::make_unique<GuardLogic>(config, std::move(footprint));
     }
 
+    recovery_stop_ = create_service<std_srvs::srv::Trigger>("~/stop_for_recovery",
+      [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+      std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        authorization_->latch("controlled_runtime_recovery");
+        response->success = true;
+        response->message = "motion_revoked_restart_required";
+      });
     worker_health_sub_ = create_subscription<std_msgs::msg::String>(
       worker_health_topic, rclcpp::QoS(20), [this](std_msgs::msg::String::ConstSharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -899,6 +908,7 @@ private:
     status_pub_->publish(message);
   }
 
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr recovery_stop_;
   std::unique_ptr<GuardLogic> logic_;
   r1_neupan_runtime::CommandBarrier command_barrier_;
   std::uint64_t command_epoch_{0};

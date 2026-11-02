@@ -57,6 +57,7 @@ setup(
             'n1_5_core_ab = r1_neupan_integration.n1_5_core_ab:main',
             'n1_5_config_diff = r1_neupan_integration.n1_5_config_diff:main',
             'n1_15_node = r1_neupan_integration.n1_15_node:main',
+            'ui7_runtime_supervisor = r1_neupan_integration.ui7_runtime_supervisor:main',
             'n1_16_node = r1_neupan_integration.n1_16_node:main',
             'n2_3_command_relay = r1_neupan_integration.n2_3_command_relay:main',
             'r1_safety_gate = r1_neupan_integration.n2_pre_safety_gate:main',

@@ -36,7 +36,8 @@ def _build(context):
         RewrittenYaml(
             source_file=os.path.join(bridge_share, "config", params_name),
             # RewrittenYaml expects launch substitutions, not Python bools.
-            param_rewrites={"use_sim_time": "false", "autostart": "true"},
+            param_rewrites={"use_sim_time": "false", "autostart": "true",
+                            "auto_arm_on_ready": LaunchConfiguration("runtime_auto_arm")},
             convert_types=True,
         ),
         allow_substs=True,
@@ -111,6 +112,7 @@ def _build(context):
 
 def generate_launch_description():
     return LaunchDescription([
+        DeclareLaunchArgument("runtime_auto_arm", default_value="true", choices=["true", "false"]),
         DeclareLaunchArgument("mode", default_value="shadow", choices=["shadow", "hw1"]),
         DeclareLaunchArgument(
             "command_profile", default_value="smoothed", choices=["direct", "smoothed"],

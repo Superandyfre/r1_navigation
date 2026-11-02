@@ -1,3 +1,4 @@
+from launch_ros.parameter_descriptions import ParameterValue
 """HW1 high-sampling navigation chain with NeuPAN substituted for DWB.
 
 This starts only the static-map, localization, and NeuPAN sensor/control
@@ -94,23 +95,18 @@ def generate_launch_description():
             # dual_ar5_real_state_navigation.launch.py owns these adapters.
             # Starting another pair here duplicates each physical joint-state
             # stream and can starve the live arm footprint projection.
-            IncludeLaunchDescription(PythonLaunchDescriptionSource([
-                PathJoinSubstitution([bridge_share, "launch", "navigation_neupan.launch.py"]),
-            ]), launch_arguments={
-                "mode": "hw1",
-                "command_profile": LaunchConfiguration("command_profile"),
-            }.items()),
-            IncludeLaunchDescription(PythonLaunchDescriptionSource([
-                PathJoinSubstitution([bridge_share, "launch", "r1_neupan_hw1_motion.launch.py"]),
-            ]), launch_arguments={
-                "calibration_record": LaunchConfiguration("calibration_record"),
-                "scan_source": LaunchConfiguration("scan_source"),
-                "use_mesh_self_filter": LaunchConfiguration("use_mesh_self_filter"),
-                "mesh_projection_margin_m": LaunchConfiguration("mesh_projection_margin_m"),
-                "command_profile": LaunchConfiguration("command_profile"),
-                "cmd_vel_out_topic": LaunchConfiguration("cmd_vel_out_topic"),
-                "collision_check_enabled": LaunchConfiguration("collision_check_enabled"),
-            }.items()),
+            Node(
+                package="r1_neupan_integration", executable="ui7_runtime_supervisor",
+                name="ui7_runtime_supervisor", output="screen",
+                parameters=[{
+                    "calibration_record": ParameterValue(LaunchConfiguration("calibration_record"), value_type=str),
+                    "scan_source": ParameterValue(LaunchConfiguration("scan_source"), value_type=str),
+                    "use_mesh_self_filter": ParameterValue(LaunchConfiguration("use_mesh_self_filter"), value_type=str),
+                    "mesh_projection_margin_m": ParameterValue(LaunchConfiguration("mesh_projection_margin_m"), value_type=str),
+                    "command_profile": ParameterValue(LaunchConfiguration("command_profile"), value_type=str),
+                    "cmd_vel_out_topic": ParameterValue(LaunchConfiguration("cmd_vel_out_topic"), value_type=str),
+                }],
+            ),
             Node(
                 package="rviz2",
                 executable="rviz2",
