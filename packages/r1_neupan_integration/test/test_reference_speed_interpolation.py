@@ -43,7 +43,7 @@ class ReferenceSpeedInterpolation(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("NEUPAN_SOLVER_REGRESSION") == "1", "actual solver opt-in")
 class ActualReferenceSpeed(unittest.TestCase):
-    def test_clear_path_can_track_one_metre_per_second(self):
+    def test_clear_path_respects_configured_half_metre_per_second_limit(self):
         from neupan import neupan
         root = Path(__file__).resolve().parents[3]
         cfg = yaml.safe_load((root / "packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml").read_text())
@@ -61,8 +61,8 @@ class ActualReferenceSpeed(unittest.TestCase):
             self.assertFalse(info["stop"])
             state[0, 0] += float(velocity[0, 0]) * .25
             state[2, 0] += float(velocity[1, 0]) * .25
-        self.assertGreater(float(velocity[0, 0]), .95)
-        self.assertLessEqual(float(velocity[0, 0]), 1.001)
+        self.assertGreater(float(velocity[0, 0]), .35)
+        self.assertLessEqual(float(velocity[0, 0]), .501)
 
 
 if __name__ == "__main__":

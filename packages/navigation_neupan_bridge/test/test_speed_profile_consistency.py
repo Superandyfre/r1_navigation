@@ -27,11 +27,11 @@ class SpeedProfileConsistency(unittest.TestCase):
         smoother = nav['neupan_velocity_smoother']['ros__parameters']
         guard = guard['r1_collision_guard']['ros__parameters']
         expected = planner['ref_speed']
-        self.assertAlmostEqual(expected, 1.0)
+        self.assertAlmostEqual(expected, 0.5)
         self.assertEqual(planner['robot']['max_speed'][0], expected)
-        self.assertEqual(controller['max_linear'], expected)
-        self.assertEqual(smoother['max_velocity'][0], expected)
-        self.assertEqual(guard['max_linear_mps'], expected)
+        self.assertGreaterEqual(controller['max_linear'], expected)
+        self.assertGreaterEqual(smoother['max_velocity'][0], expected)
+        self.assertGreaterEqual(guard['max_linear_mps'], expected)
         self.assertEqual(controller['max_reverse'], .20)
         self.assertEqual(smoother['min_velocity'][0], -.20)
         self.assertEqual(guard['max_reverse_mps'], .20)

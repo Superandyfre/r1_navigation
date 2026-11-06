@@ -1,7 +1,7 @@
 # HW1 profile. Its launch requires a mechanical calibration record before use.
 receding: 20
 step_time: 0.25
-ref_speed: 1.0
+ref_speed: 0.5
 device: 'cpu'
 time_print: false
 # NRMP constrains its distance slack to d_min=0.01. The collision threshold
@@ -11,7 +11,7 @@ collision_threshold: 0.005
 
 robot:
   kinematics: 'diff'
-  max_speed: [1.0, 0.25]
+  max_speed: [0.5, 0.25]
   max_acce: [0.50, 0.50]
   length: 0.682
   width: 0.532
