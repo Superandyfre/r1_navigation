@@ -10,16 +10,19 @@ class OwnerLoss(chain.FailstopChainROS):
     def test_no_owner_confirmation_never_moves(self):
         self.owner_enabled=False
         handle=self.goal();result=handle.get_result_async()
-        self.assertEqual(self.future(result,3).status,GoalStatus.STATUS_ABORTED)
-        self.until(lambda:any(j.get('fault_reason')=='owner_ack_timeout' for _,j in self.runtime_statuses))
+        start=time.monotonic()
+        self.until(lambda:time.monotonic()>start+2.2 or result.done(),3)
+        self.assertFalse(result.done())
         self.assertFalse(any(v!=0. or w!=0. for _,v,w in self.outputs))
         self.assertFalse(any(j['state']=='COMMIT' for _,j in self.grants))
         # A late-discovered owner must get another identity advertisement while
         # permission remains denied. Context publication cannot require ownership.
         active=[j for _,j in self.contexts if j['state']=='ACTIVE']
         self.assertGreaterEqual(len(active),3,'owner handshake context was not repeated')
+        self.future(handle.cancel_goal_async())
+        self.assertEqual(self.future(result).status,GoalStatus.STATUS_CANCELED)
         (self.report/'owner-loss-result.json').write_text(json.dumps(dict(
-            reason='owner_ack_timeout',action='ABORTED',all_outputs_zero=True,
+            reason='owner_unconfirmed',action='CANCELED',all_outputs_zero=True,
             commit_count=0,physical_motion=False),indent=2))
 
     def test_owner_lease_expiry(self):

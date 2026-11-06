@@ -7,6 +7,7 @@ from failstop_navigator_ros import NavigatorFailstop
 
 
 class NavigatorConfigureChurn(NavigatorFailstop):
+    strict_lifecycle_response = True
     def lifecycle(self,name,transition):
         # Keep the original peer, fixture topology and configure client timing.
         # The comparison removes only Navigator activation and all goal traffic.

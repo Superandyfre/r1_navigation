@@ -45,6 +45,8 @@ class NavigatorFailstop(chain.FailstopChainROS):
                 'nav2_compute_path_through_poses_action_bt_node','nav2_follow_path_action_bt_node',
                 'nav2_rate_controller_bt_node','nav2_pipeline_sequence_bt_node',
                 'nav2_recovery_node_bt_node','neupan_wait_condition_bt_node'])}}
+        if getattr(self,'test_follow_path_ack_timeout_ms',None) is not None:
+            params['bt_navigator']['ros__parameters']['neupan_follow_path_ack_timeout_ms'] = self.test_follow_path_ack_timeout_ms
         # Production BT uses the default service name. Remap to the isolated
         # Controller instance; neither service arms or resets the runtime.
         paramsfile=self.report/'navigator-params.yaml';paramsfile.write_text(yaml.safe_dump(params))

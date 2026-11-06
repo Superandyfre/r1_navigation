@@ -30,7 +30,7 @@ public:
   {
     if (!fault_.empty()) {return false;}
     if (stamp_ < 0.) {
-      if (now < started_ || now - started_ > 1.) {fault_ = "owner_ack_timeout";}
+      if (now < started_ || now - started_ > 35.) {fault_ = "owner_ack_timeout";}
       return false;
     }
     if (now < stamp_ || now - stamp_ > .5) {fault_ = "owner_lease_expired"; return false;}

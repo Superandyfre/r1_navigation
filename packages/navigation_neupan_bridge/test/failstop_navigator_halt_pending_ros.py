@@ -44,8 +44,13 @@ class PendingHalt(NavigatorAckDelay):
         self.assertGreater(first['delayed_response']-first['actual_response'],1.9)
         self.assertFalse(any(v!=0. or w!=0. for _,v,w in self.outputs))
         self.assertFalse(self.owners,'pending ACK never establishes accepted BT ownership')
-        self.assertTrue(any(j.get('fault_latched') and j.get('fault_reason') in (
-            'follow_path_execution_uncertain','owner_ack_timeout') for _,j in self.runtime_statuses))
+        if self._testMethodName.endswith('revoke_unavailable'):
+            # A late unowned action cannot grant motion, even if the deny
+            # service cannot be reached during cancellation.
+            self.assertFalse(any(j.get('state')=='COMMIT' for _,j in self.grants))
+        else:
+            self.assertTrue(any(j.get('fault_latched') and
+                j.get('fault_reason')=='follow_path_execution_uncertain' for _,j in self.runtime_statuses))
         retry=self.future(client.send_goal_async(goal));self.assertTrue(retry.accepted)
         self.assertEqual(self.future(retry.get_result_async(),4.).status,GoalStatus.STATUS_ABORTED)
         (self.report/'pending-halt-result.json').write_text(json.dumps(dict(

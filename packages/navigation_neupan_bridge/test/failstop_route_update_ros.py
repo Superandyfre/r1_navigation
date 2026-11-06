@@ -1,6 +1,10 @@
 """Actual Navigator/Controller route revisions in isolated domain 192, no driver."""
 import copy
 import json
+import os
+from pathlib import Path as FilePath
+import subprocess
+import sys
 import time
 import unittest
 from action_msgs.msg import GoalStatus
@@ -10,9 +14,21 @@ from nav_msgs.msg import Path
 from rclpy.action import ActionServer
 from r1_neupan_runtime.srv import UpdatePath
 from failstop_navigator_owner_ros import NavigatorOwner
+import failstop_chain_ros as chain
+import failstop_navigator_ros as navigator
 
 
 class RouteUpdateNavigator(NavigatorOwner):
+    def start(self,exe,params,remaps):
+        if exe == navigator.NAVIGATOR and self._testMethodName == "test_delayed_route_response_keeps_execution":
+            report=self.report/"route-delay-peer"
+            log=open(self.report/"route-delay-peer.log","w");self.logs.append(log)
+            helper=FilePath(__file__).with_name("route_update_delay_peer.py")
+            self.procs.append(subprocess.Popen([sys.executable,str(helper),str(report)],stdout=log,stderr=subprocess.STDOUT))
+            self.until(lambda:(report/"ready.json").is_file(),5.)
+            remaps=[*remaps,"/update_follow_path:="+chain.PREFIX+"delayed_route"]
+        super().start(exe,params,remaps)
+
     def setUp(self):
         self.route_service_unavailable = self._testMethodName == "test_route_service_gap_keeps_current_execution"
         super().setUp()
@@ -56,6 +72,28 @@ class RouteUpdateNavigator(NavigatorOwner):
             initial_path_version=initial_path, final_path_version=self.context['path_version'],
             worker=self.worker_mode, physical_motion=False), indent=2))
         self.cancel_top(handle, result)
+        client.destroy()
+
+    def test_delayed_route_response_keeps_execution(self):
+        client,handle,result=self.send_top()
+        attempt=self.moving_attempt(result)
+        initial=self.context["path_version"]
+        self.allow_bend=True
+        self.until(lambda:self.context["path_version"]>initial or result.done(),8.)
+        self.assertFalse(result.done())
+        peer=self.report/"route-delay-peer/events.json"
+        self.until(lambda:peer.exists() and any("delayed_response" in e for e in json.loads(peer.read_text())),5.)
+        events=json.loads(peer.read_text())
+        confirmed=[e for e in events if e.get("accepted") and e.get("delayed_response",0)-e["actual_response"]>.8]
+        self.assertTrue(confirmed)
+        event=confirmed[0]
+        rows=[(v,w) for t,v,w in self.outputs if event["received"]<t<event["delayed_response"]]
+        self.assertGreater(len(rows),10)
+        self.assertTrue(all(abs(v)>1e-8 or abs(w)>1e-8 for v,w in rows),rows)
+        self.assertFalse(result.done())
+        self.assertFalse(any(j.get("fault_latched") for _,j in self.runtime_statuses))
+        self.assertEqual({j["navigation_attempt_id"] for _,j in self.contexts if j["state"]=="ACTIVE"},{attempt})
+        self.cancel_top(handle,result)
         client.destroy()
 
     def test_route_service_gap_keeps_current_execution(self):
@@ -104,5 +142,6 @@ def load_tests(loader, tests, pattern):
     return unittest.TestSuite(RouteUpdateNavigator(name) for name in (
         'test_replanning_keeps_uuid_and_updates_material_route',
         'test_route_service_gap_keeps_current_execution',
+        'test_delayed_route_response_keeps_execution',
         'test_update_rejects_wrong_execution_terminal_and_retired_goal',
         'test_preemption_rejects_old_owner_replay'))

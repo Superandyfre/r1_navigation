@@ -14,8 +14,11 @@ nlohmann::json owner(double stamp=10.1, int sequence=1) {
 TEST(ExecutionOwnerLease, MissingAcknowledgementNeverPermits) {
   ExecutionOwnerLease l;l.begin("a","c","g",10.);
   EXPECT_FALSE(l.ready(10.5));EXPECT_TRUE(l.fault().empty());
-  EXPECT_FALSE(l.ready(11.01));EXPECT_EQ(l.fault(),"owner_ack_timeout");
-  l.observe(owner(11.02),11.02);EXPECT_FALSE(l.ready(11.02));
+  EXPECT_FALSE(l.ready(12.01));EXPECT_TRUE(l.fault().empty());
+  l.observe(owner(12.02),12.02);EXPECT_TRUE(l.ready(12.02));
+  ExecutionOwnerLease expired;expired.begin("a","c","g",10.);
+  EXPECT_FALSE(expired.ready(45.01));EXPECT_EQ(expired.fault(),"owner_ack_timeout");
+  expired.observe(owner(45.02),45.02);EXPECT_FALSE(expired.ready(45.02));
 }
 TEST(ExecutionOwnerLease, ExactIdentityAndFreshnessRequired) {
   ExecutionOwnerLease l;l.begin("a","c","g",10.);

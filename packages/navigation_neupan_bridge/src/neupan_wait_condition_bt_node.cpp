@@ -38,6 +38,14 @@ public:
   NeuPANFollowPath(const std::string & name, const BT::NodeConfiguration & config)
   : FollowPathAction(name, "follow_path", config)
   {
+    // A FollowPath acknowledgement can be delayed even after the server
+    // accepted the request. Keep the same pending future and execution while
+    // waiting; ownership still prevents motion until the ACK is received.
+    const auto wait_ms = node_->get_parameter_or<int>("neupan_follow_path_ack_timeout_ms", 30000);
+    if (wait_ms <= 0 || wait_ms > 34000) {
+      throw std::invalid_argument("neupan_follow_path_ack_timeout_ms must be in (0,34000]");
+    }
+    follow_path_ack_timeout_ = std::chrono::milliseconds(wait_ms);
     owner_id_ = r1_neupan_runtime::newBootId();
     owner_pub_ = node_->create_publisher<std_msgs::msg::String>("/neupan_execution_owner", 20);
     rclcpp::SubscriptionOptions options; options.callback_group = callback_group_;
@@ -151,7 +159,14 @@ public:
       return BT::NodeStatus::FAILURE;
     }
     const auto pending = future_goal_handle_;
-    const auto status = FollowPathAction::tick();
+    // Scope this wait budget to goal acknowledgement: halt, cancellation
+    // and unrelated service calls retain the existing shorter timeout.
+    const auto previous_timeout = server_timeout_;
+    server_timeout_ = follow_path_ack_timeout_;
+    BT::NodeStatus status;
+    try {status = FollowPathAction::tick();}
+    catch (...) {server_timeout_ = previous_timeout; throw;}
+    server_timeout_ = previous_timeout;
     if (status == BT::NodeStatus::RUNNING && goal_handle_ && !future_goal_handle_) {
       // Humble's human-readable to_string omits per-byte zero padding.
       // Use the exact fixed-width identity emitted by ControllerServer.
@@ -196,6 +211,7 @@ public:
   }
 
 private:
+  std::chrono::milliseconds follow_path_ack_timeout_{30000};
   Pose budget_parent_;
   Goals budget_parents_;
   bool budget_one_{false}, budget_many_{false};
