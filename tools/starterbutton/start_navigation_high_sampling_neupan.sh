@@ -60,7 +60,7 @@ arm_local_ip="${RPP_ARM_LOCAL_IP:-192.168.11.11}"
 # The separate final obstacle checker is removed from this HW1 profile.
 scan_source="${RPP_NEUPAN_SCAN_SOURCE:-dual}"
 mesh_self_filter="${RPP_NEUPAN_USE_MESH_SELF_FILTER:-true}"
-mesh_filter_mode="${RPP_NEUPAN_MESH_FILTER_MODE:-2d}"
+mesh_filter_mode="${RPP_NEUPAN_MESH_FILTER_MODE:-3d}"
 arm_extra_mesh_config="${RPP_ARM_EXTRA_MESH_CONFIG:-}"
 collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-false}}"
 

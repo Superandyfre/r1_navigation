@@ -110,8 +110,6 @@ def _build(context):
         raise RuntimeError("use_mesh_self_filter must be true or false")
     if mesh_filter_mode not in {"2d", "3d"}:
         raise RuntimeError("mesh_filter_mode must be 2d or 3d")
-    if mesh_filter_mode == "3d" and use_mesh_self_filter != "true":
-        raise RuntimeError("3d mesh filtering requires use_mesh_self_filter:=true")
     if collision_check_enabled != "false":
         raise RuntimeError("HW1 duplicate collision checks were removed; collision_check_enabled must be false")
     if not 0.0 <= mesh_projection_margin_m <= 0.10:

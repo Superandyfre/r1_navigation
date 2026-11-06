@@ -55,7 +55,9 @@ class MotionWiring(unittest.TestCase):
         self.assertNotIn("r1_scan_fusion",n)
         self.assertFalse(self.params(c,n["r1_arm_self_filter_3d"])["rear_scan_enabled"])
         self.assertEqual(self.remaps(c,n["neupan_pointcloud_to_scan"])["scan"],"/scan_neupan_mesh_shadow")
-        with self.assertRaises(RuntimeError):self.build(mesh_filter_mode="3d",use_mesh_self_filter="false")
+        c,n=self.build(mesh_filter_mode="3d",use_mesh_self_filter="false")
+        self.assertNotIn("r1_arm_self_filter_3d",n)
+        self.assertEqual(self.params(c,n["n1_16_production_bridge"])["scan_topic"],"/scan_neupan")
     def test_attachment_is_identical_in_filter_and_footprint(self):
         with tempfile.TemporaryDirectory() as d:
             file=Path(d)/"meshes.yaml"

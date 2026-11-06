@@ -10,7 +10,7 @@ def generate_launch_description():
     share=FindPackageShare('navigation_neupan_bridge')
     declarations=[DeclareLaunchArgument(name,default_value=value) for name,value in
                   [('calibration_record',''),('scan_source','dual'),('use_mesh_self_filter','true'),
-                   ('mesh_filter_mode','2d'),('arm_extra_mesh_config',''),
+                   ('mesh_filter_mode','3d'),('arm_extra_mesh_config',''),
                    ('mesh_projection_margin_m','0.06'),('command_profile','smoothed'),
                    ('cmd_vel_out_topic','/cmd_vel'),('runtime_auto_arm','true')]]
     def include(file,names,extra=None):

@@ -1,9 +1,9 @@
 # Arm self-return filtering
 
 `mesh_filter_mode:=3d` selects the time-aligned filter in the motion launch.
-The UI7 starter accepts `RPP_NEUPAN_MESH_FILTER_MODE=3d`; the default remains
-`2d` until a release is explicitly selected. This source change does not alter
-an already-running UI7 deployment. Use `2d` for the previous scan path.
+The UI7 starter defaults to `3d` and accepts `RPP_NEUPAN_MESH_FILTER_MODE=2d`
+for the previous scan path. This source change does not alter an already-running
+UI7 deployment. Disabling mesh filtering bypasses either selection.
 
 The 3D path filters Livox points before point-cloud-to-scan conversion and the
 rear laser beams before scan fusion. It uses each point/beam timestamp and TF

@@ -81,7 +81,7 @@ def generate_launch_description():
             description="NeuPAN obstacle scan source: livox_only or dual.",
         ),
         DeclareLaunchArgument("use_mesh_self_filter", default_value="true", choices=["false", "true"]),
-        DeclareLaunchArgument("mesh_filter_mode", default_value="2d", choices=["2d", "3d"]),
+        DeclareLaunchArgument("mesh_filter_mode", default_value="3d", choices=["2d", "3d"]),
         DeclareLaunchArgument("arm_extra_mesh_config", default_value=""),
         DeclareLaunchArgument(
             "command_profile", default_value="smoothed",

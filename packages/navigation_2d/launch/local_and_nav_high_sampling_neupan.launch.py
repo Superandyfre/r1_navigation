@@ -192,7 +192,7 @@ def generate_launch_description():
             "use_mesh_self_filter", default_value="true", choices=["false", "true"],
             description="Use the dual-arm mesh self-return filter for NeuPAN obstacle scanning.",
         ),
-        DeclareLaunchArgument("mesh_filter_mode", default_value="2d", choices=["2d", "3d"]),
+        DeclareLaunchArgument("mesh_filter_mode", default_value="3d", choices=["2d", "3d"]),
         DeclareLaunchArgument("arm_extra_mesh_config", default_value=""),
         DeclareLaunchArgument(
             "collision_check_enabled", default_value="false", choices=["false"],
