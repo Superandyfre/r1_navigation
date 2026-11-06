@@ -109,6 +109,31 @@ def main() -> None:
     check(timed_out.request_gear == -1,
           "fresh stopped odometry must complete a transition even after timeout")
 
+    transition_noise = GearTransitionGate(GearTransitionConfig(confirm_cycles=2))
+    for now in (0.0, 0.1):
+        transition_noise.decide(linear_x=-0.1, angular_z=0.0, active_gear=1,
+                                observed_linear_x=0.1, odom_fresh=True, now=now)
+    for now, velocity in ((0.2, 0.0), (0.3, 0.1)):
+        noisy = transition_noise.decide(linear_x=velocity, angular_z=0.0, active_gear=1,
+                                        observed_linear_x=0.1, odom_fresh=True, now=now)
+        check(noisy.state == "STOPPING" and noisy.request_gear is None,
+              "one neutral or aligned sample must not cancel a confirmed reversal")
+    recovered = transition_noise.decide(linear_x=-0.1, angular_z=0.0, active_gear=1,
+                                        observed_linear_x=0.0, odom_fresh=True, now=0.4)
+    check(recovered.request_gear == -1,
+          "confirmed reversal must resume after brief direction noise")
+
+    cancellation = GearTransitionGate(GearTransitionConfig(confirm_cycles=2))
+    for now in (0.0, 0.1):
+        cancellation.decide(linear_x=-0.1, angular_z=0.0, active_gear=1,
+                            observed_linear_x=0.1, odom_fresh=True, now=now)
+    cancellation.decide(linear_x=0.1, angular_z=0.0, active_gear=1,
+                        observed_linear_x=0.1, odom_fresh=True, now=0.2)
+    canceled = cancellation.decide(linear_x=0.1, angular_z=0.0, active_gear=1,
+                                   observed_linear_x=0.1, odom_fresh=True, now=0.3)
+    check(canceled.state == "DRIVE" and canceled.linear_x == 0.1,
+          "sustained changed intent must cancel the pending gear transition")
+
     hold_gate = GearTransitionGate(GearTransitionConfig(confirm_cycles=3))
     hold_gate.decide(linear_x=0.2, angular_z=0.1, active_gear=1,
                      observed_linear_x=0.2, odom_fresh=True, now=1.0)

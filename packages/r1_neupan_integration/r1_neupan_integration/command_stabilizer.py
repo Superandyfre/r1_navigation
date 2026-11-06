@@ -185,6 +185,7 @@ class GearTransitionGate:
         self._candidate_gear: int | None = None
         self._candidate_cycles = 0
         self._target_gear: int | None = None
+        self._cancel_cycles = 0
         self._stop_started = 0.0
         self._last_aligned = None
         self._last_aligned_at = 0.0
@@ -211,6 +212,20 @@ class GearTransitionGate:
                 linear_x, angular_z, observed_linear_x, now)):
             raise ValueError("gear gate inputs must be finite")
         requested_gear = self._sign(linear_x, self.config.mismatch_deadband_mps)
+        if self._target_gear is not None and requested_gear != self._target_gear:
+            # Once decelerating for a confirmed reversal, a single neutral or
+            # original-direction solve must not erase the transition. A real
+            # change of intent can cancel it after sustained aligned samples.
+            if requested_gear == 0:
+                self._cancel_cycles = 0
+                self._last_aligned = None
+                return GearTransitionDecision(0.0, angular_z, "STOPPING", "gear_intent_neutral")
+            self._cancel_cycles += 1
+            if self._cancel_cycles < self.config.direction_commit_cycles:
+                return GearTransitionDecision(0.0, 0.0, "STOPPING", "gear_cancel_confirmation")
+            self.reset()
+        elif self._target_gear is not None:
+            self._cancel_cycles = 0
         if requested_gear == 0:
             if self._candidate_gear is not None or self._target_gear is not None:
                 self.reset()
