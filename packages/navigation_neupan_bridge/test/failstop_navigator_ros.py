@@ -35,7 +35,7 @@ class NavigatorFailstop(chain.FailstopChainROS):
             handle.succeed(); return result
         self.planners = [ActionServer(self.node, ComputePathToPose, '/compute_path_to_pose', compute),
                          ActionServer(self.node, ComputePathThroughPoses, '/compute_path_through_poses', compute)]
-        configdir = Path(getattr(self, 'candidate_configdir', chain.WS/'src/r1_navigation/packages/navigation_neupan_bridge/config'))
+        configdir = Path(getattr(self, 'candidate_configdir', chain.SOURCE_ROOT/'packages/navigation_neupan_bridge/config'))
         params = {'bt_navigator': {'ros__parameters': dict(use_sim_time=False, global_frame='map',
             robot_base_frame='base_link', odom_topic=chain.PREFIX+'odom', bt_loop_duration=10,
             default_server_timeout=1000, wait_for_service_timeout=1000,

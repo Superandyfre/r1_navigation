@@ -13,7 +13,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from std_msgs.msg import String
 import failstop_chain_ros as chain
-COGNAV_ROOT=Path(getattr(chain.FailstopChainROS,'cognav_source_root',chain.WS/'src/r1_navigation/integrations/cognav'))
+COGNAV_ROOT=Path(getattr(chain.FailstopChainROS,'cognav_source_root',chain.SOURCE_ROOT/'integrations/cognav'))
 sys.path.insert(0,str(COGNAV_ROOT))
 from robot_live.cognav_bridge import Bridge
 from robot_live.protocol import SCHEMA, write_json

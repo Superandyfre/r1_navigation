@@ -15,7 +15,7 @@ bundle05完整42项40通过/1失败/1报错，启动响应可靠性仍OPEN；带
 | 对象 | 当前路径/含义 |
 |---|---|
 | 生产UI7 | /home/rpp/r1_navigation/tools/starterbutton/start_navigation_high_sampling_neupan.sh |
-| 开发源码 | /home/rpp/neupan_failstop_ws/src/r1_navigation |
+| 开发源码 | /home/rpp/r1_navigation |
 | 候选05 | /home/rpp/neupan_failstop_ws/release_candidates/20261029-a-plus-05 |
 | bundle05 | /home/rpp/neupan_failstop_ws/release_bundles/20261029-a-plus-05 |
 | 候选05构建SHA | 824adfd43426621e2de30b9fd1cb8c8d7438dd2d |

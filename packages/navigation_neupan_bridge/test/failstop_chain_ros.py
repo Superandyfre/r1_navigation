@@ -28,6 +28,7 @@ from tf2_ros import TransformBroadcaster
 import yaml
 
 WS = Path('/home/rpp/neupan_failstop_ws')
+SOURCE_ROOT = Path(__file__).resolve().parents[3]
 CONTROLLER = WS/'install/nav2_controller/lib/nav2_controller/controller_server'
 GUARD = WS/'install/r1_collision_guard/lib/r1_collision_guard/r1_collision_guard_node'
 SMOOTHER = Path('/home/rpp/rpp_ws/install/nav2_velocity_smoother/lib/nav2_velocity_smoother/velocity_smoother')
@@ -144,7 +145,7 @@ class FailstopChainROS(unittest.TestCase):
         config['r1_collision_guard']['ros__parameters'].update(getattr(self, 'guard_parameters_override', {}))
         path=self.report/'params.yaml';path.write_text(yaml.safe_dump(config))
         if self.real_node:
-            packages=WS/'src/r1_navigation/packages'
+            packages=SOURCE_ROOT/'packages'
             parameters=dict(robot_config_dir=str(getattr(self,'candidate_configdir',packages/'navigation_neupan_bridge/config')),
                 planner_config_file='planner_r1_hw1.yaml',
                 dune_checkpoint_file=str(getattr(self,'candidate_checkpoint',packages/'r1_neupan_integration/config/models/dune_model_5000.pth')),
@@ -191,11 +192,11 @@ class FailstopChainROS(unittest.TestCase):
         for path in sorted(loaded):
             self.artifacts.append(dict(loaded_library=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
         if self.real_node:
-            for path in [Path(getattr(self,'candidate_configdir',WS/'src/r1_navigation/packages/navigation_neupan_bridge/config'))/'planner_r1_hw1.yaml',
-                         Path(getattr(self,'candidate_checkpoint',WS/'src/r1_navigation/packages/r1_neupan_integration/config/models/dune_model_5000.pth'))]:
+            for path in [Path(getattr(self,'candidate_configdir',SOURCE_ROOT/'packages/navigation_neupan_bridge/config'))/'planner_r1_hw1.yaml',
+                         Path(getattr(self,'candidate_checkpoint',SOURCE_ROOT/'packages/r1_neupan_integration/config/models/dune_model_5000.pth'))]:
                 self.artifacts.append(dict(planner_input=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))
             for name in ('n1_15_node.py','n1_16_node.py','execution_protocol.py'):
-                root=getattr(self,'worker_source_root',WS/'src/r1_navigation/packages/r1_neupan_integration/r1_neupan_integration')
+                root=getattr(self,'worker_source_root',SOURCE_ROOT/'packages/r1_neupan_integration/r1_neupan_integration')
                 path=root/name
                 if not path.is_file():continue
                 self.artifacts.append(dict(worker_source=str(path),sha256=hashlib.sha256(path.read_bytes()).hexdigest()))

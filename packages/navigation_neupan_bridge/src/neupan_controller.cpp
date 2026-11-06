@@ -613,9 +613,27 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
     if (!localization_health.valid || health_age > localization_health_timeout_sec_) {
       throw nav2_core::PlannerException("R1 localization health status unavailable");
     }
+    if (localization_health.state == "HOLD") {
+      geometry_msgs::msg::TwistStamped stopped;
+      stopped.header = pose.header; stopped.header.stamp = node_->now();
+      publishDiagnostic("info", "localization_hold:" + localization_health.reason);
+      return stopped;
+    }
     if (localization_health.state == "READY") {
       std::lock_guard<std::mutex> lock(mutex_);
       localization_ready_observed_ = true;
+      if (localization_recovery_after_ > 0.0 &&
+        (!envelope_.valid || envelope_.planner_input_monotonic <= localization_recovery_after_)) {
+        geometry_msgs::msg::TwistStamped stopped;
+        stopped.header = pose.header; stopped.header.stamp = node_->now();
+        return stopped;
+      }
+      if (localization_recovery_after_ > 0.0) {
+        // Use the same post-recovery result that satisfied the barrier, not
+        // the snapshot copied before the localization callback was handled.
+        envelope = envelope_;
+        localization_recovery_after_ = 0.0;
+      }
     }
     if (localization_health.state != "READY") {
       throw nav2_core::PlannerException(
@@ -847,6 +865,7 @@ void NeuPANController::envelopeCallback(const std_msgs::msg::String::SharedPtr m
         if (!envelope_.valid || source.published != envelope_.planner_result_monotonic) {
           envelope_.linear_x = source.linear; envelope_.angular_z = source.angular;
           envelope_.planner_result_monotonic = source.published;
+          envelope_.planner_input_monotonic = source.input;
           envelope_.worker_generation = source.context.generation;
           envelope_.path_version = source.context.path; envelope_.goal_version = source.context.goal;
           envelope_.valid = true; envelope_.received_at = std::chrono::steady_clock::now();
@@ -999,7 +1018,7 @@ void NeuPANController::localizationHealthCallback(const std_msgs::msg::String::S
     candidate.state = payload.at("state").get<std::string>();
     candidate.reason = payload.at("reason").get<std::string>();
     if (candidate.state != "BOOTSTRAP" && candidate.state != "READY" &&
-      candidate.state != "FAULT")
+      candidate.state != "HOLD" && candidate.state != "FAULT")
     {
       throw std::runtime_error("state_invalid");
     }
@@ -1010,6 +1029,13 @@ void NeuPANController::localizationHealthCallback(const std_msgs::msg::String::S
     return;
   }
   std::lock_guard<std::mutex> lock(mutex_);
+  if (candidate.state == "HOLD") {localization_hold_seen_ = true;}
+  if (candidate.state == "READY" && localization_hold_seen_) {
+    // Require an input captured after recovery; a result computed during the
+    // uncertain footprint interval cannot resume motion.
+    localization_recovery_after_ = monotonicNow();
+    localization_hold_seen_ = false;
+  }
   localization_health_ = std::move(candidate);
 }
 

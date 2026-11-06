@@ -33,6 +33,7 @@
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
 #include "navigation_neupan_bridge/static_map_overlap_state.hpp"
+#include "navigation_neupan_bridge/footprint_sync_grace.hpp"
 #include "navigation_neupan_bridge/static_map_fault_geometry.hpp"
 
 namespace navigation_neupan_bridge
@@ -410,6 +411,7 @@ private:
     last_map_tf_stamp_available_ = false;
     soft_jump_count_ = 0;
     static_map_overlap_state_.reset();
+    footprint_sync_grace_.reset();
     last_checked_costmap_generation_ = 0;
     last_lethal_sample_ = {};
     stable_costmap_samples_ = 0;
@@ -695,7 +697,12 @@ private:
 
     const bool sustained_localization_loss = reason == "localization_status_stale" &&
       localization_status_age >= localization_fault_timeout_sec_;
+    // A fresh footprint/costmap mismatch is a synchronization gap, not yet
+    // evidence of a permanent fault. Stop during a bounded grace period.
+    const auto footprint_sync = footprint_sync_grace_.observe(
+      ever_ready_, healthy, reason, preflight_ready_, steady_now);
     if (ever_ready_ && !healthy && !fault_latched_ &&
+      footprint_sync == FootprintSyncGrace::Result::Fault &&
       (reason != "localization_status_stale" || sustained_localization_loss))
     {
       fault_latched_ = true;
@@ -803,7 +810,7 @@ private:
       // relocalization is settling, so a stuck bootstrap is diagnosable
       // from the status topic alone.
       publish(
-        "BOOTSTRAP", operator_relocalization_pending_ ?
+        ever_ready_ && footprint_sync == FootprintSyncGrace::Result::Hold ? "HOLD" : "BOOTSTRAP", operator_relocalization_pending_ ?
         "operator_initial_pose_stabilizing:" + reason :
         (healthy ? "stability_window" : reason),
         translation_jump, yaw_jump, localization_status_age);
@@ -837,6 +844,7 @@ private:
   tf2_ros::TransformListener tf_listener_;
   mutable std::mutex mutex_;
   mutable std::mutex health_mutex_;
+  FootprintSyncGrace footprint_sync_grace_{1.0};
   rclcpp::CallbackGroup::SharedPtr input_callback_group_;
   OdomSample odom_;
   std::deque<OdomSample> odom_history_;

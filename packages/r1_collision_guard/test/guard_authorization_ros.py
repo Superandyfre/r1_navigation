@@ -49,6 +49,9 @@ class GuardAuthorizationROS(unittest.TestCase):
             'planner_source_timeout_sec': '0.30', 'planner_input_timeout_sec': '0.40',
             'planner_recovery_timeout_sec': '1.0',
         }
+        if "localization_hold" in self._testMethodName:
+            params["require_localization_ready"] = "true"
+            params["localization_health_topic"] = "/test_wp2/localization"
         args = [str(EXECUTABLE), '--ros-args']
         for key,value in params.items(): args += ['-p', key+':='+value]
         self.proc = subprocess.Popen(args, stdout=self.log, stderr=subprocess.STDOUT)
@@ -60,6 +63,8 @@ class GuardAuthorizationROS(unittest.TestCase):
         self.pubs = {k:self.node.create_publisher(t,'/test_wp2/'+k,20) for k,t in [
             ('input',Twist),('raw',Twist),('scan',LaserScan),('odom',Odometry),
             ('health',String),('source',String),('grant',String),('footprint',PolygonStamped)]}
+        self.pubs["localization"] = self.node.create_publisher(String, "/test_wp2/localization", 20)
+        self.localization_state = "READY"
         self.health_seq = self.source_seq = self.grant_seq = 0
         self.next_input=0
         self.guard_boot = None
@@ -115,6 +120,7 @@ class GuardAuthorizationROS(unittest.TestCase):
             scan.angle_min=-3.14;scan.angle_increment=.02;scan.angle_max=3.14
             scan.range_min=.05;scan.range_max=8.;scan.ranges=[7.]*315
             self.pubs['scan'].publish(scan)
+            self.publish_json("localization",dict(schema="r1_localization_health_v1", state=self.localization_state, reason="test"))
             if self.health_enabled:
                 self.health_seq+=1
                 self.publish_json('health',dict(schema='r1_neupan_worker_health_v2',planner_state='ready',planner_failed_request_id=-1,boot_id=self.worker_boot,
@@ -197,6 +203,40 @@ class GuardAuthorizationROS(unittest.TestCase):
         self.until(lambda:any(t>cutoff and v>.05 for t,v,w in self.outputs))
         self.assertEqual(self.statuses[-1]['path_version'],2)
         self.assertEqual(self.statuses[-1]['grant_id'],self.grant_id)
+
+    def test_localization_hold_blocks_old_nonzero_tail_until_both_streams_zero(self):
+        self.localization_state = "HOLD"
+        self.assert_stopped("localization_hold:test")
+        # Neither input stream has produced zero after HOLD.
+        self.localization_state = "READY"
+        start = time.monotonic()
+        while time.monotonic() < start + .2: self.tick()
+        rows = [(v, w) for t, v, w in self.outputs if t > start + .04]
+        self.assertTrue(rows)
+        self.assertTrue(all(abs(v) < 1e-8 and abs(w) < 1e-8 for v, w in rows))
+        self.command_value = 0.
+        start = time.monotonic()
+        while time.monotonic() < start + .15: self.tick()
+        self.command_value = .1
+        start = time.monotonic()
+        self.until(lambda: any(t > start and v > .05 for t, v, w in self.outputs))
+
+    def test_localization_hold_requires_drained_commands_and_fresh_input(self):
+        self.localization_state="HOLD"
+        self.assert_stopped("localization_hold:test")
+        self.command_value=0.
+        start=time.monotonic()
+        while time.monotonic()<start+.15:self.tick()
+        self.localization_state="READY"
+        # Old scan timestamps cannot be laundered by freshly published results.
+        self.input_age=.7
+        start=time.monotonic()
+        while time.monotonic()<start+.15:self.tick()
+        self.assertTrue(all(abs(v)<1e-8 for t,v,w in self.outputs if t>start+.04))
+        self.input_age=.01
+        start=time.monotonic()
+        self.command_value=.1
+        self.until(lambda:any(t>start and v>.05 for t,v,w in self.outputs))
 
     def test_source_freeze_stops_despite_fresh_raw_and_health_then_recovers(self):
         self.source_enabled=False

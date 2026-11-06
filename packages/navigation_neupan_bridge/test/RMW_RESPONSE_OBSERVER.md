@@ -12,7 +12,7 @@ headers. The observer is deliberately absent from CMake/install/release payloads
 ```python
 from pathlib import Path
 import subprocess
-source = Path('/home/rpp/neupan_failstop_ws/src/r1_navigation/packages/navigation_neupan_bridge/test/rmw_response_observer.cpp')
+source = Path('/home/rpp/r1_navigation/packages/navigation_neupan_bridge/test/rmw_response_observer.cpp')
 output = Path('/absolute/new-evidence-directory/rmw_response_observer.so')
 subprocess.run([
     'g++', '-shared', '-fPIC', '-std=c++17', str(source), '-o', str(output),

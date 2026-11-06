@@ -88,6 +88,7 @@ private:
     double linear_x{0.0};
     double angular_z{0.0};
     double planner_result_monotonic{0.0};
+    double planner_input_monotonic{0.0};
     std::int64_t worker_generation{0};
     int path_version{0};
     int goal_version{0};
@@ -189,6 +190,8 @@ private:
   GateStatus gate_status_;
   GuardStatus guard_status_;
   LocalizationHealth localization_health_;
+  bool localization_hold_seen_{false};
+  double localization_recovery_after_{0.0};
   bool guard_stop_active_{false};
   std::chrono::steady_clock::time_point guard_stop_started_at_{};
   geometry_msgs::msg::Twist gate_command_;

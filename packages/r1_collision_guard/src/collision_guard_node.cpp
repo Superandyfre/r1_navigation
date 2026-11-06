@@ -395,7 +395,7 @@ private:
       }
       health.state = payload.at("state").get<std::string>();
       health.reason = payload.at("reason").get<std::string>();
-      if (health.state != "BOOTSTRAP" && health.state != "READY" && health.state != "FAULT") {
+      if (health.state != "BOOTSTRAP" && health.state != "READY" && health.state != "HOLD" && health.state != "FAULT") {
         throw std::runtime_error("state_invalid");
       }
       health.available = true;
@@ -407,8 +407,17 @@ private:
       health.received = std::chrono::steady_clock::now();
     }
     std::lock_guard<std::mutex> lock(mutex_);
+    if (health.state == "HOLD" && !localization_hold_seen_) {
+      localization_hold_seen_ = true;
+      localization_recovery_zero_seen_ = false;
+      command_barrier_.reset();
+    }
     if (health.state == "READY") {
       localization_ready_seen_ = true;
+      if (localization_hold_seen_) {
+        localization_recovery_after_ = monotonicNow();
+        localization_hold_seen_ = false;
+      }
     }
     localization_health_ = std::move(health);
   }
@@ -702,6 +711,8 @@ private:
       decision = stop("waiting_for_localization_ready");
     } else if (require_localization_ready_ && localization_health_stale) {
       decision = fault("localization_status_stale");
+    } else if (require_localization_ready_ && localization_health.state == "HOLD") {
+      decision = stop("localization_hold:" + localization_health.reason);
     } else if (require_localization_ready_ && localization_health.state != "READY") {
       decision = fault("localization_" + localization_health.state + ":" + localization_health.reason);
     } else if (collision_check_enabled_ && require_dynamic_footprint_ && dynamic_footprint_stale) {
@@ -811,8 +822,30 @@ private:
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (command_epoch != command_epoch_) {decision = stop("command_epoch_changed");}
+      // A HOLD can arrive after the timer copied its inputs; do not let that
+      // stale snapshot emit an additional command at the actuator boundary.
+      if (require_localization_ready_ && localization_health_.state == "HOLD") {
+        decision = stop("localization_hold:" + localization_health_.reason);
+      }
       physical_safety_state_ = stateName(decision.state);
       authorization_decision_ = authorization_->evaluate(monotonicNow());
+      if (localization_hold_seen_ || localization_recovery_after_ > 0.0) {
+        if (command_barrier_.ready(monotonicNow(), source_command_timeout_sec_, command_timeout_sec_)) {
+          localization_recovery_zero_seen_ = true;
+        }
+      }
+      if (localization_recovery_after_ > 0.0) {
+        const auto source = authorization_->latestSource();
+        const double raw_time = std::chrono::duration<double>(source_command_received_.time_since_epoch()).count();
+        const double output_time = std::chrono::duration<double>(command_received_.time_since_epoch()).count();
+        if (!localization_recovery_zero_seen_ || !source || source->input <= localization_recovery_after_ ||
+          raw_time <= source->published || output_time <= localization_recovery_after_)
+        {
+          decision = stop("awaiting_post_localization_recovery_command");
+        } else {
+          localization_recovery_after_ = 0.0;
+        }
+      }
       if (!authorization_decision_.allowed) {
         decision = authorization_decision_.fault ? fault(authorization_decision_.reason) :
           stop(authorization_decision_.reason);
@@ -958,6 +991,9 @@ private:
   sensor_msgs::msg::LaserScan scan_;
   std::deque<ScanSample> scan_history_;
   std::deque<OdomSample> odom_history_;
+  bool localization_hold_seen_{false};
+  bool localization_recovery_zero_seen_{false};
+  double localization_recovery_after_{0.0};
   SteadyTime command_received_{};
   SteadyTime source_command_received_{};
   SteadyTime scan_received_{};

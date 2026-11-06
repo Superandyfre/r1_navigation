@@ -7,7 +7,7 @@ import sys
 import unittest
 import failstop_chain_ros as chain
 from failstop_mixed_version_ros import MixedVersion
-sys.path.insert(0,str(chain.WS/'src/r1_navigation/tools/release'))
+sys.path.insert(0,str(chain.SOURCE_ROOT/'tools/release'))
 import runtime_maps
 
 
