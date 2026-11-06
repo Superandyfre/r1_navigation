@@ -39,4 +39,5 @@ colcon --log-base "${candidate_root}/log" build \
 # A changed source snapshot during the build makes the candidate ambiguous.
 [[ "$(git -C "${navigation_repo}" rev-parse HEAD)" == "$(cat "${candidate_root}/source-sha.txt")" ]]
 [[ -z "$(git -C "${navigation_repo}" status --porcelain --untracked-files=normal)" ]]
-echo "BUILD ONLY: candidate requires inventory, compatibility, acceptance and operator approval."
+/usr/bin/python3 "${navigation_repo}/tools/release/inventory_candidate.py" "${candidate_root}"
+echo "BUILD ONLY: candidate requires compatibility and acceptance; no deployment is performed."
