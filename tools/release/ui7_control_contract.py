@@ -33,6 +33,8 @@ def trace(bundle, calibration, environment):
     from launch import LaunchContext
     from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
     from launch.utilities import normalize_to_list_of_substitutions, perform_substitutions
+    from launch_ros.actions import Node
+    from launch_ros.utilities import evaluate_parameters
     bundle = bundle.resolve(strict=True)
     manifest = json.loads((bundle / 'releases/a-plus/manifest.json').read_text())
     if manifest.get('excluded_components') != ['cognav']:
@@ -106,17 +108,31 @@ def trace(bundle, calibration, environment):
     closure = dict(zip(admit.__code__.co_freevars, (c.cell_contents for c in admit.__closure__)))
     after_gate = closure['after_arm_gate']
     actions = after_gate(SimpleNamespace(returncode=0), context)
+    supervisors = [action for action in actions if isinstance(action, Node) and
+                   text(action._Node__node_name or "", context) == "ui7_runtime_supervisor"]
+    if len(supervisors) != 1:
+        raise ValueError("missing_UI7_runtime_supervisor")
+    supervisor_parameters = {}
+    for value in evaluate_parameters(context, supervisors[0]._Node__parameters):
+        if isinstance(value, dict):
+            supervisor_parameters.update(value)
+    owned_path = Path(get_package_share_directory("navigation_neupan_bridge")) / "launch/ui7_owned_runtime.launch.py"
+    inputs[str(owned_path)] = hashlib.sha256(owned_path.read_bytes()).hexdigest()
+    spec = importlib.util.spec_from_file_location("_ui7_owned_runtime", owned_path)
+    owned = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owned)
+    owned_context = LaunchContext()
+    owned_context.launch_configurations.update({key: str(value) for key, value in supervisor_parameters.items()})
+    owned_description = declare(owned, owned_context)
     targets = {}
-    for action in actions:
+    for action in owned_description.entities:
         if isinstance(action, IncludeLaunchDescription):
-            location = action.launch_description_source._LaunchDescriptionSource__location
-            # A PythonLaunchDescriptionSource normalizes its location lazily.
-            location = text(location, context)
+            location = text(action.launch_description_source._LaunchDescriptionSource__location, owned_context)
             name = Path(location).name
-            if name in ('navigation_neupan.launch.py', 'r1_neupan_hw1_motion.launch.py'):
-                targets[name] = child_context(action, context)
-    if set(targets) != {'navigation_neupan.launch.py', 'r1_neupan_hw1_motion.launch.py'}:
-        raise ValueError('missing_control_launch_include')
+            if name in ("navigation_neupan.launch.py", "r1_neupan_hw1_motion.launch.py"):
+                targets[name] = child_context(action, owned_context)
+    if set(targets) != {"navigation_neupan.launch.py", "r1_neupan_hw1_motion.launch.py"}:
+        raise ValueError("missing_control_launch_include")
     nav = targets['navigation_neupan.launch.py'].launch_configurations
     motion = targets['r1_neupan_hw1_motion.launch.py'].launch_configurations
     if nav['command_profile'] != motion['command_profile'] or nav['mode'] != 'hw1':
