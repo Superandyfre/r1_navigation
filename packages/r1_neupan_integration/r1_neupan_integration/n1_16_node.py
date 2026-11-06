@@ -83,6 +83,7 @@ from r1_neupan_integration.path_validation import (
 )
 from r1_neupan_integration.obstacle_motion_policy import (
     MotionPolicyConfig,
+    braking_preview_m,
     first_command_collision_distance,
     first_swept_collision_distance,
     plan_obstacle_speed,
@@ -375,6 +376,13 @@ class N116Node(N115Node):
             steps=int(self.client.receding or planner_config["receding"]),
             step_time_sec=float(planner_config["step_time"]),
         )
+        self.obstacle_motion_config = replace(
+            self.obstacle_motion_config,
+            preview_m=braking_preview_m(self.obstacle_motion_config),
+        )
+        if (self.obstacle_motion_config.preview_m + self.obstacle_motion_config.front_m
+                > float(self.get_parameter("scan_range_max").value)):
+            raise ValueError("scan range is too short for configured speed and braking preview")
         self.local_detour_config = replace(
             self.obstacle_motion_config,
             preview_m=max(

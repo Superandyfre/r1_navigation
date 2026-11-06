@@ -140,6 +140,8 @@ class neupan(torch.nn.Module):
         assert state.shape[0] >= 3
         self.info.update(bypass_candidates=[], bypass_recovery_exhausted=False,
                          bypass_rebuilds=self.bypass_recovery.rebuilds,
+                         bypass_nominal_fallback=False,
+                         bypass_nominal_fallback_reason="not_attempted",
                          stop_reason="none")
 
         if self.bypass_completed:
@@ -458,12 +460,57 @@ class neupan(torch.nn.Module):
                 self.info["bypass_clearance_m"] = selected_clearance
                 self.info["bypass_phase"] = selected_guide.phase
             else:
-                if self.bypass_recovery.rejected(time.monotonic()):
-                    self.bypass_guide = None
-                    self.cur_vel_array = np.zeros_like(self.cur_vel_array)
-                opt_state_tensor = nominal_state
-                opt_vel_tensor = torch.zeros_like(nominal_control)
-                opt_distance_tensor = torch.zeros((1, self.T), dtype=nominal_state.dtype)
+                # A temporary inability to produce a bypass is not proof that
+                # the normal route must stop. Try the ordinary constrained
+                # NeuPAN trajectory with the *current* obstacle speed profile,
+                # then verify its full swept geometry before permitting it.
+                # In particular, a zero first-step speed never becomes motion.
+                fallback = None
+                profile = (None if reference_speed_profile is None else
+                           np.asarray(reference_speed_profile, dtype=np.float64).reshape(-1))
+                if (profile is not None and profile.size == self.T and
+                        np.isfinite(profile).all() and np.all(profile >= 0.) and profile[0] > 0.):
+                    fallback_input = self.ipath.generate_nom_ref_state(
+                        state, self.cur_vel_array, self.ref_speed, profile)
+                    fallback_tensors = [np_to_tensor(value) for value in fallback_input]
+                    self.pan.current_nom_values = [None, None, None, None]
+                    try:
+                        result = self.pan(
+                            *fallback_tensors, obstacle_points_tensor, point_velocities_tensor,
+                            measured_velocity_tensor, np_to_tensor(profile))
+                        predicted, controls = tensor_to_np(result[0]), tensor_to_np(result[1])
+                        if (predicted.ndim == 2 and predicted.shape[0] >= 3 and predicted.shape[1] >= 2
+                                and controls.ndim == 2 and controls.shape[0] >= 2 and controls.shape[1] >= 1
+                                and np.isfinite(predicted).all() and np.isfinite(controls).all()):
+                            clearance = trajectory_clearance(
+                                predicted, points, self.robot.vertices, self.robot.G, self.robot.h)
+                            if (not np.isnan(clearance) and clearance >= self.bypass_min_clearance
+                                    and np.min(controls[0]) >= -1e-6
+                                    and controls[0, 0] <= profile[0] + 1e-5):
+                                fallback = result
+                                self.info["bypass_nominal_fallback"] = True
+                                self.info["bypass_nominal_fallback_reason"] = "verified_nominal_trajectory"
+                            else:
+                                self.info["bypass_nominal_fallback_reason"] = "unsafe_or_exceeds_profile"
+                        else:
+                            self.info["bypass_nominal_fallback_reason"] = "invalid_trajectory"
+                    except SolverError as error:
+                        if str(error) not in ("Solver ecos returned status Infeasible",
+                                              "Solver ecos returned status Infeasible Inaccurate"):
+                            raise
+                        self.info["bypass_nominal_fallback_reason"] = "nominal_infeasible"
+                else:
+                    self.info["bypass_nominal_fallback_reason"] = "no_positive_safe_profile"
+                if fallback is None:
+                    if self.bypass_recovery.rejected(time.monotonic()):
+                        self.bypass_guide = None
+                        self.cur_vel_array = np.zeros_like(self.cur_vel_array)
+                    opt_state_tensor = nominal_state
+                    opt_vel_tensor = torch.zeros_like(nominal_control)
+                    opt_distance_tensor = torch.zeros((1, self.T), dtype=nominal_state.dtype)
+                else:
+                    self.bypass_recovery.accepted()
+                    opt_state_tensor, opt_vel_tensor, opt_distance_tensor = fallback
                 self.info["bypass_valid"] = False
                 self.info["bypass_side"] = self.bypass_side
                 self.info["bypass_clearance_m"] = None
@@ -499,7 +546,8 @@ class neupan(torch.nn.Module):
         ]
         self.info["opt_state_list"] = [state[:, np.newaxis] for state in opt_state_np.T]
 
-        if (use_bypass and not self.info["bypass_valid"]) or self.check_stop():
+        if (use_bypass and not self.info["bypass_valid"]
+                and not self.info["bypass_nominal_fallback"]) or self.check_stop():
             self.info["stop"] = True
             self.info["stop_reason"] = ("bypass_recovery_exhausted" if self.bypass_recovery.exhausted
                 else "bypass_no_valid_candidate" if use_bypass and not self.info["bypass_valid"]

@@ -6,6 +6,7 @@ import numpy as np
 
 from r1_neupan_integration.obstacle_motion_policy import (
     MotionPolicyConfig,
+    braking_preview_m,
     first_command_collision_distance,
     first_swept_collision_distance,
     plan_obstacle_speed,
@@ -16,6 +17,17 @@ from r1_neupan_integration.local_detour import (
 
 
 def check_geometry() -> None:
+    fast = MotionPolicyConfig(max_speed_mps=1.0, stop_margin_m=0.20)
+    fast = replace(fast, preview_m=braking_preview_m(fast))
+    assert abs(fast.preview_m - 3.1) < 1e-9
+    fast_state = np.zeros((3, 1))
+    fast_path = np.vstack((np.linspace(0.0, 4.0, 81), np.zeros(81), np.zeros(81)))
+    fast_empty = np.empty((2, 0))
+    assert plan_obstacle_speed(fast_state, fast_path, fast_empty, fast_empty, fast).speed_profile[0] == 1.0
+    fast_obstacle = np.asarray([[2.8], [0.0]])
+    assert 0.0 < plan_obstacle_speed(fast_state, fast_path, fast_obstacle, fast_obstacle, fast).speed_profile[0] < 1.0
+    fast_close = np.asarray([[0.50], [0.0]])
+    assert plan_obstacle_speed(fast_state, fast_path, fast_close, fast_close, fast).speed_profile[0] == 0.0
     config = MotionPolicyConfig(stop_margin_m=0.20)
     state = np.asarray([[0.0], [0.0], [0.0]])
     path = np.vstack((np.linspace(0.0, 1.0, 21), np.zeros(21), np.zeros(21)))

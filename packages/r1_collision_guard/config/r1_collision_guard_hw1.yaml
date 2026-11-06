@@ -57,7 +57,7 @@ r1_collision_guard:
     source_command_timeout_sec: 0.35
     scan_history_size: 32
     max_scan_range_m: 8.0
-    max_linear_mps: 0.20
+    max_linear_mps: 1.0
     max_reverse_mps: 0.20
     max_angular_radps: 0.4
     # NeuPAN may request a short reverse maneuver. The guard validates the

@@ -50,6 +50,8 @@ public:
     return StaticMapOverlapTransition::None;
   }
 
+  bool latched() const {return latched_;}
+
   void reset()
   {
     latched_ = false;

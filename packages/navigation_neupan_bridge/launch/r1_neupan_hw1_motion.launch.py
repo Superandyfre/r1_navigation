@@ -398,6 +398,11 @@ def _build(context):
             # A single occupied cell at the chassis edge is map uncertainty,
             # not evidence that localization placed the chassis inside a wall.
             "static_map_fault_inset_m": 0.05,
+            # The live global costmap clears the current chassis from the
+            # static layer, while preserving map cells outside it. A stale
+            # occupied cell under an otherwise stably localized robot is an
+            # inconsistency to report, not a permanent veto on every goal.
+            "static_map_overlap_hard_fault": False,
             "require_dynamic_footprint": True,
             # Compare the planner-padded envelope against the costmap's
             # published footprint. Both carry planner_footprint_margin_m, so

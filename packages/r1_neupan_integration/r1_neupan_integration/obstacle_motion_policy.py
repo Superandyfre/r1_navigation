@@ -37,6 +37,13 @@ class MotionPolicyConfig:
             raise ValueError("steps must be positive")
 
 
+def braking_preview_m(config: MotionPolicyConfig) -> float:
+    """Cover reaction, stopping distance, margin and two scan samples."""
+    v = config.max_speed_mps
+    return max(config.preview_m, v * config.reaction_sec + v * v / (2.0 * config.braking_mps2)
+               + config.stop_margin_m + 2.0 * config.sample_step_m)
+
+
 @dataclass(frozen=True)
 class MotionDecision:
     speed_profile: np.ndarray

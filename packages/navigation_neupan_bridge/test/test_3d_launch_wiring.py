@@ -44,6 +44,7 @@ class MotionWiring(unittest.TestCase):
         f=self.params(c,n["r1_arm_self_filter_3d"])
         self.assertAlmostEqual(self.params(c,n["r1_arm_footprint"])["mesh_projection_margin_m"],0.0)
         self.assertAlmostEqual(self.params(c,n["n1_16_production_bridge"])["dynamic_footprint_clearance_m"],0.04)
+        self.assertFalse(self.params(c,n["r1_localization_monitor"])["static_map_overlap_hard_fault"])
         custom,cn=self.build(mesh_filter_mode="3d",mesh_3d_projection_margin_m="0.02")
         self.assertAlmostEqual(self.params(custom,cn["r1_arm_footprint"])["mesh_projection_margin_m"],0.02)
         with self.assertRaises(RuntimeError):self.build(mesh_filter_mode="3d",mesh_3d_projection_margin_m="0.11")

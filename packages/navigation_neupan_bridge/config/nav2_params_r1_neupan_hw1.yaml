@@ -104,7 +104,7 @@ controller_server:
       # The worker is asynchronous. Hold zero velocity only while its first
       # result for a newly published path arrives; then normal freshness rules apply.
       envelope_startup_timeout: 40.0
-      max_linear: 0.20
+      max_linear: 1.0
       max_reverse: 0.20
       max_angular: 0.40
       allow_reverse: true
@@ -135,9 +135,9 @@ neupan_velocity_smoother:
     odom_duration: 0.1
     velocity_timeout: 0.30
     scale_velocities: true
-    max_velocity: [0.20, 0.0, 0.40]
+    max_velocity: [1.0, 0.0, 0.40]
     min_velocity: [-0.20, 0.0, -0.40]
-    max_accel: [0.20, 0.0, 0.60]
+    max_accel: [0.40, 0.0, 0.60]
     max_decel: [-0.30, 0.0, -0.80]
     # Do not erase valid gentle NeuPAN commands; acceleration limits remain active.
     deadband_velocity: [0.0, 0.0, 0.0]

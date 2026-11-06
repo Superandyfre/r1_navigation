@@ -188,6 +188,7 @@ public:
     hard_yaw_jump_rad_ = declare_parameter<double>("hard_yaw_jump_rad", 0.2094395);
     footprint_padding_m_ = declare_parameter<double>("footprint_padding_m", 0.01);
     static_map_fault_inset_m_ = declare_parameter<double>("static_map_fault_inset_m", 0.0);
+    static_map_overlap_hard_fault_ = declare_parameter<bool>("static_map_overlap_hard_fault", true);
     footprint_ = declare_parameter<std::vector<double>>(
       "footprint_points", std::vector<double>{-0.341, -0.266, -0.341, 0.266, 0.341, 0.266, 0.341,
         -0.266});
@@ -574,6 +575,10 @@ private:
             << ",\"operator_relocalization_pending\":" <<
       (operator_relocalization_pending_ ? "true" : "false")
             << ",\"stable_costmap_samples\":" << stable_costmap_samples_
+            << ",\"static_map_overlap_hard_fault\":" <<
+      (static_map_overlap_hard_fault_ ? "true" : "false")
+            << ",\"static_map_overlap\":" <<
+      (static_map_overlap_state_.latched() ? "true" : "false")
             << ",\"lethal_cells\":" << last_lethal_sample_.count
             << ",\"lethal_map_x\":" << last_lethal_sample_.map_x
             << ",\"lethal_map_y\":" << last_lethal_sample_.map_y
@@ -798,7 +803,9 @@ private:
     const auto static_map_transition = static_map_overlap_state_.observe(
       valid_static_map_check, fresh_static_map_check, last_lethal_sample_.count != 0,
       steady_now);
-    if (static_map_transition == StaticMapOverlapTransition::Latched && !fault_latched_) {
+    if (static_map_transition == StaticMapOverlapTransition::Latched &&
+      static_map_overlap_hard_fault_ &&
+      (!fault_latched_ || FootprintSyncGrace::recoverableFault(fault_reason_))) {
       fault_latched_ = true;
       fault_reason_ = "start_in_lethal_static_map";
       RCLCPP_ERROR(
@@ -811,6 +818,18 @@ private:
       fault_latched_ = false;
       fault_reason_.clear();
       RCLCPP_INFO(get_logger(), "Static map overlap cleared after stable free samples");
+    }
+    // A recovered TF/costmap/footprint source must not leave every later
+    // goal permanently blocked. Clear only availability faults after the same
+    // stability and fresh-costmap checks used for startup. Hard localization
+    // jumps, explicit LOST and static-map overlap remain independently latched.
+    if (fault_latched_ && FootprintSyncGrace::recoverableFault(fault_reason_) &&
+      preflight_ready_ && (!static_map_overlap_hard_fault_ ||
+      (!static_map_overlap_state_.latched() && last_lethal_sample_.count == 0)))
+    {
+      RCLCPP_INFO(get_logger(), "Recovered localization input availability: %s", fault_reason_.c_str());
+      fault_latched_ = false;
+      fault_reason_.clear();
     }
     if (!healthy) {
       previous_available_ = false;
@@ -834,7 +853,9 @@ private:
       // deadline, only while independent TF, odom and geometry remain valid.
       publish("READY", localization_status_age > localization_timeout_sec_ ?
         "localization_status_delayed_using_last_normal" :
-        (conservative_geometry ? "using_conservative_costmap_footprint" : "ready"),
+        (conservative_geometry ? "using_conservative_costmap_footprint" :
+        (!static_map_overlap_hard_fault_ && static_map_overlap_state_.latched() ?
+        "static_map_overlap_advisory" : "ready")),
         translation_jump, yaw_jump, localization_status_age);
     }
   }
@@ -854,6 +875,7 @@ private:
   double hard_yaw_jump_rad_{0.2094395};
   double footprint_padding_m_{0.01};
   double static_map_fault_inset_m_{0.0};
+  bool static_map_overlap_hard_fault_{true};
   std::vector<double> footprint_;
   bool require_dynamic_footprint_{false};
   double dynamic_footprint_timeout_sec_{0.50};

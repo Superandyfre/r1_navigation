@@ -1,7 +1,7 @@
 # HW1 profile. Its launch requires a mechanical calibration record before use.
 receding: 20
 step_time: 0.25
-ref_speed: 0.20
+ref_speed: 1.0
 device: 'cpu'
 time_print: false
 bypass_enabled: true
@@ -14,8 +14,8 @@ collision_threshold: 0.005
 
 robot:
   kinematics: 'diff'
-  max_speed: [0.20, 0.25]
-  max_acce: [0.30, 0.50]
+  max_speed: [1.0, 0.25]
+  max_acce: [0.50, 0.50]
   length: 0.682
   width: 0.532
   smooth_weight: 0.05

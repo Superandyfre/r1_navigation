@@ -36,3 +36,13 @@ TEST(FootprintSyncGrace, BootDoesNotUseTransientGrace) {
   FootprintSyncGrace s(1.0);
   EXPECT_EQ(s.observe(false, false, "costmap_footprint_not_synchronized", false, at(0)), Result::Fault);
 }
+
+TEST(FootprintSyncGrace, OnlyAvailabilityFaultsCanAutomaticallyRecover) {
+  EXPECT_TRUE(FootprintSyncGrace::recoverableFault("costmap_footprint_unavailable_or_stale"));
+  EXPECT_TRUE(FootprintSyncGrace::recoverableFault("dynamic_footprint_unavailable_or_stale"));
+  EXPECT_TRUE(FootprintSyncGrace::recoverableFault("localization_status_stale"));
+  EXPECT_FALSE(FootprintSyncGrace::recoverableFault("localization_jump_hard"));
+  EXPECT_FALSE(FootprintSyncGrace::recoverableFault("localization_jump_repeated"));
+  EXPECT_FALSE(FootprintSyncGrace::recoverableFault("localization_LOST:tracking"));
+  EXPECT_FALSE(FootprintSyncGrace::recoverableFault("start_in_lethal_static_map"));
+}

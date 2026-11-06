@@ -37,6 +37,9 @@ public:
     return Result::Hold;
   }
   bool geometryOnly() const {return started_.has_value() && geometry_only_;}
+  // These failures report availability, not a proven pose jump or a genuine
+  // localization LOST report. They can recover after all sources stabilize.
+  static bool recoverableFault(const std::string & reason) {return transient(reason);}
   void reset() {started_.reset(); geometry_only_ = false;}
 private:
   static bool transient(const std::string & reason)
