@@ -9,7 +9,6 @@ from r1_neupan_integration.obstacle_motion_policy import (
     braking_preview_m,
     first_command_collision_distance,
     first_swept_collision_distance,
-    limit_command_for_clearance,
     plan_obstacle_speed,
 )
 from r1_neupan_integration.local_detour import (
@@ -21,25 +20,6 @@ def check_geometry() -> None:
     fast = MotionPolicyConfig(max_speed_mps=1.0, stop_margin_m=0.20)
     fast = replace(fast, preview_m=braking_preview_m(fast))
     assert abs(fast.preview_m - 3.1) < 1e-9
-    # A candidate that is too fast for the available distance is slowed,
-    # preserving curvature, when measured speed can still brake in time.
-    lin, ang, stop, limited = limit_command_for_clearance(1.0, 0.25, 0.1, 1.0, fast)
-    assert not stop and limited and 0.1 < lin < 1.0
-    assert abs(ang / lin - 0.25) < 1e-9
-    # If already moving beyond the stopping envelope, stop rather than
-    # pretending a reduced target can instantly reduce measured speed.
-    assert limit_command_for_clearance(1.0, 0.25, 1.0, 1.0, fast) == (0.0, 0.0, True, False)
-    assert limit_command_for_clearance(1.0, 0.25, 0.1, float("inf"), fast) == (1.0, 0.25, False, False)
-    assert limit_command_for_clearance(0.0, 0.25, 0.0, 0.0, fast) == (0.0, 0.0, True, False)
-    reverse = limit_command_for_clearance(-1.0, 0.25, -0.1, 1.0, fast)
-    assert reverse[0] < 0 and not reverse[2] and reverse[3]
-    obstacle = np.asarray([[1.4], [0.0]])
-    distance = first_command_collision_distance(np.zeros((3, 1)), 1.0, 0.0, obstacle, fast)
-    linear, angular, stop, limited = limit_command_for_clearance(1.0, 0.0, 0.1, distance, fast)
-    assert not stop and limited and 0.1 < linear < 1.0
-    available = first_command_collision_distance(np.zeros((3, 1)), linear, angular, obstacle, fast)
-    needed = linear * fast.reaction_sec + linear * linear / (2.0 * fast.braking_mps2) + fast.stop_margin_m
-    assert needed <= available + 1e-8
     fast_state = np.zeros((3, 1))
     fast_path = np.vstack((np.linspace(0.0, 4.0, 81), np.zeros(81), np.zeros(81)))
     fast_empty = np.empty((2, 0))

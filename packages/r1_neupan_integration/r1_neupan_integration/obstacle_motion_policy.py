@@ -197,35 +197,6 @@ def _speed_limit(remaining_m: float, config: MotionPolicyConfig) -> float:
     )
 
 
-def limit_command_for_clearance(
-    linear_x: float, angular_z: float, measured_linear_x: float,
-    free_distance_m: float, config: MotionPolicyConfig,
-) -> tuple[float, float, bool, bool]:
-    """Slow a feasible twist; stop if measured speed cannot stop in time.
-
-    The angular rate is scaled with translation so the checked curvature is
-    preserved. Returns linear, angular, emergency_stop, speed_limited.
-    """
-    if (not all(math.isfinite(v) for v in (linear_x, angular_z, measured_linear_x))
-            or math.isnan(free_distance_m) or free_distance_m < 0.0):
-        raise ValueError("velocity and clearance must be valid")
-    if math.isinf(free_distance_m):
-        return linear_x, angular_z, False, False
-    allowed = _speed_limit(free_distance_m - config.stop_margin_m, config)
-    if abs(measured_linear_x) > allowed + 1e-9:
-        return 0.0, 0.0, True, False
-    if abs(linear_x) < 1e-6:
-        if free_distance_m < config.stop_margin_m:
-            return 0.0, 0.0, True, False
-        return linear_x, angular_z, False, False
-    if abs(linear_x) <= allowed:
-        return linear_x, angular_z, False, False
-    if allowed <= 1e-9:
-        return 0.0, 0.0, True, False
-    scale = allowed / abs(linear_x)
-    return linear_x * scale, angular_z * scale, False, True
-
-
 def plan_obstacle_speed(
     state: np.ndarray, path: np.ndarray, raw_points: np.ndarray,
     planner_points: np.ndarray, config: MotionPolicyConfig,
