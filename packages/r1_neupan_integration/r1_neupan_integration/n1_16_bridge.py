@@ -341,7 +341,6 @@ class ProductionWholeCoreClient:
         restore_planner_state: dict[str, Any] | None = None,
         scan_callback_receive_monotonic: float = -1.0,
         scan_update_monotonic: float = -1.0,
-        reference_speed_profile: np.ndarray | None = None,
         measured_velocity: np.ndarray | None = None,
         execution_key: tuple | None = None,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
@@ -373,8 +372,6 @@ class ProductionWholeCoreClient:
             "active_gear": validate_gear(active_gear),
             "restore_planner_state": restore_planner_state,
         }
-        if reference_speed_profile is not None:
-            request["reference_speed_profile"] = _pack_array(reference_speed_profile)
         if measured_velocity is not None:
             request["measured_velocity"] = _pack_array(measured_velocity)
         request["request_created_monotonic"] = time.monotonic()

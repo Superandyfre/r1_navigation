@@ -69,10 +69,6 @@ class robot:
         self.acce_bound = self.max_acce * self.dt
         self.smooth_weight = float(kwargs.get("smooth_weight", 0.0))
         self.path_relative_cost = bool(kwargs.get("path_relative_cost", False))
-        self.geometry_collision_cost = bool(kwargs.get("geometry_collision_cost", False))
-        self.geometry_margin_m = float(kwargs.get("geometry_margin_m", 0.0))
-        if not np.isfinite(self.geometry_margin_m) or self.geometry_margin_m < 0.0:
-            raise ValueError("geometry_margin_m must be finite and nonnegative")
         if not np.isfinite(self.smooth_weight) or self.smooth_weight < 0.0:
             raise ValueError("smooth_weight must be finite and nonnegative")
 
@@ -110,11 +106,6 @@ class robot:
         self.para_gamma_b = cp.Parameter((self.T,), name='para_gamma_b')
         self.para_measured_u = cp.Parameter((2, 1), name='para_measured_u')
         self.para_first_step_bound = cp.Parameter((2, 1), nonneg=True, name='para_first_step_bound')
-        self.para_speed_limits = cp.Parameter((self.T,), nonneg=True, name='para_speed_limits')
-        self.para_min_speed = cp.Parameter(
-            name='para_min_speed', value=-float(self.max_speed[0, 0])
-        )
-
         path_parameters = []
         if self.path_relative_cost:
             self.para_path_tangent = cp.Parameter((2, self.T + 1), name='para_path_tangent')
@@ -132,8 +123,7 @@ class robot:
 
         return [
             self.para_s, self.para_gamma_a, self.para_gamma_b,
-            self.para_measured_u, self.para_first_step_bound, self.para_speed_limits,
-            self.para_min_speed,
+            self.para_measured_u, self.para_first_step_bound,
         ] + path_parameters + self.para_A_list + self.para_B_list + self.para_C_list
 
 
@@ -148,7 +138,7 @@ class robot:
             self.para_gamma_c, self.para_zeta_a = [], []
 
         else:
-            dimension = 3 if self.geometry_collision_cost else 2
+            dimension = 2
             self.para_gamma_c = [
                 cp.Parameter(
                     (max_num, dimension),
@@ -223,7 +213,7 @@ class robot:
     def I_cost(self, indep_dis, ro_obs):
 
         cost = 0
-        dimension = 3 if self.geometry_collision_cost else 2
+        dimension = 2
         indep_t = self.indep_s[0:dimension, 1:]
 
         I_list = []
@@ -272,10 +262,6 @@ class robot:
 
         constraints += [ cp.abs(self.indep_u[:, 1:] - self.indep_u[:, :-1] ) <= self.acce_bound ] 
         constraints += [cp.abs(self.indep_u[:, 0:1] - self.para_measured_u) <= self.para_first_step_bound]
-        # The obstacle profile limits approach speed toward the route blockage.
-        # Reverse remains available under the robot's normal speed bound.
-        constraints += [self.indep_u[0, :] <= self.para_speed_limits]
-        constraints += [self.indep_u[0, :] >= self.para_min_speed]
         constraints += [ cp.abs(self.indep_u) <= self.speed_bound]
         constraints += [ self.indep_s[:, 0:1] == self.para_s[:, 0:1] ]
 
@@ -283,9 +269,7 @@ class robot:
     
 
     def generate_state_parameter_value(self, nom_s, nom_u, qs_ref_s, pu_ref_us,
-                                       measured_velocity=None, speed_limits=None,
-                                       ref_s=None, q_s=None, path_lateral_scale=1.0,
-                                       min_linear_speed=None):
+                                       measured_velocity=None, ref_s=None, q_s=None):
 
         if measured_velocity is None:
             measured = nom_u[:, 0:1]
@@ -301,34 +285,11 @@ class robot:
             first_step_bound = torch.as_tensor(
                 self.acce_bound + 0.005, dtype=nom_u.dtype, device=nom_u.device)
 
-        if speed_limits is None:
-            limits = torch.full((self.T,), float(self.max_speed[0, 0]),
-                                dtype=nom_u.dtype, device=nom_u.device)
-        else:
-            limits = speed_limits.reshape((self.T,))
-            if not torch.isfinite(limits).all() or torch.any(limits < 0.0):
-                raise ValueError("speed limits must be finite and nonnegative")
-            limits = torch.clamp(limits, max=float(self.max_speed[0, 0]))
-            if measured_velocity is not None:
-                braking_floor = torch.clamp(
-                    torch.abs(measured[0, 0])
-                    - (torch.arange(self.T, dtype=nom_u.dtype, device=nom_u.device) + 1.0)
-                    * float(self.acce_bound[0, 0]),
-                    min=0.0,
-                )
-                limits = torch.maximum(limits, braking_floor)
-
-        state_value_list = [nom_s, qs_ref_s, pu_ref_us,
-                            measured, first_step_bound, limits,
-                            torch.as_tensor(
-                                -float(self.max_speed[0, 0]) if min_linear_speed is None
-                                else float(min_linear_speed),
-                                dtype=nom_u.dtype, device=nom_u.device,
-                            )]
+        state_value_list = [nom_s, qs_ref_s, pu_ref_us, measured, first_step_bound]
 
         if self.path_relative_cost:
-            if ref_s is None or q_s is None or not 0.0 < path_lateral_scale <= 1.0:
-                raise ValueError("path-relative cost requires a reference and lateral scale")
+            if ref_s is None or q_s is None:
+                raise ValueError("path-relative cost requires a reference")
             delta = ref_s[:2, 1:] - ref_s[:2, :-1]
             delta = torch.cat((delta, delta[:, -1:]), dim=1)
             length = torch.linalg.vector_norm(delta, dim=0, keepdim=True)
@@ -336,7 +297,7 @@ class robot:
             tangent = torch.where(length > 1.0e-5, delta / length.clamp_min(1.0e-5), heading)
             normal = torch.stack((-tangent[1], tangent[0]))
             weighted_tangent = q_s[0, 0] * tangent
-            weighted_normal = q_s[1, 0] * path_lateral_scale * normal
+            weighted_normal = q_s[1, 0] * normal
             state_value_list += [
                 weighted_tangent, weighted_normal,
                 torch.sum(weighted_tangent * ref_s[:2], dim=0),

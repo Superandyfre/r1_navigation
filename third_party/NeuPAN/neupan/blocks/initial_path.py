@@ -66,24 +66,15 @@ class InitialPath:
         
 
     def generate_nom_ref_state(self, state: np.ndarray, cur_vel_array: np.ndarray,
-                               ref_speed: float, reference_speed_profile=None):
+                               ref_speed: float):
         """
         state: current state of the robot, shape (3, 1)
         cur_vel_array: current velocity array of the robot, shape (2, T)
         """
         state = state[:3]
 
-        if reference_speed_profile is None:
-            speed_profile = np.full(self.T, ref_speed, dtype=np.float64)
-        else:
-            speed_profile = np.asarray(reference_speed_profile, dtype=np.float64).reshape(-1)
-            if (speed_profile.shape != (self.T,) or not np.isfinite(speed_profile).all()
-                    or np.any(speed_profile < 0.0) or np.any(speed_profile > ref_speed)):
-                raise ValueError("reference_speed_profile must contain T speeds in [0, ref_speed]")
-
+        speed_profile = np.full(self.T, ref_speed, dtype=np.float64)
         ref_state = self.cur_point[0:3].copy()
-        if reference_speed_profile is not None and speed_profile[0] == 0.0:
-            ref_state = state[:3].copy()
         ref_index = self.point_index
         pre_state = state.copy()
 

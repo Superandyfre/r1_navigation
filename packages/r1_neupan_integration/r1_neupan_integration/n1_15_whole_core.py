@@ -1078,8 +1078,6 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
             points = _unpack_array(request["obstacle_points"])
             if points.size == 0:
                 points = None
-            speed_record = request.get("reference_speed_profile")
-            speed_profile = _unpack_array(speed_record) if speed_record is not None else None
             measured_record = request.get("measured_velocity")
             measured_velocity = _unpack_array(measured_record) if measured_record is not None else None
             decode_finished = time.perf_counter_ns()
@@ -1099,7 +1097,6 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                 with torch.set_grad_enabled(True):
                     action, info = planner(
                         state, points,
-                        reference_speed_profile=speed_profile,
                         measured_velocity=measured_velocity,
                     )
             except Exception as exc:

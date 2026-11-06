@@ -17,8 +17,6 @@ robot:
   width: 0.532
   smooth_weight: 0.05
   path_relative_cost: true
-  geometry_collision_cost: true
-  geometry_margin_m: 0.08
 
 ipath:
   # Preserve local path geometry for the short receding horizon.

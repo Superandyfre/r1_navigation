@@ -24,7 +24,6 @@ from math import inf
 from typing import Optional
 from neupan.configuration import to_device, tensor_to_np
 from neupan.util import downsample_decimation
-from neupan.geometry import signed_clearances
 
 class PAN(torch.nn.Module):
     """
@@ -110,10 +109,7 @@ class PAN(torch.nn.Module):
     def forward(
         self, nom_s: torch.Tensor, nom_u: torch.Tensor, ref_s: torch.Tensor, ref_us: torch.Tensor,
         obs_points: torch.Tensor = None, point_velocities: torch.Tensor = None,
-        measured_velocity: torch.Tensor = None, speed_limits: torch.Tensor = None,
-        path_lateral_scale: float = 1.0,
-        geometry_mode: bool = False,
-        min_linear_speed: float = None,
+        measured_velocity: torch.Tensor = None,
     ):
         """
         input:
@@ -138,15 +134,7 @@ class PAN(torch.nn.Module):
 
         for i in range(self.iter_num):
 
-            if has_obstacles and geometry_mode:
-                current_clearance = signed_clearances(
-                    nom_s[:, 0].detach().cpu().numpy(),
-                    obs_points.detach().cpu().numpy(), self.robot.vertices,
-                    self.robot.G, self.robot.h,
-                )
-                self.dune_layer.min_distance = float(current_clearance.min())
-                mu_list, lam_list, sort_point_list = [], [], []
-            elif has_obstacles and not self.no_obs:
+            if has_obstacles and not self.no_obs:
                 point_flow_list, R_list, obs_points_list = self.generate_point_flow(
                     nom_s, obs_points, point_velocities
                 )
@@ -158,8 +146,7 @@ class PAN(torch.nn.Module):
                 
             nom_s, nom_u, nom_distance = self.nrmp_layer(
                 nom_s, nom_u, ref_s, ref_us, mu_list, lam_list, sort_point_list,
-                measured_velocity, speed_limits, path_lateral_scale,
-                obs_points if geometry_mode else None, min_linear_speed,
+                measured_velocity,
             )
 
             if self.stop_criteria(nom_s, nom_u, mu_list, lam_list):

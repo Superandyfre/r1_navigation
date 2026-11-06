@@ -102,7 +102,7 @@ class neupan(torch.nn.Module):
 
     @time_it("neupan forward")
     def forward(self, state, points, velocities=None,
-                reference_speed_profile=None, measured_velocity=None):
+                measured_velocity=None):
         """
         state: current state of the robot, matrix (3, 1), x, y, theta
         points: current input obstacle point positions, matrix (2, N), N is the number of obstacle points.
@@ -117,7 +117,7 @@ class neupan(torch.nn.Module):
             return np.zeros((2, 1)), self.info
         self.info["arrive"] = False
         nom_input_np = self.ipath.generate_nom_ref_state(
-            state, self.cur_vel_array, self.ref_speed, reference_speed_profile)
+            state, self.cur_vel_array, self.ref_speed)
 
         # convert to tensor
         nom_input_tensor = [np_to_tensor(n) for n in nom_input_np]
@@ -129,13 +129,9 @@ class neupan(torch.nn.Module):
         measured_velocity_tensor = (
             np_to_tensor(measured_velocity) if measured_velocity is not None else None
         )
-        speed_limits_tensor = (
-            np_to_tensor(np.asarray(reference_speed_profile, dtype=np.float64))
-            if reference_speed_profile is not None else None
-        )
         opt_state_tensor, opt_vel_tensor, opt_distance_tensor = self.pan(
             *nom_input_tensor, obstacle_points_tensor, point_velocities_tensor,
-            measured_velocity_tensor, speed_limits_tensor,
+            measured_velocity_tensor,
         )
 
         opt_state_np, opt_vel_np = tensor_to_np(opt_state_tensor), tensor_to_np(

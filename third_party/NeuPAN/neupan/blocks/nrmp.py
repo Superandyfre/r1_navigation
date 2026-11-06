@@ -27,7 +27,6 @@ from neupan.robot import robot
 from neupan.configuration import to_device, value_to_tensor, np_to_tensor, tensor_dtype
 from cvxpylayers.torch import CvxpyLayer
 from neupan.util import time_it
-from neupan.geometry import clearance_linearization
 from typing import Optional, List
 
 
@@ -123,10 +122,6 @@ class NRMP(torch.nn.Module):
         lam_list: Optional[List[torch.Tensor]] = None,
         point_list: Optional[List[torch.Tensor]] = None,
         measured_velocity: Optional[torch.Tensor] = None,
-        speed_limits: Optional[torch.Tensor] = None,
-        path_lateral_scale: float = 1.0,
-        geometry_points: Optional[torch.Tensor] = None,
-        min_linear_speed: Optional[float] = None,
     ):
         """
         nom_s: nominal state, 3 * (T+1)
@@ -145,8 +140,7 @@ class NRMP(torch.nn.Module):
 
         parameter_values = self.generate_parameter_value(
             nom_s, nom_u, ref_s, ref_us, mu_list, lam_list, point_list,
-            measured_velocity, speed_limits, path_lateral_scale, geometry_points,
-            min_linear_speed
+            measured_velocity
         )
 
         solutions = self.nrmp_layer(*parameter_values, solver_args={"solve_method": self.solver}) # see cvxpylayers and cvxpy for more details
@@ -159,20 +153,18 @@ class NRMP(torch.nn.Module):
 
     def generate_parameter_value(
         self, nom_s, nom_u, ref_s, ref_us, mu_list, lam_list, point_list,
-        measured_velocity=None, speed_limits=None, path_lateral_scale=1.0,
-        geometry_points=None, min_linear_speed=None
+        measured_velocity=None
     ):
         
         adjust_value_list = self.generate_adjust_parameter_value()
 
         state_value_list = self.robot.generate_state_parameter_value(
             nom_s, nom_u, self.q_s * ref_s, self.p_u * ref_us,
-            measured_velocity, speed_limits, ref_s, self.q_s, path_lateral_scale,
-            min_linear_speed
+            measured_velocity, ref_s, self.q_s
         )
 
         coefficient_value_list = self.generate_coefficient_parameter_value(
-            mu_list, lam_list, point_list, nom_s, geometry_points
+            mu_list, lam_list, point_list
         )
 
         return state_value_list + coefficient_value_list + adjust_value_list
@@ -229,8 +221,7 @@ class NRMP(torch.nn.Module):
         )
 
 
-    def generate_coefficient_parameter_value(self, mu_list, lam_list, point_list,
-                                             nom_s=None, geometry_points=None):
+    def generate_coefficient_parameter_value(self, mu_list, lam_list, point_list):
         """
         generate the parameters values for obstacle point avoidance
 
@@ -247,22 +238,9 @@ class NRMP(torch.nn.Module):
         if self.no_obs:
             return []
         else:
-            dimension = 3 if self.robot.geometry_collision_cost else 2
+            dimension = 2
             fa_list = [to_device(torch.zeros((self.max_num, dimension))) for t in range(self.T)]
             fb_list = [to_device(torch.zeros((self.max_num, 1))) for t in range(self.T)]
-
-            if geometry_points is not None and geometry_points.shape[1] > 0:
-                cloud = geometry_points.detach().cpu().numpy()
-                nominal = nom_s.detach().cpu().numpy()
-                for t in range(self.T):
-                    gradients, offsets = clearance_linearization(
-                        nominal[:, t + 1], cloud, self.robot.vertices,
-                        self.robot.G, self.robot.h, self.max_num,
-                        self.robot.geometry_margin_m,
-                    )
-                    fa_list[t] = to_device(torch.as_tensor(gradients, dtype=nom_s.dtype))
-                    fb_list[t] = to_device(torch.as_tensor(offsets, dtype=nom_s.dtype))
-                return fa_list + fb_list
 
             if not mu_list:
                 return fa_list + fb_list

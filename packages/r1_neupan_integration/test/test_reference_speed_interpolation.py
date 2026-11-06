@@ -37,7 +37,7 @@ class ReferenceSpeedInterpolation(unittest.TestCase):
     def test_zero_reference_does_not_move(self):
         p = self.planner()
         _, _, ref, speed = p.generate_nom_ref_state(
-            np.zeros((3, 1)), np.zeros((2, 6)), 1., np.zeros(6))
+            np.zeros((3, 1)), np.zeros((2, 6)), 0.)
         np.testing.assert_allclose(ref, 0.)
         np.testing.assert_allclose(speed, 0.)
 
