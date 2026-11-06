@@ -214,6 +214,23 @@ class GuardAuthorizationROS(unittest.TestCase):
         self.assertEqual(self.statuses[-1]['path_version'],2)
         self.assertEqual(self.statuses[-1]['grant_id'],self.grant_id)
 
+    def test_delayed_smoother_confirmation_keeps_valid_handover(self):
+        self.provenance_enabled=False
+        self.result_linear=.15;self.route=2;self.grant_id="grant-delayed-proof";self.grant_state="PREPARE"
+        self.until(lambda:self.statuses[-1].get("grant_id")==self.grant_id)
+        self.command_value=.15
+        start=time.monotonic()
+        while time.monotonic()<start+.10:self.tick()
+        self.assertFalse(self.statuses[-1].get("route_handover_seamless_ready",False))
+        self.assertNotEqual(self.statuses[-1]["authorization_state"],"ARMED")
+        self.provenance_enabled=True
+        self.until(lambda:self.statuses[-1].get("route_handover_seamless_ready",False),1.)
+        self.grant_state="COMMIT"
+        self.until(lambda:self.statuses[-1]["authorization_state"]=="ARMED",1.)
+        rows=[(v,w) for t,v,w in self.outputs if t>start+.02]
+        self.assertGreater(len(rows),3)
+        self.assertTrue(all(abs(v)>1e-8 or abs(w)>1e-8 for v,w in rows),rows)
+
     def test_missing_smoother_provenance_cannot_authorize_seamless_handover(self):
         self.provenance_enabled=False
         self.route=2;self.grant_id="grant-no-proof";self.grant_state="PREPARE"
