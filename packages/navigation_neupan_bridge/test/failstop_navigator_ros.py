@@ -51,8 +51,11 @@ class NavigatorFailstop(chain.FailstopChainROS):
         for name in ['navigate_w_replanning_neupan.xml','navigate_through_poses_neupan.xml']:
             source=configdir/name
             self.artifacts.append(dict(bt_xml=str(source),sha256=hashlib.sha256(source.read_bytes()).hexdigest()))
-        self.start(NAVIGATOR,paramsfile,['/neupan_controller/can_retry:='+chain.PREFIX+'retry',
-            '/neupan_execution_context:='+chain.PREFIX+'context'])
+        remaps=['/neupan_controller/can_retry:='+chain.PREFIX+'retry',
+            '/neupan_execution_context:='+chain.PREFIX+'context']
+        if getattr(self,'route_service_unavailable',False):
+            remaps.append('/update_follow_path:='+chain.PREFIX+'missing_route_service')
+        self.start(NAVIGATOR,paramsfile,remaps)
         self.lifecycle('bt_navigator',1);self.lifecycle('bt_navigator',3)
         maps=(Path('/proc')/str(self.procs[-1].pid)/'maps').read_text()
         (self.report/'navigator-maps.txt').write_text(maps)

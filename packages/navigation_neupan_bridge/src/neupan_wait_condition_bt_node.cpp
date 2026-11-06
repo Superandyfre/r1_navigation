@@ -63,7 +63,7 @@ public:
 
   void on_tick() override
   {
-    clearUpdate(); update_failed_ = false;
+    clearUpdate();
     readParent();
     FollowPathAction::on_tick();
   }
@@ -104,26 +104,28 @@ public:
               forwardRouteDeviation(sent_path_, goal_.path) >= .08 || waiting_route_version_;
             goal_.path = sent_path_;
           }
-          else {update_failed_ = true;}
-        } catch (const std::exception &) {update_failed_ = true;}
+          else {RCLCPP_WARN(node_->get_logger(), "Route update rejected: %s", response->reason.c_str());}
+        } catch (const std::exception & e) {RCLCPP_WARN(node_->get_logger(), "Route update response failed: %s", e.what());}
         pending_update_.reset();
       } else if (now - update_started_ > std::chrono::milliseconds(500)) {
-        clearUpdate(); update_failed_ = true;
+        // The current action remains authoritative; an unacknowledged revision
+        // can be retried with a newer sequence without revoking the task.
+        clearUpdate();
       }
       return;
     }
-    if (update_failed_ ||
-      (r1_neupan_runtime::sameRouteGeometry(path, goal_.path) && !waiting_route_version_)) {return;}
+    if (r1_neupan_runtime::sameRouteGeometry(path, goal_.path) && !waiting_route_version_) {return;}
     // A queued revision may still be awaiting the Controller's route debounce.
     // Repeat at most once per second until its context version advances.
     if (now - update_started_ < std::chrono::seconds(1)) {return;}
     if (!goal_handle_ || context_.value("state", "") != "ACTIVE" ||
       context_.value("navigation_attempt_id", "") != executionAttemptId(goal_handle_->get_goal_id()))
     {return;}
-    if (!update_path_->service_is_ready()) {update_failed_ = true; return;}
+    if (!update_path_->service_is_ready()) {return;}
     auto request = std::make_shared<r1_neupan_runtime::srv::UpdatePath::Request>();
     request->authority_boot_id = context_.at("authority_boot_id").get<std::string>();
     request->navigation_attempt_id = executionAttemptId(goal_handle_->get_goal_id());
+    request->revision_sequence = ++route_revision_sequence_;
     request->path = path; sent_path_ = path; update_started_ = now;
     sent_path_version_ = context_.value("path_version", -1);
     pending_update_.emplace(update_path_->async_send_request(request));
@@ -150,10 +152,6 @@ public:
     }
     const auto pending = future_goal_handle_;
     const auto status = FollowPathAction::tick();
-    if (update_failed_) {
-      revokeUncertain(); halt();
-      return BT::NodeStatus::FAILURE;
-    }
     if (status == BT::NodeStatus::RUNNING && goal_handle_ && !future_goal_handle_) {
       // Humble's human-readable to_string omits per-byte zero padding.
       // Use the exact fixed-width identity emitted by ControllerServer.
@@ -223,7 +221,8 @@ private:
   nav_msgs::msg::Path sent_path_;
   Pose parent_;
   Goals parents_;
-  bool has_parent_{false}, has_parents_{false}, update_failed_{false};
+  bool has_parent_{false}, has_parents_{false};
+  uint64_t route_revision_sequence_{0};
   bool waiting_route_version_{false};
   int sent_path_version_{-1};
   void revokeUncertain()

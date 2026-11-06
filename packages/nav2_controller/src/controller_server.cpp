@@ -212,11 +212,15 @@ ControllerServer::on_configure(const rclcpp_lifecycle::State & /*state*/)
       response->reason = "inactive_or_mismatched_execution";
       if (runtime_attempt_id_.empty() || request->authority_boot_id != authority_boot_id_ ||
         request->navigation_attempt_id != runtime_attempt_id_) {return;}
+      if (request->revision_sequence == 0 || request->revision_sequence <= runtime_path_sequence_) {
+        response->reason = "stale_route_revision"; return;
+      }
       if (!r1_neupan_runtime::validRouteRevision(request->path, runtime_terminal_path_)) {
         response->reason = "invalid_route_or_changed_terminal"; return;
       }
       // Only the action loop calls setPlan. Coalesce to the newest route;
       // cancellation/end clears the queue before another execution can start.
+      runtime_path_sequence_ = request->revision_sequence;
       pending_runtime_path_ = std::make_shared<nav_msgs::msg::Path>(request->path);
       response->accepted = true;
       response->reason = "queued_for_current_execution";
@@ -397,6 +401,7 @@ void ControllerServer::beginRuntimeExecution()
     observer, authority_boot_id_, id.str());
   std::lock_guard<std::mutex> lock(runtime_path_mutex_);
   runtime_attempt_id_ = id.str();
+  runtime_path_sequence_ = 0;
   runtime_terminal_path_ = nav_msgs::msg::Path();
   pending_runtime_path_.reset();
 }

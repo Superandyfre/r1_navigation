@@ -131,6 +131,7 @@ protected:
   void applyRuntimePathUpdate();
   std::mutex runtime_path_mutex_;
   std::string runtime_attempt_id_;
+  uint64_t runtime_path_sequence_{0};
   nav_msgs::msg::Path runtime_terminal_path_;
   std::shared_ptr<nav_msgs::msg::Path> pending_runtime_path_;
   rclcpp::Service<r1_neupan_runtime::srv::UpdatePath>::SharedPtr runtime_path_service_;

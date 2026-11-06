@@ -2,6 +2,7 @@
 # Does not create an execution or grant motion permission.
 string authority_boot_id
 string navigation_attempt_id
+uint64 revision_sequence
 nav_msgs/Path path
 ---
 bool accepted

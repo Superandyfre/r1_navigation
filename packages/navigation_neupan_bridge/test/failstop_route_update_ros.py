@@ -14,6 +14,7 @@ from failstop_navigator_owner_ros import NavigatorOwner
 
 class RouteUpdateNavigator(NavigatorOwner):
     def setUp(self):
+        self.route_service_unavailable = self._testMethodName == "test_route_service_gap_keeps_current_execution"
         super().setUp()
         self.allow_bend = False
         self.planners[0].destroy()
@@ -57,6 +58,19 @@ class RouteUpdateNavigator(NavigatorOwner):
         self.cancel_top(handle, result)
         client.destroy()
 
+    def test_route_service_gap_keeps_current_execution(self):
+        client, handle, result = self.send_top()
+        attempt = self.moving_attempt(result)
+        self.allow_bend = True
+        start = time.monotonic()
+        self.until(lambda: time.monotonic() > start + 3.5 or result.done(), 5.)
+        self.assertFalse(result.done())
+        self.assertTrue(any(t > start + 1. and v > .04 for t,v,w in self.outputs))
+        self.assertFalse(any(j.get('fault_latched') for _,j in self.runtime_statuses))
+        self.assertEqual({j['navigation_attempt_id'] for _,j in self.contexts if j['state']=='ACTIVE'}, {attempt})
+        self.cancel_top(handle, result)
+        client.destroy()
+
     def test_update_rejects_wrong_execution_terminal_and_retired_goal(self):
         client, handle, result = self.send_top()
         attempt = self.moving_attempt(result)
@@ -67,7 +81,7 @@ class RouteUpdateNavigator(NavigatorOwner):
             pose = PoseStamped(); pose.header.frame_id = 'map'
             pose.pose.position.x = x; pose.pose.orientation.w = 1.; path.poses.append(pose)
         request = UpdatePath.Request(authority_boot_id=self.context['authority_boot_id'],
-                                     navigation_attempt_id=attempt, path=path)
+                                     navigation_attempt_id=attempt, revision_sequence=1000000, path=path)
         for field, value in [('authority_boot_id', 'old-boot'), ('navigation_attempt_id', 'old-attempt')]:
             wrong = copy.deepcopy(request); setattr(wrong, field, value)
             self.assertFalse(self.future(update.call_async(wrong)).accepted)
@@ -76,6 +90,9 @@ class RouteUpdateNavigator(NavigatorOwner):
         wrong = copy.deepcopy(request); wrong.path.poses[1].pose.position.x = float('nan')
         self.assertFalse(self.future(update.call_async(wrong)).accepted)
         self.assertTrue(self.future(update.call_async(request)).accepted)
+        self.assertFalse(self.future(update.call_async(request)).accepted)
+        older = copy.deepcopy(request); older.revision_sequence -= 1
+        self.assertFalse(self.future(update.call_async(older)).accepted)
         self.assertFalse(result.done())
         self.cancel_top(handle, result)
         self.assertFalse(self.future(update.call_async(request)).accepted)
@@ -86,5 +103,6 @@ class RouteUpdateNavigator(NavigatorOwner):
 def load_tests(loader, tests, pattern):
     return unittest.TestSuite(RouteUpdateNavigator(name) for name in (
         'test_replanning_keeps_uuid_and_updates_material_route',
+        'test_route_service_gap_keeps_current_execution',
         'test_update_rejects_wrong_execution_terminal_and_retired_goal',
         'test_preemption_rejects_old_owner_replay'))
