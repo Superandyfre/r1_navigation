@@ -31,6 +31,29 @@ class LocalizationHoldChain(chain.FailstopChainROS):
             reason="costmap_footprint_not_synchronized" if self.localization_state == "HOLD" else "ready"))))
         super().tick()
 
+    def test_source_timeout_aborts_only_old_attempt_then_new_goal_moves(self):
+        first = self.goal()
+        first_result = first.get_result_async()
+        self.until(lambda: any(v > .04 for _, v, _ in self.outputs) or first_result.done(), 20)
+        self.assertFalse(first_result.done())
+        self.source_enabled = False
+        first_terminal = self.future(first_result, 10)
+        from action_msgs.msg import GoalStatus
+        self.assertEqual(first_terminal.status, GoalStatus.STATUS_ABORTED)
+        cutoff = time.monotonic()
+        while time.monotonic() < cutoff + .3: self.tick()
+        self.assertTrue(all(abs(v) < 1e-8 and abs(w) < 1e-8
+                            for t, v, w in self.outputs if t > cutoff + .05))
+        self.source_enabled = True
+        second = self.goal()
+        second_result = second.get_result_async()
+        cutoff = time.monotonic()
+        self.until(lambda: any(t > cutoff and v > .04 for t, v, _ in self.outputs)
+                   or second_result.done(), 15)
+        self.assertFalse(second_result.done())
+        self.assertTrue(any(t > cutoff and v > .04 for t, v, _ in self.outputs))
+        self.future(second.cancel_goal_async())
+
     def test_hold_stops_and_recovers_without_terminating_action(self):
         handle = self.goal()
         result = handle.get_result_async()

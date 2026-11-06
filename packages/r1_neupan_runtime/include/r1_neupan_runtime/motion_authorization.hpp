@@ -249,6 +249,7 @@ public:
       const double timestamp = requiredNumber(j, "monotonic");
       if (timestamp > now) {return;}
       if (state == "REVOKE") {
+        if (task_failed_attempt_ == context.attempt) {task_failed_attempt_.clear();}
         retired_.insert(context.attempt);  // revoke before a late PREPARE is permanent
         if (grant_ && grant_->attempt == context.attempt) {
           retired_grants_.insert(grant_id_);
@@ -266,6 +267,7 @@ public:
         context.generation != health_generation_ || context.attempt != health_attempt_)
       {return;}
       if (state == "PREPARE") {
+        if (!task_failed_attempt_.empty()) {return;}
         if (grant_ && !(context == *grant_)) {
           // A route revision keeps the same attempt/worker/boots and requires
           // a strictly new grant and fresh source. It cannot replace an action.
@@ -299,6 +301,7 @@ public:
   {
     expireExistingGrant(now);
     if (faulted()) {return {false, true, "FAULT_LATCHED", fault_};}
+    if (!task_failed_attempt_.empty()) {return {false, true, "TASK_FAILED", "planner_result_recovery_timeout"};}
     if (!grant_) {return {};}
     if (!healthReady(now)) {latch("worker_health_stale"); return evaluate(now);}
     if (now < authority_time_ || now - authority_time_ > config_.authority_timeout) {
@@ -306,9 +309,6 @@ public:
     }
     if (grant_->attempt != health_attempt_) {
       return {false, false, "DISARMED", "worker_attempt_not_ready"};
-    }
-    if (source_stale_since_ && now - *source_stale_since_ > config_.recovery_timeout) {
-      latch("planner_result_recovery_timeout"); return evaluate(now);
     }
     // A failed solve revokes even a still-fresh previous nonzero result.
     // Health never renews a source. Clearing retry still requires a result
@@ -340,12 +340,18 @@ private:
   void expireExistingGrant(double now)
   {
     if (faulted() || !grant_) {return;}
-    if (source_stale_since_ && now - *source_stale_since_ > config_.recovery_timeout) {
-      latch("planner_result_recovery_timeout");
-    } else if (!healthReady(now)) {
+    if (!healthReady(now)) {
       latch("worker_health_stale");
     } else if (now < authority_time_ || now - authority_time_ > config_.authority_timeout) {
       latch("navigation_authority_stale");
+    } else if (source_stale_since_ && now - *source_stale_since_ > config_.recovery_timeout) {
+      // Retire this attempt and its grant, not the healthy Worker. A late
+      // result or grant cannot revive it; the action must explicitly revoke.
+      task_failed_attempt_ = grant_->attempt;
+      retired_.insert(grant_->attempt);
+      retired_grants_.insert(grant_id_);
+      grant_.reset(); source_.reset(); source_stale_since_.reset();
+      grant_id_.clear(); committed_ = false;
     }
   }
   bool healthReady(double now) const
@@ -368,6 +374,7 @@ private:
     // Idle garbage cannot create authorization or a permanent startup fault.
   }
   std::string boot_, fault_, health_boot_, health_state_, health_attempt_;
+  std::string task_failed_attempt_;
   std::string authority_boot_, controller_boot_, grant_id_;
   AuthorizationConfig config_;
   Json health_payload_;

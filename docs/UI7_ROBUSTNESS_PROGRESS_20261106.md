@@ -15,3 +15,18 @@ NeuPAN 求解的端到端验收。另用真实定位监视器及模拟 TF、里�
 隔离域和测试速度话题。此次未切换 UI7 发布指针或启动底盘；现有在役发布包不含本次改动。
 完整鲁棒性方案其余项目仍待实施和验证。原主工作树未提交的 Clarabel 实验与事故日志
 保存在带说明的 Git stash 中，不包含于 main；不能把它当成已验证的求解器修复。
+
+## 求解结果持续超时的任务级退出
+
+最终 Guard 和 Controller 内部监督器将持续超过恢复预算的结果缺失改为 `TASK_FAILED`：
+撤销并永久退休旧 attempt 和 grant，等待该 Action 明确撤权后才能接收新的 attempt。
+缺失 Worker 健康或授权时仍优先按致命故障锁存；迟到的旧结果和旧授权不能重放。
+Controller 发现当前任务的这个原因后结束 FollowPath，不再把健康进程永久锁存。
+
+验证：37 项授权单测、18 项 ControllerExecution 单测和 17 项真实 Guard 隔离 ROS
+测试通过。使用真实 Controller、Guard、平滑器与发布包 NeuPAN Worker 的隔离链测试中，
+短暂断流后当前任务恢复；持续断流后旧任务 ABORTED，恢复后新目标重新产生速度。
+过程未启动硬件且输出为测试话题。第一轮构建误用旧发布包 runtime 头文件，测试暴露
+Controller 仍锁存；清理 CMake 缓存并显式指定候选 runtime 路径后重建，检查编译参数
+确认来源正确再通过。另一轮测试误加载共享旧 NeuPAN 导致接口不兼容，修正 PYTHONPATH
+后重新验证；以上失败均保留在 robustness/reports 中。此次尚未切换 UI7 发布包。

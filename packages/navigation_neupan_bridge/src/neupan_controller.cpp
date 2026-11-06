@@ -641,6 +641,12 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
     }
   }
   if (!shadow_mode_) {
+    // A stale-source deadline retires the current attempt but is not a
+    // process fault. End this action so a later attempt can start cleanly.
+    if (guard_status.valid && guard_status.state == "FAULT" &&
+      guard_status.reason == "planner_result_recovery_timeout") {
+      throw nav2_core::PlannerException("planner_result_recovery_timeout");
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     const bool permitted = ownerReadyLocked(monotonicNow()) && execution_->permitted(monotonicNow());
     if (execution_->faulted()) {throw nav2_core::PlannerException(execution_->fault());}

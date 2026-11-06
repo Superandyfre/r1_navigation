@@ -48,41 +48,35 @@ class SourceRecovery(chain.FailstopChainROS):
             rounds=rounds,same_attempt=attempt,same_grant=grant,action='SUCCEEDED',
             healthy_worker=True,physical_motion=False),indent=2))
 
-    def test_expired_source_hold_stays_latched(self):
-        self.assertEqual(self.worker_mode,'actual-solver')
+    def test_expired_source_hold_aborts_only_current_attempt(self):
+        self.assertEqual(self.worker_mode,"actual-solver")
         handle=self.goal();result=handle.get_result_async()
         self.until(lambda:any(v>.04 for _,v,w in self.outputs) or result.done(),50)
         self.assertFalse(result.done())
+        old_attempt=self.context["navigation_attempt_id"]
         self.source_hold(True)
         start=time.monotonic()
-        self.assertEqual(self.future(result,4).status,GoalStatus.STATUS_ABORTED)
+        self.assertEqual(self.future(result,8).status,GoalStatus.STATUS_ABORTED)
         ended=time.monotonic()
-        # Controller and Guard watchdogs race. Controller may retire/revoke
-        # before Guard's own timeout, so prove the immutable Controller fault.
-        self.until(lambda:any(j.get('fault_reason') in
-                              ('planner_result_recovery_timeout','guard_fault_latched')
-                              and j.get('fault_latched')
-                              for t,j in self.runtime_statuses if t>start))
-        controller_reasons=sorted({j['fault_reason'] for t,j in self.runtime_statuses
-                                  if t>start and j.get('fault_latched')})
-        self.assertTrue('planner_result_recovery_timeout' in controller_reasons or
-            any(j['authorization_reason']=='planner_result_recovery_timeout'
-                for t,j in self.statuses if t>start))
+        self.until(lambda:time.monotonic()>ended+.5)
+        self.assertTrue(all(v==0. and w==0. for t,v,w in self.outputs if t>ended+.1))
+        self.assertTrue(any(j.get("authorization_reason")=="planner_result_recovery_timeout"
+                            for t,j in self.statuses if t>start))
+        self.assertFalse(any(j.get("fault_latched") for t,j in self.runtime_statuses if t>start))
         self.source_hold(False)
-        self.until(lambda:time.monotonic()>ended+.8)
-        retry=self.goal()
-        self.assertEqual(self.future(retry.get_result_async()).status,GoalStatus.STATUS_ABORTED)
-        rows=[r for r in self.outputs if r[0]>ended+.1]
-        self.assertGreater(len(rows),15)
-        self.assertTrue(all(v==0. and w==0. for _,v,w in rows))
-        self.assertFalse(any(j['state']=='FAULT_LATCHED' for _,j in self.healths))
-        (self.report/'source-recovery-result.json').write_text(json.dumps(dict(
-            mode='expired-hold',action='ABORTED',new_goal='ABORTED',
-            terminal_after_pause=ended-start,controller_reasons=controller_reasons,
-            root_reason='planner_result_recovery_timeout',
-            zero_samples=len(rows),healthy_worker=True,physical_motion=False),indent=2))
+        retry=self.goal();next_result=retry.get_result_async()
+        marker=time.monotonic()
+        self.until(lambda:any(t>marker and v>.04 for t,v,w in self.outputs) or next_result.done(),50)
+        self.assertFalse(next_result.done())
+        self.assertNotEqual(self.context["navigation_attempt_id"],old_attempt)
+        self.assertTrue(any(t>marker and v>.04 for t,v,w in self.outputs))
+        self.future(retry.cancel_goal_async())
+        (self.report/"source-recovery-result.json").write_text(json.dumps(dict(
+            mode="expired-hold",action="ABORTED",new_goal="resumed",
+            terminal_after_pause=ended-start,root_reason="planner_result_recovery_timeout",
+            healthy_worker=True,physical_motion=False),indent=2))
 
 def load_tests(loader,tests,pattern):
     return unittest.TestSuite(SourceRecovery(n) for n in
-        ['test_short_source_hold_recovers','test_expired_source_hold_stays_latched'])
+        ['test_short_source_hold_recovers','test_expired_source_hold_aborts_only_current_attempt'])
 if __name__=='__main__':unittest.main()

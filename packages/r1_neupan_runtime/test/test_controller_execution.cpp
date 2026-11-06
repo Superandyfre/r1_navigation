@@ -186,7 +186,12 @@ TEST_F(Execution, DuplicateSourceNeverExtendsStaleRecoveryDeadline) {
     }
     runtime.source(source(), now);runtime.tick(now);runtime.permitted(now);
   }
-  EXPECT_EQ(runtime.fault(), "planner_result_recovery_timeout");
+  EXPECT_FALSE(runtime.faulted());
+  EXPECT_FALSE(runtime.permitted(105.75));
+  const auto revoke = runtime.end(105.75);
+  ASSERT_TRUE(revoke);
+  EXPECT_EQ((*revoke)["state"], "REVOKE");
+  EXPECT_FALSE(runtime.active());
 }
 }  // namespace
 

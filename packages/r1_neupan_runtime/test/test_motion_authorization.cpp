@@ -192,6 +192,31 @@ TEST_F(Gate, RecoveryDeadlineCannotBeExtendedByDuplicateOrLateFreshSource) {
   gate.authorization(grant("COMMIT",105.6,25),105.6);
   gate.source(source(105.6,2),105.6);
   EXPECT_EQ(gate.evaluate(105.6).reason,"planner_result_recovery_timeout");
+  EXPECT_EQ(gate.evaluate(105.6).state,"TASK_FAILED");
+  EXPECT_FALSE(gate.faulted());
+  gate.authorization(grant("REVOKE",105.6,26),105.6);
+  EXPECT_EQ(gate.evaluate(105.6).state,"DISARMED");
+  auto h=health(105.61,25); h["navigation_attempt_id"]="attempt-b"; gate.health(h,105.61);
+  auto fresh=source(105.61,3); fresh["navigation_attempt_id"]="attempt-b";
+  gate.source(fresh,105.61);
+  auto next=grant("PREPARE",105.61,27); next["navigation_attempt_id"]="attempt-b"; next["grant_id"]="grant-b";
+  gate.authorization(next,105.61);
+  EXPECT_EQ(gate.evaluate(105.61).state,"PREPARED");
+  next["state"]="COMMIT";next["sequence"]=28;gate.authorization(next,105.61);
+  EXPECT_TRUE(gate.evaluate(105.61).allowed);
+  auto late=grant("PREPARE",105.62,29); gate.authorization(late,105.62);
+  EXPECT_TRUE(gate.evaluate(105.62).allowed);
+}
+TEST_F(Gate, WorkerLossHasPriorityOverExpiredSourceTaskFailure) {
+  armed();
+  gate.health(health(100.3,2),100.3);
+  gate.authorization(grant("COMMIT",100.3,3),100.3);
+  gate.health(health(100.55,3),100.55);
+  gate.authorization(grant("COMMIT",100.55,4),100.55);
+  EXPECT_EQ(gate.evaluate(100.55).state,"SOURCE_STALE_HOLD");
+  // Both the Worker lease and source recovery window have now expired.
+  EXPECT_EQ(gate.evaluate(106.).reason,"worker_health_stale");
+  EXPECT_TRUE(gate.faulted());
 }
 TEST_F(Gate, StartupPreparationDoesNotConsumeActiveRecoveryDeadline) {
   gate.health(health(),100.); gate.authorization(grant(),100.);
