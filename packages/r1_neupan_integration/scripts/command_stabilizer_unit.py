@@ -62,6 +62,13 @@ def main() -> None:
     check(gentle.stabilize(0.08, -0.03).angular_z == -0.03,
           "HW1 gentle steering must permit confirmed corrections")
 
+    gentle.reset()
+    spin = gentle.stabilize(0.0, 0.03)
+    check(spin.state == "TURN_IN_PLACE" and spin.linear_x == 0.0 and spin.angular_z == 0.03,
+          "valid gentle in-place turn must not be forced to zero")
+    check(gentle.stabilize(0.0, 0.01).angular_z == 0.0,
+          "existing angular deadband still applies")
+
     gear_gate = GearTransitionGate(GearTransitionConfig(confirm_cycles=3))
     for now in (0.0, 0.1):
         waiting = gear_gate.decide(

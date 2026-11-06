@@ -139,7 +139,8 @@ neupan_velocity_smoother:
     min_velocity: [-0.20, 0.0, -0.40]
     max_accel: [0.20, 0.0, 0.60]
     max_decel: [-0.30, 0.0, -0.80]
-    deadband_velocity: [0.005, 0.0, 0.01]
+    # Do not erase valid gentle NeuPAN commands; acceleration limits remain active.
+    deadband_velocity: [0.0, 0.0, 0.0]
 
 local_costmap:
   local_costmap:

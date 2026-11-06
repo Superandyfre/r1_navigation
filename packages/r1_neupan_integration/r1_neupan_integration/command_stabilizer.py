@@ -126,6 +126,11 @@ class BidirectionalCommandStabilizer:
             reasons.append("low_speed_turn_in_place")
             return StabilizedCommand(linear_x, angular_z, "TURN_IN_PLACE", ";".join(reasons))
         if abs(linear_x) < self.config.linear_deadband_mps:
+            if angular_z != 0.0:
+                # A valid gentle in-place correction must not be discarded
+                # merely because translational speed is zero.
+                reasons.append("gentle_turn_in_place")
+                return StabilizedCommand(0.0, angular_z, "TURN_IN_PLACE", ";".join(reasons))
             reasons.append("low_speed_indecisive_hold")
             return StabilizedCommand(0.0, 0.0, "HOLD", ";".join(reasons))
         return StabilizedCommand(

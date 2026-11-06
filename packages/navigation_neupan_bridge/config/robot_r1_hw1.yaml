@@ -53,7 +53,9 @@ n1_16_production_bridge:
     # result before the next SMAC tick.
     refresh_initial_path: false
     control_frequency: 10.0
-    # Admit small confirmed yaw corrections before heading error accumulates.
+    # Let NeuPAN low-speed corrections reach the acceleration-limited smoother.
+    # Direction reversal is still serialized by auto_gear_transition below.
+    command_stabilizer_enabled: false
     command_stabilizer_angular_deadband_radps: 0.02
     latest_scan_only: true
     max_path_deviation_m: 0.15
