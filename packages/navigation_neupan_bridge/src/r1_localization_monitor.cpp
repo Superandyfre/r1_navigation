@@ -697,13 +697,13 @@ private:
 
     const bool sustained_localization_loss = reason == "localization_status_stale" &&
       localization_status_age >= localization_fault_timeout_sec_;
-    // A fresh footprint/costmap mismatch is a synchronization gap, not yet
-    // evidence of a permanent fault. Stop during a bounded grace period.
+    // Transient input gaps are stop-only holds while they may recover.
+    // Existing source freshness and localization fault deadlines still apply.
     const auto footprint_sync = footprint_sync_grace_.observe(
       ever_ready_, healthy, reason, preflight_ready_, steady_now);
     if (ever_ready_ && !healthy && !fault_latched_ &&
-      footprint_sync == FootprintSyncGrace::Result::Fault &&
-      (reason != "localization_status_stale" || sustained_localization_loss))
+      (sustained_localization_loss ||
+      (reason != "localization_status_stale" && footprint_sync == FootprintSyncGrace::Result::Fault)))
     {
       fault_latched_ = true;
       fault_reason_ = reason;

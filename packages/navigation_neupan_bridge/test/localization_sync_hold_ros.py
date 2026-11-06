@@ -37,6 +37,8 @@ class LocalizationSyncHold(unittest.TestCase):
         self.status = []
         self.sub = self.node.create_subscription(String, "/test/status", lambda m:self.status.append(json.loads(m.data)), 20)
         self.mismatch = False
+        self.drop_footprint = False
+        self.drop_localization = False
         self.last = 0.
 
     def tearDown(self):
@@ -54,8 +56,10 @@ class LocalizationSyncHold(unittest.TestCase):
             tf = TransformStamped(); tf.header.stamp = stamp; tf.header.frame_id="map"; tf.child_frame_id="base_link"; tf.transform.rotation.w=1.
             self.tf.sendTransform(tf)
             odom=Odometry(); odom.header.stamp=stamp; odom.header.frame_id="odom"; odom.child_frame_id="base_link"; odom.pose.pose.orientation.w=1.; self.odom.publish(odom)
-            self.loc.publish(String(data=json.dumps(dict(schema="r1_indoor_localization_status_v1",state="NORMAL",reason="ready"))))
+            if not self.drop_localization:
+                self.loc.publish(String(data=json.dumps(dict(schema="r1_indoor_localization_status_v1",state="NORMAL",reason="ready"))))
             for pub, frame, dx in ((self.fp,"base_link",0.),(self.mapfp,"map",.3 if self.mismatch else 0.)):
+                if pub is self.fp and self.drop_footprint: continue
                 msg=PolygonStamped();msg.header.frame_id=frame
                 msg.header.stamp=(now-rclpy.duration.Duration(seconds=.1)).to_msg()
                 msg.polygon.points=[Point32(x=x+dx,y=y,z=0.) for x,y in ((-.3,-.2),(-.3,.2),(.3,.2),(.3,-.2))]
@@ -77,6 +81,23 @@ class LocalizationSyncHold(unittest.TestCase):
         self.mismatch=False
         self.wait_for(lambda s:s["state"]=="READY")
         self.assertFalse(any(s["state"]=="FAULT" for s in self.status))
+
+    def test_brief_footprint_dropout_holds_and_recovers(self):
+        self.wait_for(lambda s:s["state"]=="READY")
+        self.drop_footprint=True
+        self.wait_for(lambda s:s["state"]=="HOLD")
+        self.assertEqual(self.status[-1]["reason"],"dynamic_footprint_unavailable_or_stale")
+        self.drop_footprint=False
+        self.wait_for(lambda s:s["state"]=="READY")
+        self.assertFalse(any(s["state"]=="FAULT" for s in self.status))
+
+    def test_status_dropout_holds_then_faults_at_original_deadline(self):
+        self.wait_for(lambda s:s["state"]=="READY")
+        self.drop_localization=True
+        self.wait_for(lambda s:s["state"]=="HOLD")
+        self.assertEqual(self.status[-1]["reason"],"localization_status_stale")
+        self.wait_for(lambda s:s["state"]=="FAULT")
+        self.assertEqual(self.status[-1]["reason"],"localization_status_stale")
 
     def test_persistent_mismatch_faults(self):
         self.wait_for(lambda s:s["state"]=="READY")
