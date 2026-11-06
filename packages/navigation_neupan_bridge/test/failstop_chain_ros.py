@@ -156,6 +156,7 @@ class FailstopChainROS(unittest.TestCase):
                 plan_input_topic=PREFIX+'path',goal_topic=PREFIX+'goal',
                 forward_only_enabled=False,command_stabilizer_enabled=False,
                 auto_gear_transition_enabled=False,obstacle_motion_enabled=False)
+            parameters.update(getattr(self, "worker_parameters_override", {}))
             helper=getattr(self,'worker_helper',Path(__file__).with_name('chain_worker_peer.py'))
             python='/home/rpp/venvs/neupan_ros_humble/bin/python' if self.worker_mode=='actual-solver' else '/usr/bin/python3'
             args=[python,str(helper),'--ros-args']
