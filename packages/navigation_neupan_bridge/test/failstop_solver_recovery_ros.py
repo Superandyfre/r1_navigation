@@ -27,9 +27,12 @@ class SolverRecovery(chain.FailstopChainROS):
         start=time.monotonic();attempt=self.context['navigation_attempt_id']
         self.fail_solves(1)
         self.until(lambda:any(t>start and j.get('planner_state')=='retry' for t,j in self.healths))
-        failed=next(j for t,j in self.healths if t>start and j.get('planner_state')=='retry')
-        self.until(lambda:any(t>start and v==0 and w==0 for t,v,w in self.outputs))
+        failed_at,failed=next((t,j) for t,j in self.healths if t>start and j.get('planner_state')=='retry')
         self.until(lambda:any(t>start and j['request_id']>failed['planner_failed_request_id'] for t,j in self.sources))
+        recovered_at=next(t for t,j in self.sources if t>start and j['request_id']>failed['planner_failed_request_id'])
+        during_retry=[(v,w) for t,v,w in self.outputs if failed_at <= t <= recovered_at]
+        self.assertTrue(during_retry, "no actuator output observed during retry")
+        self.assertTrue(all(abs(v)>1e-8 or abs(w)>1e-8 for v,w in during_retry), during_retry)
         resumed=time.monotonic()
         self.until(lambda:any(t>resumed and v>.04 for t,v,w in self.outputs) or result.done())
         self.assertFalse(result.done())

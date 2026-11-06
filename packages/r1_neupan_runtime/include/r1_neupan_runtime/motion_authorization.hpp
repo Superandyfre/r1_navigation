@@ -326,11 +326,15 @@ public:
     if (grant_->attempt != health_attempt_) {
       return {false, false, "DISARMED", "worker_attempt_not_ready"};
     }
-    // A failed solve revokes even a still-fresh previous nonzero result.
-    // Health never renews a source. Clearing retry still requires a result
-    // newer than the failed request, with the current route/attempt identity.
-    const bool planning_failed = health_payload_.value("planner_state", "ready") != "ready" ||
+    // During a recoverable solver retry retain only the already committed,
+    // same-context source while its original input and result stamps remain
+    // fresh. Health does not renew either timestamp. Exhaustion still stops.
+    const auto planner_state = health_payload_.value("planner_state", "ready");
+    const bool planning_failed = planner_state != "ready" ||
       (source_ && source_->request <= health_payload_.value("planner_failed_request_id", -1LL));
+    if (planning_failed && planner_state != "exhausted" && committed_ && freshSource(now)) {
+      return {true, false, "ARMED", "planner_retry_previous_fresh_source"};
+    }
     if (!committed_ && !planning_failed && handoverFresh(now)) {
       return {true, false, "ROUTE_HANDOVER", "previous_source_still_valid"};
     }

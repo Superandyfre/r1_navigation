@@ -366,15 +366,28 @@ TEST(SourceProtocolVectors, PythonProducerAndCppConsumerShareStrictContract) {
   }
 }
 
-TEST_F(Gate, NumericalFailureImmediatelyBlocksOldFreshNonzeroSource) {
+TEST_F(Gate, RecoverableFailureKeepsOnlyOriginalFreshSource) {
   armed();ASSERT_TRUE(gate.evaluate(100.).allowed);
   auto failed = health(100.01,2);
   failed["planner_state"]="retry";failed["planner_failed_request_id"]=2;
   gate.health(failed,100.01);
-  EXPECT_FALSE(gate.evaluate(100.01).allowed);EXPECT_FALSE(gate.faulted());
+  EXPECT_TRUE(gate.evaluate(100.01).allowed);EXPECT_FALSE(gate.faulted());
+  EXPECT_EQ(gate.evaluate(100.01).reason,"planner_retry_previous_fresh_source");
   auto ready=health(100.02,3);ready["planner_failed_request_id"]=2;
   gate.health(ready,100.02);
-  EXPECT_FALSE(gate.evaluate(100.02).allowed);
+  EXPECT_TRUE(gate.evaluate(100.02).allowed);
   gate.source(source(100.03,3),100.03);
   EXPECT_TRUE(gate.evaluate(100.03).allowed);EXPECT_FALSE(gate.faulted());
+}
+TEST_F(Gate, RecoverableFailureCannotRenewAnExpiredSourceOrBypassExhaustion) {
+  armed();auto failed=health(100.01,2);failed["planner_state"]="retry";
+  failed["planner_failed_request_id"]=2;gate.health(failed,100.01);
+  EXPECT_TRUE(gate.evaluate(100.01).allowed);
+  gate.health(health(100.51,3),100.51);gate.authorization(grant("COMMIT",100.51,3),100.51);
+  EXPECT_FALSE(gate.evaluate(100.51).allowed);
+  MotionAuthorization exhausted("guard-a");exhausted.health(health(),100.);
+  exhausted.source(source(),100.);exhausted.authorization(grant(),100.);
+  exhausted.authorization(grant("COMMIT",100.,2),100.);
+  auto h=health(100.01,2);h["planner_state"]="exhausted";h["planner_failed_request_id"]=2;
+  exhausted.health(h,100.01);EXPECT_FALSE(exhausted.evaluate(100.01).allowed);
 }
