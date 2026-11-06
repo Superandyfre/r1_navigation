@@ -105,6 +105,7 @@ def generate_launch_description():
                     "mesh_filter_mode": ParameterValue(LaunchConfiguration("mesh_filter_mode"), value_type=str),
                     "arm_extra_mesh_config": ParameterValue(LaunchConfiguration("arm_extra_mesh_config"), value_type=str),
                     "mesh_projection_margin_m": ParameterValue(LaunchConfiguration("mesh_projection_margin_m"), value_type=str),
+                    "mesh_3d_projection_margin_m": ParameterValue(LaunchConfiguration("mesh_3d_projection_margin_m"), value_type=str),
                     "command_profile": ParameterValue(LaunchConfiguration("command_profile"), value_type=str),
                     "cmd_vel_out_topic": ParameterValue(LaunchConfiguration("cmd_vel_out_topic"), value_type=str),
                 }],
@@ -201,6 +202,7 @@ def generate_launch_description():
             "mesh_projection_margin_m", default_value="0.06",
             description="Local mesh-only LiDAR self-return edge tolerance in metres.",
         ),
+        DeclareLaunchArgument("mesh_3d_projection_margin_m", default_value="0.0"),
         DeclareLaunchArgument(
             "command_profile", default_value="smoothed",
             description="NeuPAN HW1 command path: smoothed or direct.",

@@ -61,6 +61,7 @@ arm_local_ip="${RPP_ARM_LOCAL_IP:-192.168.11.11}"
 scan_source="${RPP_NEUPAN_SCAN_SOURCE:-dual}"
 mesh_self_filter="${RPP_NEUPAN_USE_MESH_SELF_FILTER:-true}"
 mesh_filter_mode="${RPP_NEUPAN_MESH_FILTER_MODE:-3d}"
+mesh_3d_projection_margin_m="${RPP_NEUPAN_MESH_3D_PROJECTION_MARGIN_M:-0.0}"
 arm_extra_mesh_config="${RPP_ARM_EXTRA_MESH_CONFIG:-}"
 collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-false}}"
 
@@ -149,6 +150,7 @@ fi
   scan_source:="${scan_source}" \
   use_mesh_self_filter:="${mesh_self_filter}" \
   mesh_filter_mode:="${mesh_filter_mode}" \
+  mesh_3d_projection_margin_m:="${mesh_3d_projection_margin_m}" \
   "${extra_mesh_launch_args[@]}" \
   collision_check_enabled:="${collision_check_enabled}" \
   calibration_record:=/home/rpp/rpp_ws/config/r1_hw1_calibration.json \

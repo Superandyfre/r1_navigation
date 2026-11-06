@@ -11,7 +11,7 @@ def generate_launch_description():
     declarations=[DeclareLaunchArgument(name,default_value=value) for name,value in
                   [('calibration_record',''),('scan_source','dual'),('use_mesh_self_filter','true'),
                    ('mesh_filter_mode','3d'),('arm_extra_mesh_config',''),
-                   ('mesh_projection_margin_m','0.06'),('command_profile','smoothed'),
+                   ('mesh_projection_margin_m','0.06'),('mesh_3d_projection_margin_m','0.0'),('command_profile','smoothed'),
                    ('cmd_vel_out_topic','/cmd_vel'),('runtime_auto_arm','true')]]
     def include(file,names,extra=None):
         arguments={name:LaunchConfiguration(name) for name in names}
@@ -21,6 +21,6 @@ def generate_launch_description():
     return LaunchDescription(declarations+[
         include('navigation_neupan.launch.py',['command_profile','runtime_auto_arm'],{'mode':'hw1'}),
         include('r1_neupan_hw1_motion.launch.py',['calibration_record','scan_source','use_mesh_self_filter',
-            'mesh_filter_mode','arm_extra_mesh_config','mesh_projection_margin_m','command_profile',
+            'mesh_filter_mode','arm_extra_mesh_config','mesh_projection_margin_m','mesh_3d_projection_margin_m','command_profile',
             'cmd_vel_out_topic'],{'collision_check_enabled':'false'}),
     ])

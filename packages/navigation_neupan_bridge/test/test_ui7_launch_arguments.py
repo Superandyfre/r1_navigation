@@ -16,6 +16,7 @@ class ButtonArguments(unittest.TestCase):
 scan_source=dual
 mesh_self_filter=true
 mesh_filter_mode=3d
+mesh_3d_projection_margin_m=0.0
 collision_check_enabled=false
 left_arm_ip=192.168.11.60
 right_arm_ip=192.168.11.61
@@ -28,6 +29,7 @@ extra_mesh_launch_args=()
     def test_unconfigured_optional_value_is_omitted(self):
         args = self.args('')
         self.assertIn('mesh_filter_mode:=3d', args)
+        self.assertIn('mesh_3d_projection_margin_m:=0.0', args)
         self.assertFalse(any(a.startswith('arm_extra_mesh_config:=') for a in args))
         self.assertFalse(any(a.endswith(':=') for a in args))
 

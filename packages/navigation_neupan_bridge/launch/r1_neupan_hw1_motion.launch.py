@@ -83,6 +83,8 @@ def _build(context):
     collision_check_enabled = LaunchConfiguration("collision_check_enabled").perform(context)
     mesh_projection_margin_m = float(
         LaunchConfiguration("mesh_projection_margin_m").perform(context))
+    mesh_3d_projection_margin_m = float(
+        LaunchConfiguration("mesh_3d_projection_margin_m").perform(context))
     planner_footprint_margin_m = float(
         LaunchConfiguration("planner_footprint_margin_m").perform(context))
     command_profile = LaunchConfiguration("command_profile").perform(context)
@@ -114,6 +116,8 @@ def _build(context):
         raise RuntimeError("HW1 duplicate collision checks were removed; collision_check_enabled must be false")
     if not 0.0 <= mesh_projection_margin_m <= 0.10:
         raise RuntimeError("mesh_projection_margin_m must be within [0.0, 0.10]")
+    if not 0.0 <= mesh_3d_projection_margin_m <= 0.10:
+        raise RuntimeError("mesh_3d_projection_margin_m must be within [0.0, 0.10]")
     if not 0.0 <= planner_footprint_margin_m <= 0.30:
         raise RuntimeError("planner_footprint_margin_m must be within [0.0, 0.30]")
     if command_profile not in {"direct", "smoothed"}:
@@ -227,9 +231,12 @@ def _build(context):
             "link_radius_m": 0.12,
             "tool_radius_m": 0.16,
             "projection_margin_m": 0.03,
-            # Mesh-only tolerance for surveyed LiDAR-to-arm edge mismatch.
-            # It does not change the navigation or collision footprint.
-            "mesh_projection_margin_m": mesh_projection_margin_m,
+            # In 3D mode the sensor filter already handles surface tolerance.
+            # Publish physical mesh projections for planning: the worker adds
+            # its own clearance once. The legacy 2D scan filter retains its
+            # independent projection tolerance.
+            "mesh_projection_margin_m": (
+                mesh_3d_projection_margin_m if use_3d else mesh_projection_margin_m),
             # The planner uses the live arm hull for hard collision checks.
             # Clearance beyond that hull is a traversal cost in SMAC, so a
             # narrow but physically passable corridor remains searchable.
@@ -436,6 +443,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "mesh_projection_margin_m", default_value="0.06",
             description="Local mesh-only LiDAR self-return edge tolerance in metres."),
+        DeclareLaunchArgument(
+            "mesh_3d_projection_margin_m", default_value="0.0",
+            description="Extra projected-mesh margin in 3D mode, before planner clearance."),
         DeclareLaunchArgument(
             "planner_footprint_margin_m", default_value="0.0",
             description=(

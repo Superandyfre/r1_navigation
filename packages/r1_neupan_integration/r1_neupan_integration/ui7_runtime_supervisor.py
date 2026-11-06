@@ -33,7 +33,7 @@ class Supervisor(Node):
         self.recovery_zero=False
         self.transaction=RecoveryTransaction(self,timeout=45.)
         parameters=dict(calibration_record='',scan_source='dual',use_mesh_self_filter='true',
-                        mesh_filter_mode='3d',arm_extra_mesh_config='',mesh_projection_margin_m='0.06',command_profile='smoothed',cmd_vel_out_topic='/cmd_vel',
+                        mesh_filter_mode='3d',arm_extra_mesh_config='',mesh_projection_margin_m='0.06',mesh_3d_projection_margin_m='0.0',command_profile='smoothed',cmd_vel_out_topic='/cmd_vel',
                         report_dir='/home/rpp/neupan_failstop_ws/reports/runtime-recovery')
         self.values={key:self.declare_parameter(key,value).value for key,value in parameters.items()}
         self.report_root=Path(self.values.pop('report_dir'));self.report_root.mkdir(parents=True,exist_ok=True)

@@ -44,7 +44,8 @@ class MeshPoseCache(unittest.TestCase):
         log=tempfile.TemporaryFile(mode="w+")
         uri="package://rpp_components_description/meshes/gripper/agibot/omniPicker/narrow1_Link.STL"
         proc=subprocess.Popen([exe,"--ros-args","-p","mesh_projection_frequency:=4.0",
-            "-p","mesh_filter_frequency:=15.0","-p","additional_mesh_frames:=[held_object]",
+            "-p","mesh_filter_frequency:=15.0","-p","mesh_projection_margin_m:="+os.environ.get("NEUPAN_TEST_MESH_PROJECTION_MARGIN","0.06"),
+            "-p","additional_mesh_frames:=[held_object]",
             "-p","additional_mesh_uris:=["+uri+"]","-p","additional_mesh_scales:=[1.0]"],
             stdout=log,stderr=subprocess.STDOUT)
         gripper=0.; missing=False; stale_joints=False; duplicate_joint=False; next_pulse=0.

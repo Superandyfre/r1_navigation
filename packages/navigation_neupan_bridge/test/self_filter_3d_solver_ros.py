@@ -26,7 +26,7 @@ class FilterSolver(chain.FailstopChainROS):
           [os.environ["NEUPAN_TEST_3D_SHADOW"]],
           [os.environ["NEUPAN_TEST_ARM_FOOTPRINT"],"--ros-args",
            "-p","mesh_projection_frequency:=4.0","-p","mesh_filter_frequency:=15.0",
-           "-p","mesh_projection_margin_m:=0.06"],
+           "-p","mesh_projection_margin_m:=0.0"],
           [os.environ["NEUPAN_TEST_CLOUD_TO_SCAN"],"--ros-args","--params-file",os.environ["NEUPAN_TEST_CLOUD_CONFIG"],
            "-r","cloud_in:=/r1_self_filter_3d_shadow/cloud","-r","scan:=/test_3d_front"],
           [os.environ["NEUPAN_TEST_SCAN_FUSION"],"--ros-args","--params-file",os.environ["NEUPAN_TEST_FUSION_CONFIG"],

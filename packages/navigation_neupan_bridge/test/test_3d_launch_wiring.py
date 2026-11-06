@@ -35,12 +35,18 @@ class MotionWiring(unittest.TestCase):
     def test_existing_2d_mode_is_unchanged(self):
         c,n=self.build(mesh_filter_mode="2d")
         self.assertNotIn("r1_arm_self_filter_3d",n)
+        self.assertAlmostEqual(self.params(c,n["r1_arm_footprint"])["mesh_projection_margin_m"],0.06)
         self.assertEqual(self.remaps(c,n["neupan_pointcloud_to_scan"])["cloud_in"],"/lidar/pointcloud")
         self.assertNotIn("rear_scan_topic",self.params(c,n["r1_scan_fusion"]))
         self.assertEqual(self.params(c,n["n1_16_production_bridge"])["scan_topic"],"/scan_neupan_mesh_shadow")
     def test_dual_3d_mode_has_one_filtered_navigation_path(self):
         c,n=self.build(mesh_filter_mode="3d")
         f=self.params(c,n["r1_arm_self_filter_3d"])
+        self.assertAlmostEqual(self.params(c,n["r1_arm_footprint"])["mesh_projection_margin_m"],0.0)
+        self.assertAlmostEqual(self.params(c,n["n1_16_production_bridge"])["dynamic_footprint_clearance_m"],0.04)
+        custom,cn=self.build(mesh_filter_mode="3d",mesh_3d_projection_margin_m="0.02")
+        self.assertAlmostEqual(self.params(custom,cn["r1_arm_footprint"])["mesh_projection_margin_m"],0.02)
+        with self.assertRaises(RuntimeError):self.build(mesh_filter_mode="3d",mesh_3d_projection_margin_m="0.11")
         self.assertTrue(f["rear_scan_enabled"])
         self.assertEqual(f["output_cloud_topic"],"/r1_arm_self_filter_3d/cloud")
         self.assertEqual(self.remaps(c,n["neupan_pointcloud_to_scan"])["cloud_in"],f["output_cloud_topic"])

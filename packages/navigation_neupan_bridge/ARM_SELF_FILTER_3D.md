@@ -12,7 +12,11 @@ cloud by default; an explicit custom input must contain absolute point times. It
 history in 5 ms bins, preserving source frames and timestamps. A point near a
 mesh surface is removed within 0.02 m. For a mesh whose triangle topology is
 verified closed, its interior is also removed. The dynamic robot footprint and
-mesh components are still produced separately for the planner.
+mesh components are still produced separately for the planner. In 3D mode,
+mesh projections have zero extra padding by default; the worker separately
+adds its configured 4 cm planning clearance once. The legacy 2D scan filter
+retains its 6 cm projection tolerance. `RPP_NEUPAN_MESH_3D_PROJECTION_MARGIN_M`
+can explicitly add projected-mesh padding in 3D mode if needed.
 
 The filter does not publish velocity or authorize motion. It queues up to four
 frames per sensor and waits at most 0.12 s for historical TF. During a short

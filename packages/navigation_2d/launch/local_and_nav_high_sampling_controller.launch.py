@@ -37,6 +37,7 @@ def _select(context):
             launch_arguments["scan_source"] = LaunchConfiguration("scan_source")
             launch_arguments["use_mesh_self_filter"] = LaunchConfiguration("use_mesh_self_filter")
             launch_arguments["mesh_filter_mode"] = LaunchConfiguration("mesh_filter_mode")
+            launch_arguments["mesh_3d_projection_margin_m"] = LaunchConfiguration("mesh_3d_projection_margin_m")
             launch_arguments["arm_extra_mesh_config"] = LaunchConfiguration("arm_extra_mesh_config")
             launch_arguments["command_profile"] = LaunchConfiguration("command_profile")
             launch_arguments["cmd_vel_out_topic"] = LaunchConfiguration("cmd_vel_out_topic")
@@ -82,6 +83,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument("use_mesh_self_filter", default_value="true", choices=["false", "true"]),
         DeclareLaunchArgument("mesh_filter_mode", default_value="3d", choices=["2d", "3d"]),
+        DeclareLaunchArgument("mesh_3d_projection_margin_m", default_value="0.0"),
         DeclareLaunchArgument("arm_extra_mesh_config", default_value=""),
         DeclareLaunchArgument(
             "command_profile", default_value="smoothed",
