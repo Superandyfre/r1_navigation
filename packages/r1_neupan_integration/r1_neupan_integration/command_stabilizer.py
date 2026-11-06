@@ -216,12 +216,14 @@ class GearTransitionGate:
                 self.reset()
             low_speed_sign = self._sign(linear_x, 0.0)
             if low_speed_sign == 0:
+                self._last_aligned = None
                 return GearTransitionDecision(0.0, angular_z, "DRIVE", "linear_deadband")
             if low_speed_sign == active_gear:
                 self._last_aligned = (linear_x, angular_z, active_gear)
                 self._last_aligned_at = now
                 return GearTransitionDecision(
                     linear_x, angular_z, "DRIVE", "aligned_below_transition_deadband")
+            self._last_aligned = None
             return GearTransitionDecision(
                 0.0, angular_z, "DRIVE", "opposite_below_transition_deadband")
         if requested_gear == active_gear:

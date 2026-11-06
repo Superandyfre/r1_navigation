@@ -121,6 +121,16 @@ def main() -> None:
     check(stale_hold.linear_x == 0.0,
           "stale odometry must not extend an aligned command")
 
+    reset_hold = GearTransitionGate(GearTransitionConfig(confirm_cycles=3))
+    reset_hold.decide(linear_x=0.2, angular_z=0.0, active_gear=1,
+                      observed_linear_x=0.2, odom_fresh=True, now=1.0)
+    reset_hold.decide(linear_x=0.0, angular_z=0.1, active_gear=1,
+                      observed_linear_x=0.1, odom_fresh=True, now=1.1)
+    after_zero = reset_hold.decide(linear_x=-0.2, angular_z=0.0, active_gear=1,
+                                   observed_linear_x=0.1, odom_fresh=True, now=1.2)
+    check(after_zero.linear_x == 0.0,
+          "an explicit zero command must invalidate the old aligned velocity")
+
     intent_gate = GearTransitionGate(GearTransitionConfig(
         confirm_cycles=1, opposite_direction_commit_cycles=4))
     for now, velocity in enumerate((-0.10, 0.10, -0.10, -0.10)):
