@@ -86,6 +86,7 @@ from r1_neupan_integration.obstacle_motion_policy import (
     braking_preview_m,
     first_command_collision_distance,
     first_swept_collision_distance,
+    limit_command_for_clearance,
     plan_obstacle_speed,
 )
 from r1_neupan_integration.stop_reverse_recovery import (
@@ -1298,6 +1299,7 @@ class N116Node(N115Node):
                 self.gear_transition_gate.reset()
                 self.path_deviation_guard.reset()
             unsafe_prediction = False
+            command_speed_limited = False
             command_free_distance = float("inf")
             stopping_distance = 0.0
             if motion_decision is not None and (
@@ -1333,9 +1335,12 @@ class N116Node(N115Node):
                     command_free_distance = min(
                         command_free_distance, optimized_free_distance
                     )
-                unsafe_prediction = command_free_distance < stopping_distance
-                if unsafe_prediction:
-                    command = Twist()
+                (command.linear.x, command.angular.z, unsafe_prediction,
+                 command_speed_limited) = limit_command_for_clearance(
+                    command.linear.x, command.angular.z,
+                    float(measured_velocity[0, 0]), command_free_distance,
+                    self.obstacle_motion_config,
+                )
             recovery_reverse_active = recovery_reverse_requested and command.linear.x < 0.0
             obstacle_state = "CLEAR"
             if local_detour is not None and verified_local_detour and not unsafe_prediction:
@@ -1514,6 +1519,7 @@ class N116Node(N115Node):
                         ),
                         "verified_local_detour": verified_local_detour,
                         "unsafe_prediction": unsafe_prediction,
+                        "command_speed_limited": command_speed_limited,
                         "odom_age_sec": float(odom_age_sec),
                     },
                     "scan_timing_ms": {
