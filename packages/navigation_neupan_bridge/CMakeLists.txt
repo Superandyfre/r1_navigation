@@ -75,6 +75,13 @@ target_compile_features(r1_arm_footprint PUBLIC cxx_std_17)
 target_include_directories(r1_arm_footprint PRIVATE include)
 ament_target_dependencies(r1_arm_footprint geometric_shapes geometry_msgs rclcpp sensor_msgs std_msgs tf2 tf2_ros)
 
+add_executable(r1_arm_self_filter_3d_shadow src/r1_arm_self_filter_3d_shadow.cpp)
+target_compile_features(r1_arm_self_filter_3d_shadow PUBLIC cxx_std_17)
+target_compile_options(r1_arm_self_filter_3d_shadow PRIVATE -O2)
+target_include_directories(r1_arm_self_filter_3d_shadow PRIVATE include)
+ament_target_dependencies(r1_arm_self_filter_3d_shadow geometric_shapes rclcpp sensor_msgs std_msgs tf2 tf2_ros)
+target_link_libraries(r1_arm_self_filter_3d_shadow fcl)
+
 add_executable(r1_dynamic_footprint_sync src/r1_dynamic_footprint_sync.cpp)
 target_compile_features(r1_dynamic_footprint_sync PUBLIC cxx_std_17)
 target_include_directories(r1_dynamic_footprint_sync PRIVATE include)
@@ -98,7 +105,7 @@ install(TARGETS ${PROJECT_NAME}
   LIBRARY DESTINATION lib
 )
 install(TARGETS neupan_wait_condition_bt_node LIBRARY DESTINATION lib)
-install(TARGETS r1_localization_monitor r1_arm_footprint r1_dynamic_footprint_sync nav_lifecycle_ensure
+install(TARGETS r1_localization_monitor r1_arm_footprint r1_arm_self_filter_3d_shadow r1_dynamic_footprint_sync nav_lifecycle_ensure
   r1_passage_clearance_diagnostics
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )

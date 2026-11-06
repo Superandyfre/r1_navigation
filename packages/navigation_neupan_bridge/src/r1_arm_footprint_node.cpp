@@ -16,6 +16,7 @@
 
 #include "geometric_shapes/mesh_operations.h"
 #include "navigation_neupan_bridge/mesh_pose_snapshot.hpp"
+#include "navigation_neupan_bridge/arm_mesh_resources.hpp"
 #include "geometry_msgs/msg/polygon.hpp"
 #include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -472,32 +473,8 @@ private:
   void loadCollisionMeshes()
   {
     try {
-      const auto add_arm = [this](const std::string & prefix, const std::string & model) {
-          const std::string root = "package://rokae_description/meshes/" + model + "/visual/";
-          addMeshPart(prefix + "base", root + model + "_base.stl", 0.001);
-          for (int index = 1; index <= 7; ++index) {
-            addMeshPart(
-              prefix + "link" + std::to_string(index),
-              root + model + "_link" + std::to_string(index) + ".stl", 0.001);
-          }
-        };
-      add_arm("left_", "AR5-5_08L-W4C1C5");
-      add_arm("right_", "AR5-5_08R-W4C1C5");
-      for (const auto & prefix : {std::string("left_"), std::string("right_")}) {
-        addMeshPart(prefix + "moduan_link", "package://r1_description/meshes/moduan_link.STL", 1.0);
-        const std::string gripper_prefix = prefix == "left_" ? "L_" : "R_";
-        const std::string gripper_root =
-          "package://rpp_components_description/meshes/gripper/agibot/omniPicker/";
-        addMeshPart(gripper_prefix + "omniPicker_base_link", gripper_root + "base_link.STL", 1.0);
-        for (const auto & link : {std::string("narrow1_Link"), std::string("narrow2_Link"),
-            std::string("narrow3_Link"), std::string("narrow_loop_Link"),
-            std::string("wide1_Link"), std::string("wide2_Link"),
-            std::string("wide3_Link"), std::string("wide_loop_Link")})
-        {
-          addMeshPart(
-            gripper_prefix + "omniPicker_hand_" + link,
-            gripper_root + link + ".STL", 1.0);
-        }
+      for (const auto & resource : armMeshResources()) {
+        addMeshPart(resource.frame, resource.uri, resource.scale);
       }
       mesh_model_ready_ = true;
       RCLCPP_INFO(
