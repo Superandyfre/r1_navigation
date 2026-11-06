@@ -927,6 +927,8 @@ private:
         {"command_barrier_ready", command_barrier_.ready(monotonicNow(),
           source_command_timeout_sec_, command_timeout_sec_)},
         {"sequence", ++status_sequence_}, {"monotonic", monotonicNow()},
+        {"worker_health_age_sec", authorization_->healthAge(monotonicNow())},
+        {"worker_health_bridged_by_source", authorization_->healthBridged(monotonicNow())},
         {"guard_boot_id", authorization_->bootId()}, {"authorization_state", authorization_decision_.state},
         {"authorization_reason", authorization_decision_.reason}, {"physical_safety_state", physical_safety_state_},
         {"grant_id", authorization_->grantId()}, {"navigation_attempt_id", authorization_->attemptId()}});

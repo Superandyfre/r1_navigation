@@ -93,8 +93,27 @@ TEST_F(Gate, HealthBootChangeIsFatalAfterPreparation) {
   prepared(); auto j=health(100.01,2); j["boot_id"]="worker-b"; gate.health(j,100.01);
   EXPECT_TRUE(gate.evaluate(100.01).fault);
 }
+TEST_F(Gate, RecentAdvancingSourceBridgesBriefHealthHeartbeatGap) {
+  armed();
+  gate.authorization(grant("COMMIT",100.4,3),100.4);
+  gate.source(source(100.4,2),100.4);
+  gate.authorization(grant("COMMIT",100.55,4),100.55);
+  EXPECT_TRUE(gate.evaluate(100.55).allowed);
+  gate.source(source(100.8,3),100.8);
+  gate.authorization(grant("COMMIT",100.8,5),100.8);
+  EXPECT_TRUE(gate.evaluate(100.8).allowed);
+  gate.source(source(101.01,4),101.01);
+  EXPECT_EQ(gate.evaluate(101.01).reason,"worker_health_stale");
+}
+TEST_F(Gate, DuplicateSourceCannotBridgeMissingHealth) {
+  armed();
+  gate.authorization(grant("COMMIT",100.4,3),100.4);
+  gate.source(source(),100.4);
+  gate.authorization(grant("COMMIT",100.55,4),100.55);
+  EXPECT_EQ(gate.evaluate(100.55).reason,"worker_health_stale");
+}
 TEST_F(Gate, HealthTimeoutIsIndependentOfFreshSource) {
-  armed(); gate.source(source(100.51,2),100.51);
+  armed(); gate.source(source(),100.51);
   gate.authorization(grant("COMMIT",100.51,3),100.51);
   EXPECT_EQ(gate.evaluate(100.51).reason,"worker_health_stale");
 }

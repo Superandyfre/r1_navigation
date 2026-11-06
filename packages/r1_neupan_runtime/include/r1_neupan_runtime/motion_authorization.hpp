@@ -324,6 +324,10 @@ public:
     return {true, false, "ARMED", "motion_authorized"};
   }
 
+  double healthAge(double now) const
+  {return health_time_ > 0.0 && now >= health_time_ ? now - health_time_ : -1.0;}
+  bool healthBridged(double now) const
+  {return healthAge(now) > config_.health_timeout && healthReady(now);}
   bool faulted() const {return !fault_.empty();}
   const std::string & faultReason() const {return fault_;}
   const std::string & bootId() const {return boot_;}
@@ -356,8 +360,17 @@ private:
   }
   bool healthReady(double now) const
   {
-    return health_state_ == "RUNNING" && now >= health_time_ &&
-           now - health_time_ <= config_.health_timeout;
+    if (health_state_ != "RUNNING" || now < health_time_) {return false;}
+    const double age = now - health_time_;
+    if (age <= config_.health_timeout) {return true;}
+    // A freshly computed, strictly sequenced result from the same authorized
+    // Worker is independent evidence that it is running. Bridge only a
+    // bounded heartbeat gap; duplicates cannot refresh freshSource().
+    return age <= config_.health_timeout + config_.source_timeout &&
+      source_ && source_->context.worker_boot == health_boot_ &&
+      source_->context.generation == health_generation_ && freshSource(now) &&
+      health_payload_.value("planner_state", "ready") == "ready" &&
+      source_->request > health_payload_.value("planner_failed_request_id", -1LL);
   }
   bool freshSource(double now) const
   {

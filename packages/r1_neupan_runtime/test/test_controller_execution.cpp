@@ -75,6 +75,23 @@ TEST_F(Execution, PreparedAckCannotCommitBeforeFreshSource) {
   ASSERT_TRUE(runtime.source(source(100.02), 100.02));
   g = runtime.tick(100.02); ASSERT_TRUE(g); EXPECT_EQ((*g)["state"], "COMMIT");
 }
+TEST_F(Execution, AdvancingResultsBridgeBriefMissingHealthWithoutStopping) {
+  armed();
+  runtime.guard(guard(100.3,4,"ARMED",runtime.grantId()),100.3);
+  runtime.check("authority-a","attempt-a",100.3);
+  runtime.source(source(100.3,2),100.3);runtime.tick(100.3);
+  runtime.guard(guard(100.55,5,"ARMED",runtime.grantId()),100.55);
+  runtime.check("authority-a","attempt-a",100.55);
+  runtime.source(source(100.55,3),100.55);runtime.tick(100.55);
+  EXPECT_TRUE(runtime.permitted(100.55));
+  runtime.guard(guard(100.81,6,"ARMED",runtime.grantId()),100.81);
+  runtime.check("authority-a","attempt-a",100.81);
+  runtime.source(source(100.81,4),100.81);runtime.tick(100.81);
+  EXPECT_TRUE(runtime.permitted(100.81));
+  runtime.guard(guard(101.01,7,"ARMED",runtime.grantId()),101.01);
+  EXPECT_THROW(runtime.check("authority-a","attempt-a",101.01),std::exception);
+  EXPECT_EQ(runtime.fault(),"worker_health_stale");
+}
 TEST_F(Execution, FatalReasonSurvivesTimerEndingExecution) {
   begin(); runtime.fail("worker_fault_latched"); runtime.end(100.01);
   try {

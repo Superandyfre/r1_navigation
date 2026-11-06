@@ -256,6 +256,16 @@ class GuardAuthorizationROS(unittest.TestCase):
             monotonic=now,fault_id='fault-a',fault_code='worker_response_failure'))
         self.assert_stopped('worker_fault_latched')
 
+    def test_short_health_gap_keeps_fresh_commands_then_expires(self):
+        self.health_enabled=False
+        start=time.monotonic()
+        while time.monotonic()<start+.47:self.tick()
+        rows=[v for t,v,w in self.outputs if start+.34<t<start+.46]
+        self.assertTrue(rows)
+        self.assertTrue(all(v>.05 for v in rows),rows)
+        self.assertTrue(any(s.get("worker_health_bridged_by_source") for s in self.statuses))
+        self.assert_stopped("worker_health_stale")
+
     def test_health_dropout_stops_with_continuous_source_and_raw(self):
         self.health_enabled=False
         self.assert_stopped('worker_health_stale')

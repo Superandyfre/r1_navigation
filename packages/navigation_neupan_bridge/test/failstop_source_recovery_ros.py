@@ -12,6 +12,26 @@ class SourceRecovery(chain.FailstopChainROS):
         self.publish('inject',dict(hold_source=hold,nonce=nonce))
         self.until(lambda:any(j.get('nonce')==nonce for _,j in self.inject_acks))
 
+    def test_short_heartbeat_gap_keeps_fresh_solver_output(self):
+        self.assertEqual(self.worker_mode,"actual-solver")
+        handle=self.goal();result=handle.get_result_async()
+        self.until(lambda:any(v>.04 for _,v,_ in self.outputs) or result.done(),50)
+        self.assertFalse(result.done())
+        nonce=str(time.time_ns())
+        self.publish("inject",dict(hold_health=True,nonce=nonce))
+        self.until(lambda:any(j.get("nonce")==nonce for _,j in self.inject_acks))
+        start=time.monotonic()
+        while time.monotonic()<start+.68:self.tick()
+        nonce=str(time.time_ns());self.publish("inject",dict(hold_health=False,nonce=nonce))
+        self.until(lambda:any(j.get("nonce")==nonce for _,j in self.inject_acks))
+        self.until(lambda:time.monotonic()>start+.85)
+        rows=[v for t,v,_ in self.outputs if start+.1<t<start+.8]
+        self.assertGreater(len(rows),20)
+        self.assertTrue(all(v>.04 for v in rows),rows)
+        self.assertFalse(result.done())
+        self.assertFalse(any(j.get("fault_latched") for t,j in self.runtime_statuses if t>start))
+        self.future(handle.cancel_goal_async())
+
     def test_short_source_hold_recovers(self):
         self.assertEqual(self.worker_mode,'actual-solver')
         handle=self.goal();result=handle.get_result_async()
@@ -78,5 +98,5 @@ class SourceRecovery(chain.FailstopChainROS):
 
 def load_tests(loader,tests,pattern):
     return unittest.TestSuite(SourceRecovery(n) for n in
-        ['test_short_source_hold_recovers','test_expired_source_hold_aborts_only_current_attempt'])
+        ['test_short_source_hold_recovers','test_short_heartbeat_gap_keeps_fresh_solver_output','test_expired_source_hold_aborts_only_current_attempt'])
 if __name__=='__main__':unittest.main()

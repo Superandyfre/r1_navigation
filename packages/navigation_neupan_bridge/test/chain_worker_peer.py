@@ -32,6 +32,7 @@ def main():
     # refresh its source timestamp. Buffer real publication attempts and flush
     # only at orderly teardown, avoiding per-heartbeat disk IO.
     health_sends=[]
+    health_paused=threading.Event()
     original_health_pub=node.worker_health_pub
     class HealthRecorder:
         def publish(self,message):
@@ -39,8 +40,9 @@ def main():
             payload=json.loads(message.data)
             row=dict(started=started,payload=payload,published=False)
             try:
-                original_health_pub.publish(message)
-                row['published']=True
+                if not health_paused.is_set():
+                    original_health_pub.publish(message)
+                    row['published']=True
             except Exception as exc:
                 row['error']=repr(exc)
                 raise
@@ -163,6 +165,11 @@ def main():
         if 'hold_robot_tf' in request:
             if request['hold_robot_tf']:robot_tf_paused.set()
             else:robot_tf_paused.clear()
+            ack.publish(String(data=json.dumps(request)))
+            return
+        if 'hold_health' in request:
+            if request['hold_health']:health_paused.set()
+            else:health_paused.clear()
             ack.publish(String(data=json.dumps(request)))
             return
         if 'hold_source' in request:

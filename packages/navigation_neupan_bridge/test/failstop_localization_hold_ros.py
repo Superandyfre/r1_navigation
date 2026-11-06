@@ -16,6 +16,7 @@ class LocalizationHoldChain(chain.FailstopChainROS):
         self.localization_state = "READY"
         self.localization_reason = "ready"
         self.localization_pub = None
+        self.health_suppressed = False
         self.controller_parameters_override = dict(
             require_localization_ready=True,
             localization_health_topic=chain.PREFIX + "localization")
@@ -24,6 +25,11 @@ class LocalizationHoldChain(chain.FailstopChainROS):
             localization_health_topic=chain.PREFIX + "localization")
         super().setUp()
 
+    def publish(self, key, payload):
+        if key == "health" and self.health_suppressed:
+            return
+        super().publish(key, payload)
+
     def tick(self):
         if self.localization_pub is None:
             self.localization_pub = self.node.create_publisher(String, chain.PREFIX + "localization", 20)
@@ -31,6 +37,21 @@ class LocalizationHoldChain(chain.FailstopChainROS):
             schema="r1_localization_health_v1", state=self.localization_state,
             reason="costmap_footprint_not_synchronized" if self.localization_state == "HOLD" else self.localization_reason))))
         super().tick()
+
+    def test_brief_worker_heartbeat_gap_continues_with_fresh_results(self):
+        handle=self.goal();result=handle.get_result_async()
+        self.until(lambda:any(v>.04 for _,v,_ in self.outputs) or result.done(),20)
+        self.assertFalse(result.done())
+        self.health_suppressed=True
+        start=time.monotonic()
+        while time.monotonic()<start+.68:self.tick()
+        self.health_suppressed=False
+        self.until(lambda:time.monotonic()>start+.85)
+        rows=[v for t,v,_ in self.outputs if start+.1<t<start+.8]
+        self.assertGreater(len(rows),20)
+        self.assertTrue(all(v>.04 for v in rows),rows)
+        self.assertFalse(result.done())
+        self.future(handle.cancel_goal_async())
 
     def test_delayed_but_valid_localization_keeps_output_continuous(self):
         handle = self.goal(); result = handle.get_result_async()

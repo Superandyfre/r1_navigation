@@ -273,6 +273,18 @@ private:
            now >= s.solved && now - s.solved <= config_.source_timeout &&
            now >= s.input && now - s.input <= config_.input_timeout;
   }
+  bool effectiveHealthReady(double now) const
+  {
+    if (health_time_ <= 0 || now < health_time_) {return false;}
+    const double age = now - health_time_;
+    if (age <= config_.health_timeout) {return true;}
+    const auto & source = monitor_.latestSource();
+    return age <= config_.health_timeout + config_.source_timeout && source &&
+      source->context.worker_boot == health_boot_ &&
+      source->context.generation == worker_generation_ && freshSource(*source, now) &&
+      health_payload_.value("planner_state", "ready") == "ready" &&
+      source->request > health_payload_.value("planner_failed_request_id", -1LL);
+  }
   void watchdog(double now)
   {
     if (!active_ || faulted()) {return;}
@@ -280,9 +292,7 @@ private:
       fail("action_loop_stale");
     } else if (!freshGuard(now)) {
       fail("guard_status_stale");
-    } else if (now - started_ > config_.health_timeout &&
-      (health_time_ <= 0 || now - health_time_ > config_.health_timeout))
-    {
+    } else if (now - started_ > config_.health_timeout && !effectiveHealthReady(now)) {
       fail("worker_health_stale");
     } else if (route_wait_since_ && now - *route_wait_since_ > config_.recovery_timeout) {
       task_failure_ = "route_source_timeout";
