@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 #pragma once
+#include <cmath>
+#include <stdexcept>
 #include <string>
 #include <vector>
 namespace navigation_neupan_bridge
@@ -25,5 +27,21 @@ inline std::vector<ArmMeshResource> armMeshResources()
     }
   }
   return result;
+}
+inline void appendConfiguredMeshes(std::vector<ArmMeshResource> & resources,
+  const std::vector<std::string> & frames, const std::vector<std::string> & uris,
+  const std::vector<double> & scales)
+{
+  if (frames.size()!=uris.size() || frames.size()!=scales.size()) {
+    throw std::invalid_argument("additional_mesh_arrays_mismatch");
+  }
+  for (std::size_t i=0;i<frames.size();++i) {
+    if (frames[i].empty() || uris[i].empty() || !std::isfinite(scales[i]) || scales[i]<=0.) {
+      throw std::invalid_argument("invalid_additional_mesh");
+    }
+  }
+  for (std::size_t i=0;i<frames.size();++i) {
+    resources.push_back({frames[i],uris[i],scales[i]});
+  }
 }
 }

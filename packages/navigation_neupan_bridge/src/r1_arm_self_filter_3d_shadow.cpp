@@ -73,7 +73,13 @@ public:
       !std::isfinite(stable_fallback_after_) || stable_fallback_after_<0 || stable_fallback_after_>=tf_wait_ ||
       !std::isfinite(stable_fallback_span_) || stable_fallback_span_<=0 || stable_fallback_span_>.5)
     {throw std::invalid_argument("invalid shadow filter parameters");}
-    for (const auto & resource : armMeshResources()) {
+    auto resources=armMeshResources();
+    const auto extra_frames=declare_parameter<std::vector<std::string>>("additional_mesh_frames",std::vector<std::string>{});
+    const auto extra_uris=declare_parameter<std::vector<std::string>>("additional_mesh_uris",std::vector<std::string>{});
+    const auto extra_scales=declare_parameter<std::vector<double>>("additional_mesh_scales",std::vector<double>{});
+    appendConfiguredMeshes(resources,extra_frames,extra_uris,extra_scales);
+    additional_meshes_=extra_frames.size();
+    for (const auto & resource : resources) {
       std::unique_ptr<shapes::Mesh> mesh(shapes::createMeshFromResource(
         resource.uri,Eigen::Vector3d(resource.scale,resource.scale,resource.scale)));
       if (!mesh || !mesh->vertex_count || !mesh->triangle_count) {
@@ -94,20 +100,32 @@ public:
       else {open_mesh_frames_.push_back(resource.frame);}
       meshes_.push_back({resource.frame,std::move(geometry)});
     }
-    cloud_pub_=create_publisher<Cloud>("/r1_self_filter_3d_shadow/cloud",rclcpp::SensorDataQoS());
-    scan_pub_=create_publisher<Scan>("/r1_self_filter_3d_shadow/rear_scan",rclcpp::SensorDataQoS());
-    status_pub_=create_publisher<std_msgs::msg::String>("/r1_self_filter_3d_shadow/status",20);
+    const bool rear_enabled=declare_parameter<bool>("rear_scan_enabled",true);
+    const auto input_cloud=declare_parameter<std::string>("input_cloud_topic","/lidar/pointcloud");
+    const auto input_scan=declare_parameter<std::string>("input_scan_topic","/scan");
+    const auto output_cloud=declare_parameter<std::string>("output_cloud_topic","/r1_self_filter_3d_shadow/cloud");
+    const auto output_scan=declare_parameter<std::string>("output_scan_topic","/r1_self_filter_3d_shadow/rear_scan");
+    const auto status_topic=declare_parameter<std::string>("status_topic","/r1_self_filter_3d_shadow/status");
+    if (input_cloud.empty() || input_scan.empty() || output_cloud.empty() || output_scan.empty() ||
+      status_topic.empty() || input_cloud==output_cloud || input_scan==output_scan) {
+      throw std::invalid_argument("invalid_filter_topics");
+    }
+    cloud_pub_=create_publisher<Cloud>(output_cloud,rclcpp::SensorDataQoS());
+    scan_pub_=create_publisher<Scan>(output_scan,rclcpp::SensorDataQoS());
+    status_pub_=create_publisher<std_msgs::msg::String>(status_topic,20);
     inputs_=create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     processing_=create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     rclcpp::SubscriptionOptions options;options.callback_group=inputs_;
-    cloud_sub_=create_subscription<Cloud>("/lidar/pointcloud",rclcpp::SensorDataQoS(),
+    cloud_sub_=create_subscription<Cloud>(input_cloud,rclcpp::SensorDataQoS(),
       [this](Cloud::ConstSharedPtr m) {enqueue(clouds_,m,cloud_drops_);},options);
-    scan_sub_=create_subscription<Scan>("/scan",rclcpp::SensorDataQoS(),
-      [this](Scan::ConstSharedPtr m) {enqueue(scans_,m,scan_drops_);},options);
+    if (rear_enabled) {
+      scan_sub_=create_subscription<Scan>(input_scan,rclcpp::SensorDataQoS(),
+        [this](Scan::ConstSharedPtr m) {enqueue(scans_,m,scan_drops_);},options);
+    }
     timer_=rclcpp::create_wall_timer(std::chrono::milliseconds(5),
       std::bind(&ArmSelfFilter3dShadow::process,this),processing_,
       get_node_base_interface().get(),get_node_timers_interface().get());
-    RCLCPP_INFO(get_logger(),"shadow-only 3D filter ready: %zu mesh parts, %zu closed",meshes_.size(),closed_meshes_);
+    RCLCPP_INFO(get_logger(),"3D mesh filter ready: %zu mesh parts, %zu closed",meshes_.size(),closed_meshes_);
     if (!open_mesh_frames_.empty()) {
       std::string names;for (const auto & frame:open_mesh_frames_) {names+=frame+" ";}
       RCLCPP_WARN(get_logger(),"open meshes: interior classification disabled for %s",names.c_str());
@@ -190,7 +208,8 @@ private:
       {"dropped_frames",dropped},{"output_published",published},
       {"input_stamp_ns",input_stamp},{"output_stamp_ns",output_stamp},
       {"max_pose_time_error_sec",pose_error},{"mesh_parts",meshes_.size()},{"closed_meshes",closed_meshes_},
-      {"open_mesh_frames",open_mesh_frames_},{"motion_authorized",false}}.dump();
+      {"open_mesh_frames",open_mesh_frames_},{"additional_meshes",additional_meshes_},
+      {"motion_authorized",false}}.dump();
     status_pub_->publish(m);
   }
 
@@ -338,7 +357,7 @@ private:
   }
   tf2_ros::Buffer tf_;tf2_ros::TransformListener listener_;
   std::vector<MeshEntry> meshes_;
-  std::size_t closed_meshes_{0};std::vector<std::string> open_mesh_frames_;
+  std::size_t closed_meshes_{0},additional_meshes_{0};std::vector<std::string> open_mesh_frames_;
   std::int64_t bin_ns_{},span_ns_{};double tf_wait_{},max_reuse_age_{},reuse_after_{};
   std::shared_ptr<Cloud> last_cloud_;std::shared_ptr<Scan> last_scan_;
   std::uint64_t cloud_reused_sequence_{0},scan_reused_sequence_{0};

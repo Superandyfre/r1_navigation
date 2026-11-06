@@ -102,6 +102,8 @@ def generate_launch_description():
                     "calibration_record": ParameterValue(LaunchConfiguration("calibration_record"), value_type=str),
                     "scan_source": ParameterValue(LaunchConfiguration("scan_source"), value_type=str),
                     "use_mesh_self_filter": ParameterValue(LaunchConfiguration("use_mesh_self_filter"), value_type=str),
+                    "mesh_filter_mode": ParameterValue(LaunchConfiguration("mesh_filter_mode"), value_type=str),
+                    "arm_extra_mesh_config": ParameterValue(LaunchConfiguration("arm_extra_mesh_config"), value_type=str),
                     "mesh_projection_margin_m": ParameterValue(LaunchConfiguration("mesh_projection_margin_m"), value_type=str),
                     "command_profile": ParameterValue(LaunchConfiguration("command_profile"), value_type=str),
                     "cmd_vel_out_topic": ParameterValue(LaunchConfiguration("cmd_vel_out_topic"), value_type=str),
@@ -190,6 +192,8 @@ def generate_launch_description():
             "use_mesh_self_filter", default_value="true", choices=["false", "true"],
             description="Use the dual-arm mesh self-return filter for NeuPAN obstacle scanning.",
         ),
+        DeclareLaunchArgument("mesh_filter_mode", default_value="2d", choices=["2d", "3d"]),
+        DeclareLaunchArgument("arm_extra_mesh_config", default_value=""),
         DeclareLaunchArgument(
             "collision_check_enabled", default_value="false", choices=["false"],
             description="HW1 uses NeuPAN collision avoidance; the final node enforces runtime authorization only."),

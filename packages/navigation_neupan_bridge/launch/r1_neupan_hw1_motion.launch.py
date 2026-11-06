@@ -5,6 +5,7 @@ Nav2 controller, velocity smoother, and final command gate.
 """
 
 import json
+import math
 import os
 import shlex
 
@@ -15,6 +16,35 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _load_extra_meshes(path):
+    """Read one shared attachment list for perception and robot footprint."""
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as source:
+            data = yaml.safe_load(source)
+        if not isinstance(data, dict) or data.get("schema") != "r1_arm_extra_meshes_v1":
+            raise ValueError("invalid schema")
+        meshes=data.get("meshes")
+        if not isinstance(meshes,list):
+            raise ValueError("meshes must be a list")
+        frames=[];uris=[];scales=[]
+        for item in meshes:
+            if not isinstance(item,dict):
+                raise ValueError("mesh entry must be a mapping")
+            frame,uri,scale=item.get("frame"),item.get("uri"),item.get("scale")
+            if not isinstance(frame,str) or not frame or not isinstance(uri,str) or not uri:
+                raise ValueError("mesh requires frame and URI")
+            if isinstance(scale,bool) or not isinstance(scale,(int,float)) or not math.isfinite(scale) or scale<=0:
+                raise ValueError("mesh scale must be finite and positive")
+            frames.append(frame);uris.append(uri);scales.append(float(scale))
+        if not meshes:
+            return {}
+        return dict(additional_mesh_frames=frames,additional_mesh_uris=uris,additional_mesh_scales=scales)
+    except (OSError,ValueError,TypeError,yaml.YAMLError) as error:
+        raise RuntimeError("invalid arm extra mesh configuration: "+str(error)) from error
 
 
 def _validate_lidar_calibration(calibration):
@@ -47,6 +77,9 @@ def _build(context):
     input_cloud = LaunchConfiguration("input_cloud").perform(context)
     scan_source = LaunchConfiguration("scan_source").perform(context)
     use_mesh_self_filter = LaunchConfiguration("use_mesh_self_filter").perform(context)
+    mesh_filter_mode = LaunchConfiguration("mesh_filter_mode").perform(context)
+    extra_mesh_path = LaunchConfiguration("arm_extra_mesh_config").perform(context)
+    extra_meshes = _load_extra_meshes(extra_mesh_path)
     collision_check_enabled = LaunchConfiguration("collision_check_enabled").perform(context)
     mesh_projection_margin_m = float(
         LaunchConfiguration("mesh_projection_margin_m").perform(context))
@@ -75,6 +108,10 @@ def _build(context):
         raise RuntimeError("scan_source must be livox_only or dual")
     if use_mesh_self_filter not in {"false", "true"}:
         raise RuntimeError("use_mesh_self_filter must be true or false")
+    if mesh_filter_mode not in {"2d", "3d"}:
+        raise RuntimeError("mesh_filter_mode must be 2d or 3d")
+    if mesh_filter_mode == "3d" and use_mesh_self_filter != "true":
+        raise RuntimeError("3d mesh filtering requires use_mesh_self_filter:=true")
     if collision_check_enabled != "false":
         raise RuntimeError("HW1 duplicate collision checks were removed; collision_check_enabled must be false")
     if not 0.0 <= mesh_projection_margin_m <= 0.10:
@@ -131,19 +168,38 @@ def _build(context):
         LaunchConfiguration("runtime_report_file").perform(context),
     ])
 
-    livox_scan_topic = "/scan_livox" if scan_source == "dual" else "/scan_neupan"
+    use_3d = use_mesh_self_filter == "true" and mesh_filter_mode == "3d"
+    livox_scan_topic = "/scan_livox" if scan_source == "dual" else (
+        "/scan_neupan_mesh_shadow" if use_3d else "/scan_neupan")
     navigation_scan_topic = (
         "/scan_neupan_mesh_shadow" if use_mesh_self_filter == "true" else "/scan_neupan")
     # The localization node withholds /deskew_cloud until its initial pose is
     # valid.  A dual-scan collision guard must still receive the front scan
     # during that bootstrap period, so use Livox's live source directly.
     preprocess_input_cloud = "/lidar/pointcloud" if scan_source == "dual" else input_cloud
+    filter_3d = Node(
+        package="navigation_neupan_bridge",
+        executable="r1_arm_self_filter_3d_shadow",
+        name="r1_arm_self_filter_3d",
+        output="screen",
+        parameters=[{
+            "use_sim_time": False,
+            "input_cloud_topic": preprocess_input_cloud,
+            "input_scan_topic": "/scan",
+            "output_cloud_topic": "/r1_arm_self_filter_3d/cloud",
+            "output_scan_topic": "/r1_arm_self_filter_3d/rear_scan",
+            "status_topic": "/r1_arm_self_filter_3d/status",
+            "rear_scan_enabled": scan_source == "dual",
+            **extra_meshes,
+        }],
+    ) if use_3d else None
     preprocess = Node(
         package="pointcloud_to_laserscan",
         executable="pointcloud_to_laserscan_node",
         name="neupan_pointcloud_to_scan",
         output="screen",
-        remappings=[("cloud_in", preprocess_input_cloud), ("scan", livox_scan_topic)],
+        remappings=[("cloud_in", "/r1_arm_self_filter_3d/cloud" if use_3d else preprocess_input_cloud),
+                    ("scan", livox_scan_topic)],
         parameters=[os.path.join(config_dir, "lidar_r1_hw1.yaml"), {"use_sim_time": False}],
     )
     arm_footprint = Node(
@@ -151,9 +207,12 @@ def _build(context):
         executable="r1_arm_footprint",
         name="r1_arm_footprint",
         output="screen",
+        # In 3D mode the fused output owns the navigation scan topic.
+        remappings=[("/scan_neupan_mesh_shadow", "/r1_arm_legacy_2d_scan")] if use_3d else [],
         parameters=[{
             "use_sim_time": False,
             "base_frame": "base_link",
+            **extra_meshes,
             "base_footprint_points": footprint_points,
             "fallback_footprint_points": arm_data_fallback_points,
             "joint_state_timeout_sec": 0.50,
@@ -220,6 +279,8 @@ def _build(context):
                     get_package_share_directory("r1_lidar_preprocess"),
                     "config", "scan_fusion_hw1.yaml"),
                 {"use_sim_time": False},
+                ({"rear_scan_topic": "/r1_arm_self_filter_3d/rear_scan",
+                  "output_scan_topic": "/scan_neupan_mesh_shadow"} if use_3d else {}),
             ],
         )
     worker = Node(
@@ -290,7 +351,8 @@ def _build(context):
                 "use_sim_time": False,
                 "footprint_points": footprint_points,
                 "odom_topic": "/odom",
-                "scan_topic": "/scan_neupan" if use_mesh_self_filter == "true" else navigation_scan_topic,
+                "scan_topic": (navigation_scan_topic if use_3d else
+                               "/scan_neupan" if use_mesh_self_filter == "true" else navigation_scan_topic),
                 "mesh_self_filter_preapplied": False,
                 "use_exact_mesh_components": False,
                 "require_dynamic_footprint": False,
@@ -344,6 +406,8 @@ def _build(context):
     ]
     if scan_fusion is not None:
         nodes.insert(1, scan_fusion)
+    if filter_3d is not None:
+        nodes.insert(0, filter_3d)
     return nodes
 
 
@@ -358,6 +422,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "use_mesh_self_filter", default_value="false", choices=["false", "true"],
             description="Use the validated dual-arm mesh self-return filter; disabled by default."),
+        DeclareLaunchArgument(
+            "mesh_filter_mode", default_value="2d", choices=["2d", "3d"],
+            description="Select the existing 2D filter or time-aligned 3D sensor filter."),
+        DeclareLaunchArgument(
+            "arm_extra_mesh_config", default_value="",
+            description="Optional YAML file listing attached mesh frames, URIs and scales."),
         DeclareLaunchArgument(
             "collision_check_enabled", default_value="false", choices=["false"],
             description="HW1 final node checks runtime authorization without duplicate collision geometry."),

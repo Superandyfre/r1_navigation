@@ -6,7 +6,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from geometry_msgs.msg import TransformStamped
-from sensor_msgs.msg import LaserScan,PointCloud2,PointField
+from sensor_msgs.msg import JointState,LaserScan,PointCloud2,PointField
 from tf2_ros import TransformBroadcaster
 assert os.environ.get("NEUPAN_ISOLATED_ROS_TEST")=="1"
 assert os.environ.get("ROS_DOMAIN_ID")=="192" and os.environ.get("ROS_LOCALHOST_ONLY")=="1"
@@ -14,12 +14,15 @@ flag=Path(sys.argv[1]);rclpy.init();node=Node("synthetic_filter_sensor_peer")
 tf=TransformBroadcaster(node)
 cp=node.create_publisher(PointCloud2,"/lidar/pointcloud",qos_profile_sensor_data)
 sp=node.create_publisher(LaserScan,"/scan",qos_profile_sensor_data)
-frames=[]
+jp={side:node.create_publisher(JointState,"/"+side+"_arm/joint_states",20) for side in ("left","right")}
+frames=["left_tcp","right_tcp"]
 for arm in ("left_","right_"):frames += [arm+"base"]+[arm+"link"+str(i) for i in range(1,8)]
 for arm,g in (("left_","L_"),("right_","R_")):
     frames += [arm+"moduan_link",g+"omniPicker_base_link"]
     frames += [g+"omniPicker_hand_"+s for s in ("narrow1_Link","narrow2_Link","narrow3_Link","narrow_loop_Link","wide1_Link","wide2_Link","wide3_Link","wide_loop_Link")]
-target="L_omniPicker_hand_narrow1_Link";stopping=False;last_tf=last_scan=0.
+target="L_omniPicker_hand_narrow1_Link";ack=flag.with_suffix(".ack");stopping=False;last_tf=last_scan=0.
+point_count=int(os.environ.get("NEUPAN_3D_LOAD_POINTS","2"))
+assert 1<=point_count<=30000
 def stop(*unused):
     global stopping
     stopping=True
@@ -29,22 +32,34 @@ try:
         now=time.monotonic();stamp=node.get_clock().now()
         if now-last_tf>=.02:
             last_tf=now;messages=[]
+            for side,publisher in jp.items():
+                joint=JointState();joint.header.stamp=stamp.to_msg()
+                joint.name=[side+"_joint"+str(i) for i in range(1,8)];joint.position=[0.]*7
+                publisher.publish(joint)
             for frame in ["lidar_link","laser_link",*frames]:
-                if flag.exists() and frame==target:continue
+                if flag.exists() and frame==target:
+                    ack.touch(exist_ok=True)
+                    continue
                 t=TransformStamped();t.header.stamp=stamp.to_msg();t.header.frame_id="base_link";t.child_frame_id=frame;t.transform.rotation.w=1.
-                if frame not in ("lidar_link","laser_link"):t.transform.translation.x=20.
+                if frame not in ("lidar_link","laser_link"):t.transform.translation.x=.1
                 messages.append(t)
             tf.sendTransform(messages)
         if now-last_scan>=.10:
-            last_scan=now;sample=rclpy.time.Time(nanoseconds=stamp.nanoseconds-30000000).to_msg()
+            last_scan=now;sample=rclpy.time.Time(nanoseconds=stamp.nanoseconds-80000000).to_msg()
             cloud=PointCloud2();cloud.header.stamp=sample;cloud.header.frame_id="lidar_link"
-            cloud.height=1;cloud.width=2;cloud.point_step=20;cloud.row_step=40;cloud.is_dense=True
+            cloud.height=1;cloud.width=point_count;cloud.point_step=20;cloud.row_step=20*point_count;cloud.is_dense=True
             cloud.fields=[PointField(name="x",offset=0,datatype=7,count=1),PointField(name="y",offset=4,datatype=7,count=1),PointField(name="z",offset=8,datatype=7,count=1),PointField(name="timestamp",offset=12,datatype=8,count=1)]
             ts=float(sample.sec*1000000000+sample.nanosec)
-            cloud.data=struct.pack("<fffdfffd",3.,0.,0.,ts,3.,.2,0.,ts);cp.publish(cloud)
+            payload=bytearray(cloud.row_step)
+            for i in range(point_count):
+                point_time=ts+(i/max(1,point_count-1))*50000000.
+                struct.pack_into("<fffd",payload,i*20,3.,(i%101-50)*.004,0.,point_time)
+            cloud.data=payload;cp.publish(cloud)
             scan=LaserScan();scan.header.stamp=sample;scan.header.frame_id="laser_link"
             scan.angle_min=-3.14;scan.angle_max=3.14;scan.angle_increment=.0175
             scan.time_increment=.0001;scan.scan_time=.036;scan.range_min=.15;scan.range_max=8.
             scan.ranges=[7.]*360;sp.publish(scan)
         rclpy.spin_once(node,timeout_sec=.003)
-finally:node.destroy_node();rclpy.shutdown()
+finally:
+    ack.unlink(missing_ok=True)
+    node.destroy_node();rclpy.shutdown()

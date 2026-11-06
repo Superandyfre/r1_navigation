@@ -15,7 +15,7 @@ int main()
   const auto begin=std::chrono::steady_clock::now();
   struct Part {std::unique_ptr<MeshSurfaceQuery> mesh; fcl::Vector3d translation;};
   std::vector<Part> parts;
-  std::size_t surface_checks=0,surface_misses=0;
+  std::size_t surface_checks=0,surface_misses=0,negative_checks=0,negative_misclassified=0;
   auto add=[&](const std::string & uri,double scale,const fcl::Vector3d & t) {
     std::unique_ptr<shapes::Mesh> mesh(shapes::createMeshFromResource(uri,Eigen::Vector3d(scale,scale,scale)));
     if (!mesh || !mesh->vertex_count || !mesh->triangle_count) throw std::runtime_error(uri);
@@ -36,6 +36,13 @@ int main()
         if (!query->nearSurface(point+offset*normal)) {++surface_misses;}
       }
     }
+    // A point shares the topmost vertex's XY but lies 5 cm above the
+    // component's entire Z range. A 2D footprint would remove it; a 3D
+    // surface classifier must retain it.
+    const auto top=std::max_element(v.begin(),v.end(),
+      [](const auto & a,const auto & b){return a.z()<b.z();});
+    const fcl::Vector3d outside(top->x(),top->y(),top->z()+.05);
+    ++negative_checks;if (query->nearSurface(outside)) {++negative_misclassified;}
     parts.push_back({std::move(query),t});
   };
   for (int arm=0;arm<2;++arm) {
@@ -64,6 +71,7 @@ int main()
   const double sec=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
   std::cout<<std::fixed<<std::setprecision(3)<<"parts="<<parts.size()<<" build_s="<<build
     <<" closed="<<closed<<" surface_checks="<<surface_checks<<" surface_misses="<<surface_misses
+    <<" negative_checks="<<negative_checks<<" negative_misclassified="<<negative_misclassified
     <<" points_per_frame="<<points.size()<<" frames=3 mean_frame_ms="<<(sec*1000/3)<<" hits="<<hits<<std::endl;
-  return surface_misses ? 1 : 0;
+  return (surface_misses || negative_misclassified) ? 1 : 0;
 }

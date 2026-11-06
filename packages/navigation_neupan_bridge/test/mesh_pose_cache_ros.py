@@ -5,7 +5,7 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import PolygonStamped, TransformStamped
 from sensor_msgs.msg import JointState, LaserScan
 from std_msgs.msg import Float64MultiArray, String
 from tf2_ros import TransformBroadcaster
@@ -20,9 +20,11 @@ class MeshPoseCache(unittest.TestCase):
         left=node.create_publisher(JointState,"/left_arm/joint_states",20)
         right=node.create_publisher(JointState,"/right_arm/joint_states",20)
         scan_pub=node.create_publisher(LaserScan,"/scan_neupan",qos_profile_sensor_data)
-        components=[];states=[];scans=[]
+        components=[];states=[];scans=[];footprints=[]
         node.create_subscription(Float64MultiArray,"/r1_arm_mesh_components",
             lambda m:components.append((time.monotonic(),list(m.data))),20)
+        node.create_subscription(PolygonStamped,"/r1_arm_footprint",
+            lambda m:footprints.append((time.monotonic(),m)),20)
         node.create_subscription(String,"/r1_arm_mesh_filter/status",
             lambda m:states.append((time.monotonic(),json.loads(m.data))),20)
         node.create_subscription(LaserScan,"/scan_neupan_mesh_shadow",
@@ -35,10 +37,14 @@ class MeshPoseCache(unittest.TestCase):
             frames += [g+"omniPicker_hand_"+s for s in ("narrow1_Link","narrow2_Link",
                 "narrow3_Link","narrow_loop_Link","wide1_Link","wide2_Link","wide3_Link","wide_loop_Link")]
         target="L_omniPicker_hand_narrow1_Link"
+        frames += ["left_tcp","right_tcp","held_object"]
         exe=os.environ["NEUPAN_TEST_ARM_FOOTPRINT"]
         log=tempfile.TemporaryFile(mode="w+")
+        uri="package://rpp_components_description/meshes/gripper/agibot/omniPicker/narrow1_Link.STL"
         proc=subprocess.Popen([exe,"--ros-args","-p","mesh_projection_frequency:=4.0",
-            "-p","mesh_filter_frequency:=15.0"],stdout=log,stderr=subprocess.STDOUT)
+            "-p","mesh_filter_frequency:=15.0","-p","additional_mesh_frames:=[held_object]",
+            "-p","additional_mesh_uris:=["+uri+"]","-p","additional_mesh_scales:=[1.0]"],
+            stdout=log,stderr=subprocess.STDOUT)
         gripper=0.; missing=False; stale_joints=False; duplicate_joint=False; next_pulse=0.
         def tick():
             nonlocal next_pulse
@@ -58,6 +64,7 @@ class MeshPoseCache(unittest.TestCase):
                     msg=TransformStamped();msg.header.stamp=stamp;msg.header.frame_id="base_link"
                     msg.child_frame_id=name;msg.transform.rotation.w=1.
                     if name==target:msg.transform.translation.x=gripper
+                    if name=="held_object":msg.transform.translation.x=2.5
                     transforms.append(msg)
                 tf.sendTransform(transforms)
                 scan=LaserScan();scan.header.frame_id="base_link";scan.header.stamp=stamp
@@ -77,6 +84,7 @@ class MeshPoseCache(unittest.TestCase):
         try:
             until(lambda:components and len(components[-1][1])>0 and
                 states and states[-1][1].get("state")=="READY",15.)
+            until(lambda:any(max((p.x for p in m.polygon.points),default=0)>2.4 for _,m in footprints),5.)
             before=component(components[-1][1],18);marker=time.monotonic()
             gripper=.10
             until(lambda:any(t>marker and data and component(data,18)!=before for t,data in components),5.)

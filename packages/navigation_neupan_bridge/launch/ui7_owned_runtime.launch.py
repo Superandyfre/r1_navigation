@@ -10,6 +10,7 @@ def generate_launch_description():
     share=FindPackageShare('navigation_neupan_bridge')
     declarations=[DeclareLaunchArgument(name,default_value=value) for name,value in
                   [('calibration_record',''),('scan_source','dual'),('use_mesh_self_filter','true'),
+                   ('mesh_filter_mode','2d'),('arm_extra_mesh_config',''),
                    ('mesh_projection_margin_m','0.06'),('command_profile','smoothed'),
                    ('cmd_vel_out_topic','/cmd_vel'),('runtime_auto_arm','true')]]
     def include(file,names,extra=None):
@@ -20,5 +21,6 @@ def generate_launch_description():
     return LaunchDescription(declarations+[
         include('navigation_neupan.launch.py',['command_profile','runtime_auto_arm'],{'mode':'hw1'}),
         include('r1_neupan_hw1_motion.launch.py',['calibration_record','scan_source','use_mesh_self_filter',
-            'mesh_projection_margin_m','command_profile','cmd_vel_out_topic'],{'collision_check_enabled':'false'}),
+            'mesh_filter_mode','arm_extra_mesh_config','mesh_projection_margin_m','command_profile',
+            'cmd_vel_out_topic'],{'collision_check_enabled':'false'}),
     ])

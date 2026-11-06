@@ -35,6 +35,9 @@ def _select(context):
             launch_arguments["calibration_record"] = LaunchConfiguration("calibration_record")
         if mode == "neupan":
             launch_arguments["scan_source"] = LaunchConfiguration("scan_source")
+            launch_arguments["use_mesh_self_filter"] = LaunchConfiguration("use_mesh_self_filter")
+            launch_arguments["mesh_filter_mode"] = LaunchConfiguration("mesh_filter_mode")
+            launch_arguments["arm_extra_mesh_config"] = LaunchConfiguration("arm_extra_mesh_config")
             launch_arguments["command_profile"] = LaunchConfiguration("command_profile")
             launch_arguments["cmd_vel_out_topic"] = LaunchConfiguration("cmd_vel_out_topic")
             launch_arguments["collision_check_enabled"] = LaunchConfiguration("collision_check_enabled")
@@ -77,6 +80,9 @@ def generate_launch_description():
             "scan_source", default_value="livox_only",
             description="NeuPAN obstacle scan source: livox_only or dual.",
         ),
+        DeclareLaunchArgument("use_mesh_self_filter", default_value="true", choices=["false", "true"]),
+        DeclareLaunchArgument("mesh_filter_mode", default_value="2d", choices=["2d", "3d"]),
+        DeclareLaunchArgument("arm_extra_mesh_config", default_value=""),
         DeclareLaunchArgument(
             "command_profile", default_value="smoothed",
             description="NeuPAN HW1 command path: smoothed or direct.",

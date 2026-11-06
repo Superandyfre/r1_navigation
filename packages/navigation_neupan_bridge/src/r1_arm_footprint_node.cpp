@@ -178,6 +178,12 @@ public:
     mesh_tf_max_age_sec_ = declare_parameter<double>("mesh_tf_max_age_sec", 0.50);
     mesh_cache_grace_sec_ = declare_parameter<double>("mesh_cache_grace_sec", 0.50);
     circle_samples_ = declare_parameter<int>("circle_samples", 12);
+    extra_frames_ = declare_parameter<std::vector<std::string>>(
+      "additional_mesh_frames", std::vector<std::string>{});
+    extra_uris_ = declare_parameter<std::vector<std::string>>(
+      "additional_mesh_uris", std::vector<std::string>{});
+    extra_scales_ = declare_parameter<std::vector<double>>(
+      "additional_mesh_scales", std::vector<double>{});
     base_footprint_ = declare_parameter<std::vector<double>>(
       "base_footprint_points", std::vector<double>{0.341, 0.266, 0.341, -0.266, -0.341, -0.266,
         -0.341, 0.266});
@@ -473,7 +479,10 @@ private:
   void loadCollisionMeshes()
   {
     try {
-      for (const auto & resource : armMeshResources()) {
+      auto resources = armMeshResources();
+      base_mesh_count_ = resources.size();
+      appendConfiguredMeshes(resources, extra_frames_, extra_uris_, extra_scales_);
+      for (const auto & resource : resources) {
         addMeshPart(resource.frame, resource.uri, resource.scale);
       }
       mesh_model_ready_ = true;
@@ -786,6 +795,25 @@ private:
       publishFallback("arm_tf_fallback");
       return;
     }
+    if (!extra_frames_.empty()) {
+      std::vector<std::vector<Point2D>> extra;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const bool fresh = last_mesh_verified_ != SteadyTime{} &&
+          std::chrono::duration<double>(steady_now-last_mesh_verified_).count() <= mesh_cache_grace_sec_ &&
+          mesh_cached_raw_components_.size() == base_mesh_count_ + extra_frames_.size();
+        if (fresh) {
+          extra.assign(mesh_cached_raw_components_.begin()+base_mesh_count_,mesh_cached_raw_components_.end());
+        }
+      }
+      if (extra.size()!=extra_frames_.size()) {
+        publishFallback("additional_mesh_unavailable");
+        return;
+      }
+      for (const auto & polygon : extra) for (const auto & point : polygon) {
+        addDisc(points,point,projection_margin_m_);
+      }
+    }
     const auto hull = convexHull(std::move(points));
     if (hull.size() < 3) {
       publishStatus("FAULT", "arm_projection_invalid", 0);
@@ -812,6 +840,9 @@ private:
   int circle_samples_{12};
   std::vector<double> base_footprint_;
   std::vector<double> fallback_footprint_;
+  std::vector<std::string> extra_frames_, extra_uris_;
+  std::vector<double> extra_scales_;
+  size_t base_mesh_count_{0};
   bool mesh_model_ready_{false};
   std::vector<MeshPart> mesh_parts_;
   std::vector<std::vector<Point2D>> mesh_self_filter_polygons_;

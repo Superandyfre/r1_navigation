@@ -33,9 +33,12 @@ class ShadowFilter(unittest.TestCase):
         for arm,g in (("left_","L_"),("right_","R_")):
             frames += [arm+"moduan_link",g+"omniPicker_base_link"]
             frames += [g+"omniPicker_hand_"+s for s in ("narrow1_Link","narrow2_Link","narrow3_Link","narrow_loop_Link","wide1_Link","wide2_Link","wide3_Link","wide_loop_Link")]
-        target="L_omniPicker_hand_narrow1_Link"
+        target="L_omniPicker_hand_narrow1_Link";frames.append("held_object")
         exe=os.environ["NEUPAN_TEST_3D_SHADOW"];log=tempfile.TemporaryFile(mode="w+")
-        proc=subprocess.Popen([exe],stdout=log,stderr=subprocess.STDOUT)
+        uri="package://rpp_components_description/meshes/gripper/agibot/omniPicker/narrow1_Link.STL"
+        proc=subprocess.Popen([exe,"--ros-args","-p","additional_mesh_frames:=[held_object]",
+            "-p","additional_mesh_uris:=["+uri+"]","-p","additional_mesh_scales:=[1.0]"],
+            stdout=log,stderr=subprocess.STDOUT)
         position=1.;missing=False;last=0.
         def tick():
             nonlocal last
@@ -49,6 +52,7 @@ class ShadowFilter(unittest.TestCase):
                     t=TransformStamped();t.header.stamp=stamp;t.header.frame_id="base_link";t.child_frame_id=f;t.transform.rotation.w=1.
                     if f in ("lidar_link","laser_link"): pass
                     elif f==target:t.transform.translation.x=position;t.transform.translation.z=-vz
+                    elif f=="held_object":t.transform.translation.x=2.5;t.transform.translation.z=-vz
                     else:t.transform.translation.x=20.
                     transforms.append(t)
                 tf.sendTransform(transforms)
@@ -66,16 +70,19 @@ class ShadowFilter(unittest.TestCase):
             x,y=1.+vx,vy
             # Keep the original pose through the midpoint of its 5 ms bin.
             start=time.monotonic()
-            while time.monotonic()<start+.1:tick()
+            while time.monotonic()<start+.07:tick()
             # Let the gripper move; the subsequently delivered sensor data
             # still refers to the earlier pose, not the newest TF.
             position=1.5;start=time.monotonic()
             while time.monotonic()<start+.35:tick()
             msg=PointCloud2();msg.header.frame_id="lidar_link";msg.header.stamp=captured.to_msg()
-            msg.height=1;msg.width=2;msg.is_bigendian=False;msg.is_dense=True;msg.point_step=20;msg.row_step=40
+            msg.height=1;msg.width=4;msg.is_bigendian=False;msg.is_dense=True;msg.point_step=20;msg.row_step=80
             msg.fields=[PointField(name="x",offset=0,datatype=7,count=1),PointField(name="y",offset=4,datatype=7,count=1),
                 PointField(name="z",offset=8,datatype=7,count=1),PointField(name="timestamp",offset=12,datatype=8,count=1)]
-            ts=float(captured.nanoseconds);msg.data=struct.pack("<fffdfffd",x,y,0.,ts,x,y,.40,ts)
+            ts=float(captured.nanoseconds)
+            # Third point was acquired 150 ms later after the gripper moved.
+            msg.data=struct.pack("<fffdfffdfffdfffd",x,y,0.,ts,x,y,.40,ts,
+                1.5+vx,y,0.,ts+150000000.,2.5+vx,y,0.,ts)
             scan=LaserScan();scan.header.frame_id="laser_link";scan.header.stamp=captured.to_msg()
             scan.angle_min=math.atan2(y,x);scan.angle_max=scan.angle_min
             scan.angle_increment=.001;scan.time_increment=.0001;scan.scan_time=.001
@@ -86,7 +93,13 @@ class ShadowFilter(unittest.TestCase):
             second=struct.unpack_from("<fff",clouds[-1].data,20)
             self.assertTrue(all(math.isnan(v) for v in first),first)
             self.assertTrue(all(math.isfinite(v) for v in second),second)
+            third=struct.unpack_from("<fff",clouds[-1].data,40)
+            self.assertTrue(all(math.isnan(v) for v in third),third)
+            fourth=struct.unpack_from("<fff",clouds[-1].data,60)
+            self.assertTrue(all(math.isnan(v) for v in fourth),fourth)
+            until(lambda:any(json.loads(x).get("additional_meshes")==1 for x in states),2.)
             self.assertTrue(math.isinf(scans[-1].ranges[0]),scans[-1].ranges)
+            msg.width=2;msg.row_step=40
             # Pause only one unchanged part TF for a short time. The filter
             # must emit an explicitly degraded, temporally bounded result
             # instead of dropping the sensor frame.

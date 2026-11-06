@@ -60,6 +60,8 @@ arm_local_ip="${RPP_ARM_LOCAL_IP:-192.168.11.11}"
 # The separate final obstacle checker is removed from this HW1 profile.
 scan_source="${RPP_NEUPAN_SCAN_SOURCE:-dual}"
 mesh_self_filter="${RPP_NEUPAN_USE_MESH_SELF_FILTER:-true}"
+mesh_filter_mode="${RPP_NEUPAN_MESH_FILTER_MODE:-2d}"
+arm_extra_mesh_config="${RPP_ARM_EXTRA_MESH_CONFIG:-}"
 collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-false}}"
 
 if [[ "${scan_source}" != "livox_only" && "${scan_source}" != "dual" ]]; then
@@ -69,6 +71,15 @@ fi
 
 if [[ "${mesh_self_filter}" != "false" && "${mesh_self_filter}" != "true" ]]; then
   echo "RPP_NEUPAN_USE_MESH_SELF_FILTER must be true or false" >&2
+  exit 1
+fi
+
+if [[ "${mesh_filter_mode}" != "2d" && "${mesh_filter_mode}" != "3d" ]]; then
+  echo "RPP_NEUPAN_MESH_FILTER_MODE must be 2d or 3d" >&2
+  exit 1
+fi
+if [[ -n "${arm_extra_mesh_config}" && ( "${arm_extra_mesh_config}" != /* || ! -f "${arm_extra_mesh_config}" ) ]]; then
+  echo "RPP_ARM_EXTRA_MESH_CONFIG must be an existing absolute path" >&2
   exit 1
 fi
 
@@ -130,6 +141,8 @@ trap on_exit_signal HUP INT TERM
   local_controller_mode:=neupan \
   scan_source:="${scan_source}" \
   use_mesh_self_filter:="${mesh_self_filter}" \
+  mesh_filter_mode:="${mesh_filter_mode}" \
+  arm_extra_mesh_config:="${arm_extra_mesh_config}" \
   collision_check_enabled:="${collision_check_enabled}" \
   calibration_record:=/home/rpp/rpp_ws/config/r1_hw1_calibration.json \
   start_arm_drivers:=false \
