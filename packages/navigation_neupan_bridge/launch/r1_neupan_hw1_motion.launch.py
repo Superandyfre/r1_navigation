@@ -174,7 +174,11 @@ def _build(context):
     # The localization node withholds /deskew_cloud until its initial pose is
     # valid.  A dual-scan collision guard must still receive the front scan
     # during that bootstrap period, so use Livox's live source directly.
-    preprocess_input_cloud = "/lidar/pointcloud" if scan_source == "dual" else input_cloud
+    # The default deskew cloud is PointXYZINormal and has no per-point
+    # absolute timestamp. 3D filtering requires the raw Livox format.
+    # Preserve an explicitly supplied alternate timestamped cloud.
+    preprocess_input_cloud = "/lidar/pointcloud" if (
+        scan_source == "dual" or (use_3d and input_cloud == "/deskew_cloud")) else input_cloud
     filter_3d = Node(
         package="navigation_neupan_bridge",
         executable="r1_arm_self_filter_3d_shadow",

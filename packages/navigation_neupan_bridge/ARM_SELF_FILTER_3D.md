@@ -5,8 +5,10 @@ The UI7 starter defaults to `3d` and accepts `RPP_NEUPAN_MESH_FILTER_MODE=2d`
 for the previous scan path. This source change does not alter an already-running
 UI7 deployment. Disabling mesh filtering bypasses either selection.
 
-The 3D path filters Livox points before point-cloud-to-scan conversion and the
-rear laser beams before scan fusion. It uses each point/beam timestamp and TF
+The 3D path filters raw timestamped Livox points before point-cloud-to-scan
+conversion and the rear laser beams before scan fusion. The default deskewed
+cloud lacks per-point timestamps, so the single-Livox 3D profile uses the raw
+cloud by default; an explicit custom input must contain absolute point times. It uses each point/beam timestamp and TF
 history in 5 ms bins, preserving source frames and timestamps. A point near a
 mesh surface is removed within 0.02 m. For a mesh whose triangle topology is
 verified closed, its interior is also removed. The dynamic robot footprint and
