@@ -8,7 +8,8 @@
 验证：独立构建 navigation_neupan_bridge、r1_collision_guard；3 个 C++ 测试组通过；
 Guard 17 项隔离 ROS 测试通过；真实 ControllerServer、Controller 插件、速度平滑器、
 Guard 的隔离链 HOLD 与恢复测试通过。后者使用模拟 Worker/传感器，不代表实机或真实
-NeuPAN 求解的端到端验收，也尚未覆盖真实定位监视器输入的完整链。
+NeuPAN 求解的端到端验收。另用真实定位监视器及模拟 TF、里程计、轮廓和 costmap
+验证短时不同步恢复与持续不同步锁存，尚未与真实 Worker 串成完整链。
 
 构建输出及测试日志：`/home/rpp/neupan_failstop_ws/robustness/`。ROS 测试只用 188/192
 隔离域和测试速度话题。此次未切换 UI7 发布指针或启动底盘；现有在役发布包不含本次改动。
