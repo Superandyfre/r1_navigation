@@ -136,13 +136,20 @@ on_exit_signal() {
 
 trap on_exit_signal HUP INT TERM
 
+# ROS 2 launch rejects `name:=` with an empty value. Omit the optional
+# argument entirely when no attachment model is configured.
+extra_mesh_launch_args=()
+if [[ -n "${arm_extra_mesh_config}" ]]; then
+  extra_mesh_launch_args+=("arm_extra_mesh_config:=${arm_extra_mesh_config}")
+fi
+
 /usr/bin/python3 "${script_dir}/launch_with_parent_death.py" \
   ros2 launch navigation_2d local_and_nav_high_sampling_controller.launch.py \
   local_controller_mode:=neupan \
   scan_source:="${scan_source}" \
   use_mesh_self_filter:="${mesh_self_filter}" \
   mesh_filter_mode:="${mesh_filter_mode}" \
-  arm_extra_mesh_config:="${arm_extra_mesh_config}" \
+  "${extra_mesh_launch_args[@]}" \
   collision_check_enabled:="${collision_check_enabled}" \
   calibration_record:=/home/rpp/rpp_ws/config/r1_hw1_calibration.json \
   start_arm_drivers:=false \

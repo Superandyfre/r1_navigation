@@ -19,6 +19,12 @@ from std_srvs.srv import Trigger
 from r1_neupan_integration.runtime_recovery import RecoveryTransaction, OwnedProcessGroup
 
 
+def runtime_launch_arguments(values):
+    # An empty optional launch argument is represented by omission: the ROS 2
+    # CLI rejects `name:=`, while the owned launch declares an empty default.
+    return [key + ':=' + str(value) for key, value in values.items() if str(value)]
+
+
 class Supervisor(Node):
     def __init__(self, **node_arguments):
         super().__init__('ui7_runtime_supervisor', **node_arguments)
@@ -32,7 +38,7 @@ class Supervisor(Node):
         self.values={key:self.declare_parameter(key,value).value for key,value in parameters.items()}
         self.report_root=Path(self.values.pop('report_dir'));self.report_root.mkdir(parents=True,exist_ok=True)
         self.base_command=['/opt/ros/humble/bin/ros2','launch','navigation_neupan_bridge','ui7_owned_runtime.launch.py']
-        self.base_command += [key+':='+str(value) for key,value in self.values.items()]
+        self.base_command += runtime_launch_arguments(self.values)
         self.subscriptions_owned=[]
         def sub(typ,topic,key,json_payload=False):
             def callback(message):
