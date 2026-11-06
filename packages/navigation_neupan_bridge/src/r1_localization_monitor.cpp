@@ -34,6 +34,7 @@
 #include "tf2_ros/transform_listener.h"
 #include "navigation_neupan_bridge/static_map_overlap_state.hpp"
 #include "navigation_neupan_bridge/footprint_sync_grace.hpp"
+#include "navigation_neupan_bridge/convex_footprint_contains.hpp"
 #include "navigation_neupan_bridge/static_map_fault_geometry.hpp"
 
 namespace navigation_neupan_bridge
@@ -622,6 +623,7 @@ private:
     Pose2D map_pose;
     std::string reason;
     bool healthy = false;
+    bool conservative_geometry = false;
     double translation_jump = 0.0;
     double yaw_jump = 0.0;
     rclcpp::Time map_tf_stamp{0, 0, RCL_ROS_TIME};
@@ -661,7 +663,10 @@ private:
           steady_now - odom.received).count() > odom_timeout_sec_)
       {
         reason = "odom_stale";
-      } else if (!localization_available || localization_status_age > localization_timeout_sec_) {
+      } else if (!localization_available ||
+        (localization_status_age > localization_timeout_sec_ &&
+        (!ever_ready_ || localization_state != "NORMAL" ||
+        localization_status_age >= localization_fault_timeout_sec_))) {
         reason = "localization_status_stale";
       } else if (localization_state != "NORMAL") {
         reason = "localization_" + localization_state + ":" + localization_reason;
@@ -682,7 +687,9 @@ private:
       } else if (require_dynamic_footprint_ && !footprint_transform_available) {
         reason = "costmap_footprint_transform_unavailable";
       } else if (require_dynamic_footprint_ && !dynamicFootprintMatchesPublished(
-          dynamic_footprint, published_footprint, footprint_map_pose, footprint_sync_tolerance_m_))
+          dynamic_footprint, published_footprint, footprint_map_pose, footprint_sync_tolerance_m_) &&
+        !convexFootprintContains(published_footprint.points, dynamic_footprint.points,
+          footprint_map_pose.x, footprint_map_pose.y, footprint_map_pose.yaw))
       {
         // Do not test a new arm shape against a costmap that still contains
         // the previous footprint.  The published footprint is Nav2's
@@ -690,6 +697,9 @@ private:
         reason = "costmap_footprint_not_synchronized";
       } else {
         healthy = true;
+        conservative_geometry = require_dynamic_footprint_ &&
+          !dynamicFootprintMatchesPublished(dynamic_footprint, published_footprint,
+          footprint_map_pose, footprint_sync_tolerance_m_);
       }
     } catch (const std::exception &) {
       reason = "map_to_base_unavailable";
@@ -820,7 +830,12 @@ private:
         translation_jump, yaw_jump, localization_status_age);
     } else {
       operator_relocalization_pending_ = false;
-      publish("READY", "ready", translation_jump, yaw_jump, localization_status_age);
+      // Continue the last NORMAL status inside the existing absolute status
+      // deadline, only while independent TF, odom and geometry remain valid.
+      publish("READY", localization_status_age > localization_timeout_sec_ ?
+        "localization_status_delayed_using_last_normal" :
+        (conservative_geometry ? "using_conservative_costmap_footprint" : "ready"),
+        translation_jump, yaw_jump, localization_status_age);
     }
   }
 

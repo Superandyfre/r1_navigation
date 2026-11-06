@@ -14,6 +14,7 @@ chain.GUARD = Path(os.environ["NEUPAN_TEST_GUARD"])
 class LocalizationHoldChain(chain.FailstopChainROS):
     def setUp(self):
         self.localization_state = "READY"
+        self.localization_reason = "ready"
         self.localization_pub = None
         self.controller_parameters_override = dict(
             require_localization_ready=True,
@@ -28,8 +29,21 @@ class LocalizationHoldChain(chain.FailstopChainROS):
             self.localization_pub = self.node.create_publisher(String, chain.PREFIX + "localization", 20)
         self.localization_pub.publish(String(data=json.dumps(dict(
             schema="r1_localization_health_v1", state=self.localization_state,
-            reason="costmap_footprint_not_synchronized" if self.localization_state == "HOLD" else "ready"))))
+            reason="costmap_footprint_not_synchronized" if self.localization_state == "HOLD" else self.localization_reason))))
         super().tick()
+
+    def test_delayed_but_valid_localization_keeps_output_continuous(self):
+        handle = self.goal(); result = handle.get_result_async()
+        self.until(lambda: any(v > .04 for _, v, _ in self.outputs) or result.done(),20)
+        self.assertFalse(result.done())
+        self.localization_reason = "localization_status_delayed_using_last_normal"
+        start=time.monotonic()
+        while time.monotonic() < start + 1.0: self.tick()
+        rows=[v for t,v,_ in self.outputs if t > start + .1]
+        self.assertGreater(len(rows),20)
+        self.assertTrue(all(v > .04 for v in rows), rows)
+        self.assertFalse(result.done())
+        self.future(handle.cancel_goal_async())
 
     def test_source_timeout_aborts_only_old_attempt_then_new_goal_moves(self):
         first = self.goal()

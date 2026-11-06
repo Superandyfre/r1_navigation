@@ -37,8 +37,10 @@ class LocalizationSyncHold(unittest.TestCase):
         self.status = []
         self.sub = self.node.create_subscription(String, "/test/status", lambda m:self.status.append(json.loads(m.data)), 20)
         self.mismatch = False
+        self.shrink = False
         self.drop_footprint = False
         self.drop_localization = False
+        self.localization_state = "NORMAL"
         self.last = 0.
 
     def tearDown(self):
@@ -57,12 +59,14 @@ class LocalizationSyncHold(unittest.TestCase):
             self.tf.sendTransform(tf)
             odom=Odometry(); odom.header.stamp=stamp; odom.header.frame_id="odom"; odom.child_frame_id="base_link"; odom.pose.pose.orientation.w=1.; self.odom.publish(odom)
             if not self.drop_localization:
-                self.loc.publish(String(data=json.dumps(dict(schema="r1_indoor_localization_status_v1",state="NORMAL",reason="ready"))))
+                self.loc.publish(String(data=json.dumps(dict(schema="r1_indoor_localization_status_v1",state=self.localization_state,reason="ready"))))
             for pub, frame, dx in ((self.fp,"base_link",0.),(self.mapfp,"map",.3 if self.mismatch else 0.)):
                 if pub is self.fp and self.drop_footprint: continue
                 msg=PolygonStamped();msg.header.frame_id=frame
                 msg.header.stamp=(now-rclpy.duration.Duration(seconds=.1)).to_msg()
-                msg.polygon.points=[Point32(x=x+dx,y=y,z=0.) for x,y in ((-.3,-.2),(-.3,.2),(.3,.2),(.3,-.2))]
+                msg.polygon.points=[Point32(x=x*(.5 if self.shrink and pub is self.fp else 1.)+dx,
+                    y=y*(.5 if self.shrink and pub is self.fp else 1.),z=0.)
+                    for x,y in ((-.3,-.2),(-.3,.2),(.3,.2),(.3,-.2))]
                 pub.publish(msg)
         rclpy.spin_once(self.node,timeout_sec=.01)
 
@@ -72,6 +76,15 @@ class LocalizationSyncHold(unittest.TestCase):
             self.tick()
             if self.status and pred(self.status[-1]): return
         self.fail(str(self.status[-5:]))
+
+    def test_smaller_live_footprint_continues_with_conservative_previous_shape(self):
+        self.wait_for(lambda s:s["state"]=="READY")
+        start=len(self.status)
+        self.shrink=True
+        self.wait_for(lambda s:s["reason"]=="using_conservative_costmap_footprint")
+        deadline=time.monotonic()+1.2
+        while time.monotonic()<deadline:self.tick()
+        self.assertTrue(all(s["state"]=="READY" for s in self.status[start:]))
 
     def test_short_mismatch_holds_then_recovers(self):
         self.wait_for(lambda s:s["state"]=="READY")
@@ -99,13 +112,19 @@ class LocalizationSyncHold(unittest.TestCase):
         self.wait_for(lambda s:s["state"]=="READY")
         self.assertFalse(any(s["state"]=="FAULT" for s in self.status))
 
-    def test_status_dropout_holds_then_faults_at_original_deadline(self):
+    def test_brief_status_dropout_continues_until_original_deadline(self):
         self.wait_for(lambda s:s["state"]=="READY")
         self.drop_localization=True
-        self.wait_for(lambda s:s["state"]=="HOLD")
-        self.assertEqual(self.status[-1]["reason"],"localization_status_stale")
+        self.wait_for(lambda s:s["reason"]=="localization_status_delayed_using_last_normal")
+        self.assertEqual(self.status[-1]["state"],"READY")
         self.wait_for(lambda s:s["state"]=="FAULT")
         self.assertEqual(self.status[-1]["reason"],"localization_status_stale")
+
+    def test_reported_localization_loss_never_uses_old_normal_state(self):
+        self.wait_for(lambda s:s["state"]=="READY")
+        self.localization_state="LOST"
+        self.wait_for(lambda s:s["state"]=="FAULT")
+        self.assertTrue(self.status[-1]["reason"].startswith("localization_LOST:"))
 
     def test_persistent_mismatch_faults(self):
         self.wait_for(lambda s:s["state"]=="READY")
