@@ -33,6 +33,9 @@ class ManagedRecovery(PartialRestart):
 
     def setUp(self):
         super().setUp()
+        # The original chain is replaced below. Its queued status samples
+        # cannot prove that the newly launched Controller has armed.
+        previous_controller_boot=self.runtime_statuses[-1][1].get('controller_boot_id')
         specs=[list(proc.args) for proc in self.procs]
         for proc in reversed(self.procs):
             proc.send_signal(signal.SIGINT)
@@ -92,7 +95,10 @@ class ManagedRecovery(PartialRestart):
                              footprint=self.node.create_publisher(PolygonStamped,chain.PREFIX+'footprint',10))
         self.activate_restarted('velocity_smoother');self.activate_restarted('controller_server')
         self.action=ActionClient(self.node,FollowPath,'/follow_path');self.until(self.action.server_is_ready)
-        self.until(lambda:self.runtime_statuses[-1][1].get('run_armed'))
+        self.until(lambda:any(t>=self.supervisor.started and
+            j.get('controller_boot_id') and j.get('controller_boot_id')!=previous_controller_boot and
+            j.get('plugin_active') and j.get('run_armed')
+            for t,j in self.runtime_statuses),10.)
 
     def tick(self):
         super().tick()
