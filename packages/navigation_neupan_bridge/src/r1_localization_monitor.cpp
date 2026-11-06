@@ -629,6 +629,7 @@ private:
     std::string reason;
     bool healthy = false;
     bool conservative_geometry = false;
+    bool costmap_footprint_pending = false;
     double translation_jump = 0.0;
     double yaw_jump = 0.0;
     rclcpp::Time map_tf_stamp{0, 0, RCL_ROS_TIME};
@@ -684,27 +685,24 @@ private:
         dynamic_footprint_timeout_sec_))
       {
         reason = "dynamic_footprint_unavailable_or_stale";
-      } else if (require_dynamic_footprint_ && (!published_footprint.available ||
-        std::chrono::duration<double>(steady_now - published_footprint.received).count() >
-        costmap_footprint_timeout_sec_))
-      {
-        reason = "costmap_footprint_unavailable_or_stale";
-      } else if (require_dynamic_footprint_ && !footprint_transform_available) {
-        reason = "costmap_footprint_transform_unavailable";
-      } else if (require_dynamic_footprint_ && !dynamicFootprintMatchesPublished(
-          dynamic_footprint, published_footprint, footprint_map_pose, footprint_sync_tolerance_m_) &&
-        !convexFootprintContains(published_footprint.points, dynamic_footprint.points,
-          footprint_map_pose.x, footprint_map_pose.y, footprint_map_pose.yaw))
-      {
-        // Do not test a new arm shape against a costmap that still contains
-        // the previous footprint.  The published footprint is Nav2's
-        // acknowledgement that its costmap has applied the same geometry.
-        reason = "costmap_footprint_not_synchronized";
       } else {
         healthy = true;
-        conservative_geometry = require_dynamic_footprint_ &&
-          !dynamicFootprintMatchesPublished(dynamic_footprint, published_footprint,
-          footprint_map_pose, footprint_sync_tolerance_m_);
+        if (require_dynamic_footprint_) {
+          const bool published_fresh = published_footprint.available &&
+            std::chrono::duration<double>(steady_now - published_footprint.received).count() <=
+            costmap_footprint_timeout_sec_ && footprint_transform_available;
+          if (!published_fresh) {
+            costmap_footprint_pending = true;
+          } else {
+            const bool matches = dynamicFootprintMatchesPublished(
+              dynamic_footprint, published_footprint, footprint_map_pose, footprint_sync_tolerance_m_);
+            const bool contains = matches || convexFootprintContains(
+              published_footprint.points, dynamic_footprint.points,
+              footprint_map_pose.x, footprint_map_pose.y, footprint_map_pose.yaw);
+            conservative_geometry = !matches && contains;
+            costmap_footprint_pending = !contains;
+          }
+        }
       }
     } catch (const std::exception &) {
       reason = "map_to_base_unavailable";
@@ -781,11 +779,11 @@ private:
       stable_since_ = steady_now;
       stable_costmap_samples_ = 0;
     }
-    // A brief geometry synchronization mismatch does not invalidate TF or
-    // localization. Require two fresh costmap observations but do not impose
-    // the full cold-start stability window on every small arm adjustment.
-    const bool stability_elapsed = footprint_sync_grace_.geometryOnly() ||
-      (preflight_ready_ && healthy) ||
+    // After a transient input gap, use fresh inputs as soon as they recover;
+    // reserve the full stability window for startup and explicit relocalization.
+    const bool stability_elapsed =
+      (ever_ready_ && healthy && footprint_sync == FootprintSyncGrace::Result::Hold &&
+      !operator_relocalization_pending_) || (preflight_ready_ && healthy) ||
       std::chrono::duration<double>(steady_now - stable_since_).count() >= stable_window_sec_;
     preflight_ready_ = candidate_healthy_ && stability_elapsed && stable_costmap_samples_ >= 2;
     if (preflight_ready_) {
@@ -853,7 +851,8 @@ private:
       // deadline, only while independent TF, odom and geometry remain valid.
       publish("READY", localization_status_age > localization_timeout_sec_ ?
         "localization_status_delayed_using_last_normal" :
-        (conservative_geometry ? "using_conservative_costmap_footprint" :
+        (costmap_footprint_pending ? "costmap_footprint_sync_pending" :
+        conservative_geometry ? "using_conservative_costmap_footprint" :
         (!static_map_overlap_hard_fault_ && static_map_overlap_state_.latched() ?
         "static_map_overlap_advisory" : "ready")),
         translation_jump, yaw_jump, localization_status_age);

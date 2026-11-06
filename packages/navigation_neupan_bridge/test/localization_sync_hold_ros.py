@@ -45,6 +45,7 @@ class LocalizationSyncHold(unittest.TestCase):
         self.mismatch = False
         self.shrink = False
         self.drop_footprint = False
+        self.drop_published_footprint = False
         self.drop_localization = False
         self.localization_state = "NORMAL"
         self.last = 0.
@@ -74,6 +75,7 @@ class LocalizationSyncHold(unittest.TestCase):
                 self.map_pub.publish(grid)
             for pub, frame, dx in ((self.fp,"base_link",0.),(self.mapfp,"map",.3 if self.mismatch else 0.)):
                 if pub is self.fp and self.drop_footprint: continue
+                if pub is self.mapfp and self.drop_published_footprint: continue
                 msg=PolygonStamped();msg.header.frame_id=frame
                 msg.header.stamp=(now-rclpy.duration.Duration(seconds=.1)).to_msg()
                 msg.polygon.points=[Point32(x=x*(.5 if self.shrink and pub is self.fp else 1.)+dx,
@@ -98,22 +100,27 @@ class LocalizationSyncHold(unittest.TestCase):
         while time.monotonic()<deadline:self.tick()
         self.assertTrue(all(s["state"]=="READY" for s in self.status[start:]))
 
-    def test_short_mismatch_holds_then_recovers(self):
+    def test_footprint_mismatch_stays_ready_and_reports_pending(self):
         self.wait_for(lambda s:s["state"]=="READY")
+        start=len(self.status)
         self.mismatch=True
-        self.wait_for(lambda s:s["state"]=="HOLD")
+        self.wait_for(lambda s:s["reason"]=="costmap_footprint_sync_pending")
+        deadline=time.monotonic()+1.5
+        while time.monotonic()<deadline:self.tick()
+        self.assertTrue(all(s["state"]=="READY" for s in self.status[start:]))
         self.assertFalse(self.status[-1]["fault_latched"])
         self.mismatch=False
-        recovery_start=time.monotonic()
+        self.wait_for(lambda s:s["reason"]=="ready")
+
+    def test_missing_published_footprint_is_diagnostic_only(self):
         self.wait_for(lambda s:s["state"]=="READY")
-        recovery_seconds=time.monotonic()-recovery_start
-        print(json.dumps(dict(scenario="footprint_sync_recovery", ready_seconds=recovery_seconds,
-                              cold_start_window_seconds=3.0,physical_motion=False)))
-        self.assertLess(recovery_seconds,2.8, "must not wait the full cold-start window")
-        until=time.monotonic()+1.0
-        while time.monotonic()<until:self.tick()
-        self.assertEqual(self.status[-1]["state"],"READY")
-        self.assertFalse(any(s["state"]=="FAULT" for s in self.status))
+        start=len(self.status)
+        self.drop_published_footprint=True
+        self.wait_for(lambda s:s["reason"]=="costmap_footprint_sync_pending",5.)
+        deadline=time.monotonic()+1.5
+        while time.monotonic()<deadline:self.tick()
+        self.assertTrue(all(s["state"]=="READY" for s in self.status[start:]))
+        self.assertFalse(self.status[-1]["fault_latched"])
 
     def test_brief_footprint_dropout_holds_and_recovers(self):
         self.wait_for(lambda s:s["state"]=="READY")
@@ -121,7 +128,10 @@ class LocalizationSyncHold(unittest.TestCase):
         self.wait_for(lambda s:s["state"]=="HOLD")
         self.assertEqual(self.status[-1]["reason"],"dynamic_footprint_unavailable_or_stale")
         self.drop_footprint=False
+        recovered_at=time.monotonic()
         self.wait_for(lambda s:s["state"]=="READY")
+        self.assertLess(time.monotonic()-recovered_at, 2.0,
+                        "do not impose the 3 s cold-start window on a short dropout")
         self.assertFalse(any(s["state"]=="FAULT" for s in self.status))
 
     def test_brief_status_dropout_continues_until_original_deadline(self):
@@ -138,28 +148,22 @@ class LocalizationSyncHold(unittest.TestCase):
         self.wait_for(lambda s:s["state"]=="FAULT")
         self.assertTrue(self.status[-1]["reason"].startswith("localization_LOST:"))
 
-    def test_persistent_mismatch_clears_automatically_when_stable(self):
+    def test_persistent_live_footprint_dropout_clears_automatically(self):
         self.wait_for(lambda s:s["state"]=="READY")
-        self.mismatch=True
+        self.drop_footprint=True
         self.wait_for(lambda s:s["state"]=="FAULT")
-        self.assertEqual(self.status[-1]["reason"],"costmap_footprint_not_synchronized")
-        self.mismatch=False
+        self.assertEqual(self.status[-1]["reason"],"dynamic_footprint_unavailable_or_stale")
+        self.drop_footprint=False
         self.wait_for(lambda s:s["state"]=="READY",8.)
         self.assertFalse(self.status[-1]["fault_latched"])
 
     def test_static_overlap_is_not_hidden_by_recovering_footprint_fault(self):
         self.wait_for(lambda s:s["state"]=="READY")
-        self.mismatch=True
+        self.drop_footprint=True
         self.wait_for(lambda s:s["state"]=="FAULT")
-        self.lethal_map=True;self.mismatch=False
+        self.lethal_map=True;self.drop_footprint=False
         self.wait_for(lambda s:s["reason"]=="start_in_lethal_static_map",8.)
         self.assertTrue(self.status[-1]["fault_latched"])
-
-    def test_persistent_mismatch_faults(self):
-        self.wait_for(lambda s:s["state"]=="READY")
-        self.mismatch=True
-        self.wait_for(lambda s:s["state"]=="FAULT")
-        self.assertEqual(self.status[-1]["reason"],"costmap_footprint_not_synchronized")
 
 @unittest.skipUnless(os.environ.get("NEUPAN_ISOLATED_ROS_TEST") == "1", "isolated opt-in")
 class LocalizationOverlapAdvisory(unittest.TestCase):
@@ -171,9 +175,9 @@ class LocalizationOverlapAdvisory(unittest.TestCase):
 
     def test_static_overlap_is_reported_without_latching_stable_localization(self):
         self.wait_for(lambda s:s["state"]=="READY")
-        self.mismatch=True
+        self.drop_footprint=True
         self.wait_for(lambda s:s["state"]=="FAULT")
-        self.lethal_map=True;self.mismatch=False
+        self.lethal_map=True;self.drop_footprint=False
         self.wait_for(lambda s:s["state"]=="READY" and s.get("static_map_overlap"),8.)
         self.assertFalse(self.status[-1]["static_map_overlap_hard_fault"])
         self.assertFalse(self.status[-1]["fault_latched"])
