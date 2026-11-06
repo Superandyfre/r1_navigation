@@ -55,7 +55,15 @@ class SameUUIDRoute(chain.FailstopChainROS):
             self.tick()
         waiting=[j for t,j in self.statuses if t>=marker+.06 and j.get('grant_id')==new_grant]
         self.assertTrue(waiting)
-        self.assertTrue(all(j['output_linear_x']==0. and j['output_angular_z']==0. for j in waiting))
+        # A same-attempt revision may reuse the immutable old command only
+        # while its original source timestamps are still fresh.
+        old_expiry=min(old_source['planner_result_monotonic']+.5,
+                       old_source['worker_solve_end_monotonic']+.5,
+                       old_source['scan_receive_monotonic']+.75)
+        for j in waiting:
+            if j['output_linear_x']!=0. or j['output_angular_z']!=0.:
+                self.assertEqual(j['authorization_state'],'ROUTE_HANDOVER')
+                self.assertLessEqual(j['monotonic'],old_expiry+.001)
         self.assertTrue(any(j['authorization_state']!='ARMED' for j in waiting))
         self.assertTrue(any(t>marker+.03 and v>.02 for t,v,w in self.smooth),
                         'must observe an actual old smoother tail after new PREPARE')
@@ -76,14 +84,23 @@ class SameUUIDRoute(chain.FailstopChainROS):
         if timeout:
             self.assertEqual(self.future(result).status,GoalStatus.STATUS_ABORTED)
             terminal=time.monotonic();self.until(lambda:time.monotonic()-terminal>.35)
-            self.assertFalse(any(v!=0. or w!=0. for t,v,w in self.outputs if t>marker+.1))
+            self.assertFalse(any(v!=0. or w!=0. for t,v,w in self.outputs if t>old_expiry+.08))
             self.assertFalse(any(j['state']=='COMMIT' and j['grant_id']==new_grant for t,j in self.grants))
         else:
             self.hold_source(False)
-            self.until(lambda:any(t>marker+.25 and v>.04 for t,v,w in self.outputs) or result.done())
+            self.until(lambda:any(j.get('grant_id')==new_grant and j.get('authorization_state')=='ARMED'
+                                  for t,j in self.statuses) or result.done())
             self.assertFalse(result.done(),'route must resume the existing Action')
+            armed_at=next(t for t,j in self.statuses if j.get('grant_id')==new_grant and j.get('authorization_state')=='ARMED')
+            self.until(lambda:any(t>armed_at and v>.04 for t,v,w in self.outputs) or result.done())
+            self.assertFalse(result.done(),'new route must produce motion after authorization')
+            resumed_at=time.monotonic()
+            handover_outputs=[(t,v,w) for t,v,w in self.outputs if marker+.04<t<resumed_at]
+            self.assertTrue(handover_outputs)
+            self.assertTrue(all(abs(v)>1e-8 or abs(w)>1e-8 for t,v,w in handover_outputs),
+                            'unexpected zero during valid route handover: '+str(handover_outputs))
             matching=[(t,j) for t,j in self.statuses if j.get('grant_id')==new_grant]
-            barriers=[j for t,j in matching if j.get('command_barrier_ready') and j['authorization_state']=='PREPARED']
+            barriers=[j for t,j in matching if j.get('command_barrier_ready') and j['authorization_state'] in ('PREPARED','ROUTE_HANDOVER')]
             self.assertTrue(barriers,'real Guard must ACK drained raw+smooth command streams')
             commits=[j for t,j in self.grants if j['grant_id']==new_grant and j['state']=='COMMIT']
             self.assertTrue(commits)
@@ -91,8 +108,10 @@ class SameUUIDRoute(chain.FailstopChainROS):
                                 for t,j in self.sources))
             first_commit=min(j['monotonic'] for j in commits)
             self.assertLessEqual(min(j['monotonic'] for j in barriers),first_commit)
-            self.assertTrue(all(j['output_linear_x']==0. and j['output_angular_z']==0.
-                                for t,j in matching if j['monotonic']<first_commit))
+            for t,j in matching:
+                if j['monotonic']<first_commit and (j['output_linear_x']!=0. or j['output_angular_z']!=0.):
+                    self.assertEqual(j['authorization_state'],'ROUTE_HANDOVER')
+                    self.assertLessEqual(j['monotonic'],old_expiry+.001)
             self.assertFalse(any(j['state']=='REVOKE' and j['navigation_attempt_id']==attempt
                                  for t,j in self.grants if t<first_commit))
             self.future(handle.cancel_goal_async())

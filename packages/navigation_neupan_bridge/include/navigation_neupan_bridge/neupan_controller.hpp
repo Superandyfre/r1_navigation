@@ -185,6 +185,7 @@ private:
   std::chrono::steady_clock::time_point plan_published_at_{};
   std::int64_t worker_generation_{-1};
   Envelope envelope_;
+  Envelope handover_envelope_;
   bool envelope_recovery_active_{false};
   std::chrono::steady_clock::time_point envelope_recovery_started_at_{};
   GateStatus gate_status_;

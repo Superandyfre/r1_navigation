@@ -156,7 +156,10 @@ public:
       "cmd_vel_in_topic", "/neupan_nav2_cmd_vel");
     const auto source_command_topic = declare_parameter<std::string>(
       "source_cmd_vel_topic", command_topic);
+    same_command_topics_ = command_topic == source_command_topic;
     const auto output_topic = declare_parameter<std::string>("cmd_vel_out_topic", "/cmd_vel");
+    const auto smoother_provenance_topic = declare_parameter<std::string>(
+      "smoother_provenance_topic", "/neupan_nav2_smoothed_provenance");
     const auto status_topic = declare_parameter<std::string>(
       "status_topic", "/r1_collision_guard/status");
     const auto localization_health_topic = declare_parameter<std::string>(
@@ -247,23 +250,27 @@ public:
         const auto previous_grant = authorization_->grantId();
         const bool was_committed = authorization_->committed();
         auto request = parseProtocol(msg->data);
+        const bool seamless = seamlessHandoverReady(monotonicNow());
         if (request.is_object() && request.contains("state") && request["state"] == "COMMIT" &&
           !previous_grant.empty() && request.contains("grant_id") && request["grant_id"] == previous_grant &&
-          !was_committed &&
+          !was_committed && !seamless &&
           !command_barrier_.ready(monotonicNow(), source_command_timeout_sec_, command_timeout_sec_))
         {
           // Refresh the preparation lease, but never commit a queued old tail.
           request["state"] = "PREPARE";
         }
         authorization_->authorization(request, monotonicNow());
-        if (authorization_->grantId() != previous_grant) {command_barrier_.reset();}
+        if (authorization_->grantId() != previous_grant) {
+          command_barrier_.reset(); smoother_provenance_.clear();
+        }
         if (authorization_->grantId() != previous_grant ||
           (!was_committed && authorization_->committed())) {
           ++command_epoch_;
-          // A newly prepared route/attempt cannot consume commands queued in
-          // the smoother or guard for the previous grant. Wait for new input.
-          command_available_ = false;
-          source_command_available_ = false;
+          const bool retaining_old = authorization_->handoverFresh(monotonicNow());
+          if (!retaining_old && !seamless) {
+            command_available_ = false;
+            source_command_available_ = false;
+          }
         }
       });
     command_sub_ = create_subscription<geometry_msgs::msg::Twist>(
@@ -272,6 +279,11 @@ public:
     source_command_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       source_command_topic, rclcpp::QoS(20),
       std::bind(&CollisionGuardNode::sourceCommandCallback, this, std::placeholders::_1));
+    if (!same_command_topics_) {
+      smoother_provenance_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+        smoother_provenance_topic, rclcpp::QoS(20),
+        std::bind(&CollisionGuardNode::smootherProvenanceCallback, this, std::placeholders::_1));
+    }
     if (collision_check_enabled_) {
       scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
         scan_topic, rclcpp::SensorDataQoS(),
@@ -340,6 +352,7 @@ private:
     command_ = *message;
     command_received_ = std::chrono::steady_clock::now();
     command_available_ = true;
+
   }
 
   void sourceCommandCallback(const geometry_msgs::msg::Twist::SharedPtr message)
@@ -348,6 +361,7 @@ private:
     command_barrier_.observe(true,
       {message->linear.x, message->linear.y, message->linear.z,
         message->angular.x, message->angular.y, message->angular.z}, monotonicNow());
+    source_command_ = *message;
     source_command_received_ = std::chrono::steady_clock::now();
     source_command_available_ = true;
     source_command_valid_ = std::isfinite(message->linear.x) && std::isfinite(message->angular.z);
@@ -383,6 +397,45 @@ private:
     while (odom_history_.size() > 240) {
       odom_history_.pop_front();
     }
+  }
+
+  void smootherProvenanceCallback(const std_msgs::msg::Float64MultiArray::SharedPtr message)
+  {
+    if (message->layout.dim.empty() || message->layout.dim[0].label != "r1_smoother_provenance_v1" ||
+      message->data.size() != 5 ||
+      !std::all_of(message->data.begin(), message->data.end(), [](double x) {return std::isfinite(x);})) {return;}
+    const double now = monotonicNow();
+    if (message->data[0] <= 0.0 || message->data[0] > now ||
+      now - message->data[0] > command_timeout_sec_) {return;}
+    std::lock_guard<std::mutex> lock(mutex_);
+    smoother_provenance_.push_back({message->data[0], message->data[1], message->data[2],
+      message->data[3], message->data[4], now});
+    while (smoother_provenance_.size() > 16) {smoother_provenance_.pop_front();}
+  }
+
+  // mutex_ held. Smoothed mode requires evidence emitted by the smoother
+  // itself after consuming a new-route input and computing this exact output.
+  bool seamlessHandoverReady(double now) const
+  {
+    const double raw_time = std::chrono::duration<double>(source_command_received_.time_since_epoch()).count();
+    const double smooth_time = std::chrono::duration<double>(command_received_.time_since_epoch()).count();
+    if (!command_available_ || !source_command_available_ || !source_command_valid_ ||
+      now < smooth_time || now - smooth_time > command_timeout_sec_ ||
+      now < raw_time || now - raw_time > source_command_timeout_sec_ ||
+      !authorization_->handoverMatchesNewCommand(source_command_.linear.x, source_command_.angular.z, raw_time, now)) {
+      return false;
+    }
+    if (same_command_topics_) {
+      return command_.linear.x == source_command_.linear.x && command_.angular.z == source_command_.angular.z;
+    }
+    for (auto it = smoother_provenance_.rbegin(); it != smoother_provenance_.rend(); ++it) {
+      if (now >= it->received && now - it->received <= command_timeout_sec_ &&
+        it->output_linear == command_.linear.x && it->output_angular == command_.angular.z &&
+        authorization_->handoverMatchesNewCommand(it->input_linear, it->input_angular, it->input_time, now)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void localizationHealthCallback(const std_msgs::msg::String::SharedPtr message)
@@ -829,6 +882,17 @@ private:
       }
       physical_safety_state_ = stateName(decision.state);
       authorization_decision_ = authorization_->evaluate(monotonicNow());
+      if (authorization_decision_.state == "ROUTE_HANDOVER") {
+        const auto & old = authorization_->handoverSource();
+        const double raw_time = std::chrono::duration<double>(source_command_received_.time_since_epoch()).count();
+        const bool old_raw = old && source_command_.linear.x == old->linear &&
+          source_command_.angular.z == old->angular;
+        const bool new_raw = authorization_->handoverMatchesNewCommand(
+          source_command_.linear.x, source_command_.angular.z, raw_time, monotonicNow());
+        if (!source_command_available_ || !source_command_valid_ || (!old_raw && !new_raw)) {
+          decision = stop("route_handover_waiting_for_verified_command");
+        }
+      }
       if (localization_hold_seen_ || localization_recovery_after_ > 0.0) {
         if (command_barrier_.ready(monotonicNow(), source_command_timeout_sec_, command_timeout_sec_)) {
           localization_recovery_zero_seen_ = true;
@@ -924,8 +988,9 @@ private:
       payload.update(nlohmann::json{
         {"authorization_protocol", "r1_neupan_motion_grant_v1"},
         {"health_protocol", r1_neupan_runtime::kHealthSchema}, {"source_protocol", "r1_neupan_planner_source_v2"}, {"build_revision", R1_FAILSTOP_BUILD_REVISION},
-        {"command_barrier_ready", command_barrier_.ready(monotonicNow(),
-          source_command_timeout_sec_, command_timeout_sec_)},
+        {"route_handover_seamless_ready", seamlessHandoverReady(monotonicNow())},
+        {"command_barrier_ready", seamlessHandoverReady(monotonicNow()) ||
+          command_barrier_.ready(monotonicNow(), source_command_timeout_sec_, command_timeout_sec_)},
         {"sequence", ++status_sequence_}, {"monotonic", monotonicNow()},
         {"worker_health_age_sec", authorization_->healthAge(monotonicNow())},
         {"worker_health_bridged_by_source", authorization_->healthBridged(monotonicNow())},
@@ -990,9 +1055,16 @@ private:
   std::vector<std::string> arm_joint_state_topics_;
   std::mutex mutex_;
   geometry_msgs::msg::Twist command_;
+  geometry_msgs::msg::Twist source_command_;
   sensor_msgs::msg::LaserScan scan_;
   std::deque<ScanSample> scan_history_;
   std::deque<OdomSample> odom_history_;
+  bool same_command_topics_{false};
+  struct SmootherProvenance {
+    double input_time, input_linear, input_angular, output_linear, output_angular, received;
+  };
+  std::deque<SmootherProvenance> smoother_provenance_;
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr smoother_provenance_sub_;
   bool localization_hold_seen_{false};
   bool localization_recovery_zero_seen_{false};
   double localization_recovery_after_{0.0};

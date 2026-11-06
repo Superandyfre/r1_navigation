@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <optional>
 #include <random>
@@ -221,6 +222,12 @@ public:
       }
       if (candidate.context.worker_boot != health_boot_ ||
         candidate.context.generation != health_generation_) {return;}
+      if (handover_source_ && !(candidate.context == handover_source_->context) &&
+        (candidate.request <= handover_source_->request ||
+        candidate.cycle <= handover_source_->cycle || candidate.scan <= handover_source_->scan ||
+        candidate.input < handover_source_->input || candidate.solved <= handover_source_->solved)) {
+        return;  // an earlier computation cannot become the new route result
+      }
       if (source_ && candidate.context == source_->context) {
         if (candidate.sameIdentity(*source_)) {
           if (!candidate.sameContents(*source_)) {latch("duplicate_command_mismatch");}
@@ -232,6 +239,10 @@ public:
         {protocolFailure("source_identity_regressed"); return;}
       }
       source_ = candidate;
+      if (handover_source_) {
+        handover_new_sources_.push_back(candidate);
+        while (handover_new_sources_.size() > 16) {handover_new_sources_.pop_front();}
+      }
     } catch (const std::exception &) {protocolFailure("invalid_planner_source");}
   }
 
@@ -254,6 +265,7 @@ public:
         if (grant_ && grant_->attempt == context.attempt) {
           retired_grants_.insert(grant_id_);
           grant_.reset(); committed_ = false; grant_id_.clear(); source_stale_since_.reset();
+          handover_source_.reset(); handover_new_sources_.clear();
         }
         return;
       }
@@ -275,6 +287,10 @@ public:
             context.generation != grant_->generation || context.path <= grant_->path ||
             context.goal <= grant_->goal || id == grant_id_)
           {return;}
+          // Same-attempt revision may temporarily keep the already-authorized
+          // source, without changing or refreshing its original timestamps.
+          handover_source_ = committed_ && freshSource(now) ? source_ : std::nullopt;
+          handover_new_sources_.clear();
           retired_grants_.insert(grant_id_);
           committed_ = false;
           source_stale_since_.reset();
@@ -315,6 +331,9 @@ public:
     // newer than the failed request, with the current route/attempt identity.
     const bool planning_failed = health_payload_.value("planner_state", "ready") != "ready" ||
       (source_ && source_->request <= health_payload_.value("planner_failed_request_id", -1LL));
+    if (!committed_ && !planning_failed && handoverFresh(now)) {
+      return {true, false, "ROUTE_HANDOVER", "previous_source_still_valid"};
+    }
     if (planning_failed || !freshSource(now)) {
       if (committed_ && !source_stale_since_) {source_stale_since_ = now;}
       return {false, false, "SOURCE_STALE_HOLD", "planner_result_stale"};
@@ -336,6 +355,26 @@ public:
   const std::optional<Context> & grantContext() const {return grant_;}
   std::string attemptId() const {return grant_ ? grant_->attempt : "";}
   const std::optional<Source> & latestSource() const {return source_;}
+  const std::optional<Source> & handoverSource() const {return handover_source_;}
+  bool handoverFresh(double now) const
+  {
+    return handover_source_ && sourceFresh(*handover_source_, now) &&
+      health_payload_.value("planner_state", "ready") == "ready" &&
+      handover_source_->request > health_payload_.value("planner_failed_request_id", -1LL);
+  }
+  bool handoverMatchesNewCommand(double linear, double angular, double raw_time, double now) const
+  {
+    if (!handoverFresh(now) || !grant_ || !std::isfinite(linear) || !std::isfinite(angular) ||
+      !std::isfinite(raw_time) || raw_time > now) {return false;}
+    for (auto it = handover_new_sources_.rbegin(); it != handover_new_sources_.rend(); ++it) {
+      if (it->context == *grant_ && sourceFresh(*it, now) && it->published <= raw_time &&
+        it->request > handover_source_->request && it->cycle > handover_source_->cycle &&
+        it->scan > handover_source_->scan && it->input >= handover_source_->input &&
+        it->solved > handover_source_->solved && it->linear == linear && it->angular == angular &&
+        it->request > health_payload_.value("planner_failed_request_id", -1LL)) {return true;}
+    }
+    return false;
+  }
   void latch(const std::string & reason) {if (fault_.empty()) {fault_ = reason;}}
 
 private:
@@ -354,7 +393,7 @@ private:
       task_failed_attempt_ = grant_->attempt;
       retired_.insert(grant_->attempt);
       retired_grants_.insert(grant_id_);
-      grant_.reset(); source_.reset(); source_stale_since_.reset();
+      grant_.reset(); source_.reset(); handover_source_.reset(); handover_new_sources_.clear(); source_stale_since_.reset();
       grant_id_.clear(); committed_ = false;
     }
   }
@@ -374,10 +413,13 @@ private:
   }
   bool freshSource(double now) const
   {
-    return source_ && grant_ && source_->context == *grant_ &&
-           now >= source_->published && now - source_->published <= config_.source_timeout &&
-           now >= source_->solved && now - source_->solved <= config_.source_timeout &&
-           now >= source_->input && now - source_->input <= config_.input_timeout;
+    return source_ && grant_ && source_->context == *grant_ && sourceFresh(*source_, now);
+  }
+  bool sourceFresh(const Source & source, double now) const
+  {
+    return now >= source.published && now - source.published <= config_.source_timeout &&
+           now >= source.solved && now - source.solved <= config_.source_timeout &&
+           now >= source.input && now - source.input <= config_.input_timeout;
   }
   void protocolFailure(const std::string & reason)
   {
@@ -396,6 +438,8 @@ private:
   bool ever_prepared_{false}, committed_{false};
   std::optional<Context> grant_;
   std::optional<Source> source_;
+  std::optional<Source> handover_source_;
+  std::deque<Source> handover_new_sources_;
   std::optional<double> source_stale_since_;
   std::set<std::string> retired_, retired_grants_, failed_worker_boots_;
 };

@@ -170,12 +170,63 @@ TEST_F(Gate, SameSequenceDifferentHealthCannotRefreshOrClearFault) {
 TEST_F(Gate, RouteRevisionPreservesAttemptButRequiresNewPrepareSourceCommit) {
   armed(); auto h=health(100.1,2); gate.health(h,100.1);
   auto g=grant("PREPARE",100.1,3); g["path_version"]=2; g["goal_version"]=1; g["grant_id"]="route-b";
-  gate.authorization(g,100.1); EXPECT_FALSE(gate.evaluate(100.1).allowed);
-  gate.source(source(100.1,2),100.1); EXPECT_FALSE(gate.evaluate(100.1).allowed);
+  gate.authorization(g,100.1); EXPECT_EQ(gate.evaluate(100.1).state,"ROUTE_HANDOVER");
+  gate.source(source(100.1,2),100.1); EXPECT_EQ(gate.evaluate(100.1).state,"ROUTE_HANDOVER");
   auto s=source(100.12,3); s["path_version"]=2; s["goal_version"]=1; gate.source(s,100.12);
-  EXPECT_EQ(gate.evaluate(100.12).state,"PREPARED");
+  EXPECT_EQ(gate.evaluate(100.12).state,"ROUTE_HANDOVER");
   g["state"]="COMMIT";g["sequence"]=4;g["monotonic"]=100.12;gate.authorization(g,100.12);
   EXPECT_TRUE(gate.evaluate(100.12).allowed);
+}
+TEST_F(Gate, SameAttemptRoutePrepareKeepsOriginalSourceOnlyWithinItsValidity) {
+  armed();
+  gate.health(health(100.1,2),100.1);
+  auto g=grant("PREPARE",100.1,3);g["path_version"]=2;g["goal_version"]=1;g["grant_id"]="route-b";
+  gate.authorization(g,100.1);
+  auto held=gate.evaluate(100.1);
+  EXPECT_TRUE(held.allowed);EXPECT_EQ(held.state,"ROUTE_HANDOVER");
+  gate.health(health(100.4,3),100.4);g["sequence"]=4;g["monotonic"]=100.4;gate.authorization(g,100.4);
+  EXPECT_TRUE(gate.evaluate(100.4).allowed);
+  gate.health(health(100.55,4),100.55);g["sequence"]=5;g["monotonic"]=100.55;gate.authorization(g,100.55);
+  EXPECT_FALSE(gate.evaluate(100.55).allowed);
+}
+TEST_F(Gate, SeamlessCommitRequiresFreshMatchingTargetAndRawCommand) {
+  armed();gate.health(health(100.1,2),100.1);
+  auto g=grant("PREPARE",100.1,3);g["path_version"]=2;g["goal_version"]=1;g["grant_id"]="route-b";
+  gate.authorization(g,100.1);
+  auto n=source(100.11,2);n["path_version"]=2;n["goal_version"]=1;gate.source(n,100.11);
+  EXPECT_TRUE(gate.handoverMatchesNewCommand(.1,.2,100.11,100.11));
+  EXPECT_FALSE(gate.handoverMatchesNewCommand(.11,.2,100.11,100.11));
+  n=source(100.12,3);n["path_version"]=2;n["goal_version"]=1;n["command"]["angular_z"]=.21;
+  gate.source(n,100.12);
+  EXPECT_TRUE(gate.handoverMatchesNewCommand(.1,.21,100.12,100.12));
+  EXPECT_FALSE(gate.handoverMatchesNewCommand(.1,.21,100.11,100.12));
+  EXPECT_FALSE(gate.handoverMatchesNewCommand(.1,.2,100.51,100.51));
+}
+TEST_F(Gate, NewRouteCannotReuseOldRequestOrScanIdentity) {
+  armed();gate.health(health(100.1,2),100.1);
+  auto g=grant("PREPARE",100.1,3);g["path_version"]=2;g["goal_version"]=1;g["grant_id"]="route-b";
+  gate.authorization(g,100.1);
+  auto stale=source(100.11,1);stale["path_version"]=2;stale["goal_version"]=1;
+  gate.source(stale,100.11);
+  EXPECT_FALSE(gate.latestSource().has_value());
+  EXPECT_FALSE(gate.handoverMatchesNewCommand(.1,.2,100.11,100.11));
+}
+TEST_F(Gate, FailedSolveInvalidatesOldHandoverEvenIfNewSourceIsFresh) {
+  armed();gate.health(health(100.1,2),100.1);
+  auto g=grant("PREPARE",100.1,3);g["path_version"]=2;g["goal_version"]=1;g["grant_id"]="route-b";
+  gate.authorization(g,100.1);ASSERT_TRUE(gate.evaluate(100.1).allowed);
+  auto n=source(100.11,2);n["path_version"]=2;n["goal_version"]=1;gate.source(n,100.11);
+  auto h=health(100.12,3);h["planner_failed_request_id"]=1;gate.health(h,100.12);
+  EXPECT_FALSE(gate.handoverFresh(100.12));
+  EXPECT_FALSE(gate.evaluate(100.12).allowed);
+}
+TEST_F(Gate, RevokeDuringRouteHandoverNeverRestoresOldCommand) {
+  armed();gate.health(health(100.1,2),100.1);
+  auto g=grant("PREPARE",100.1,3);g["path_version"]=2;g["goal_version"]=1;g["grant_id"]="route-b";
+  gate.authorization(g,100.1);ASSERT_TRUE(gate.evaluate(100.1).allowed);
+  g["state"]="REVOKE";g["sequence"]=4;gate.authorization(g,100.1);
+  EXPECT_FALSE(gate.evaluate(100.1).allowed);
+  gate.source(source(100.11,2),100.11);EXPECT_FALSE(gate.evaluate(100.11).allowed);
 }
 TEST_F(Gate, NullAttemptHealthNeverAuthorizes) {
   auto h=health(); h["navigation_attempt_id"]=nullptr; gate.health(h,100.);

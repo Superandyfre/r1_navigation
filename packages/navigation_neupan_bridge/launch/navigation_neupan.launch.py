@@ -73,6 +73,7 @@ def _build(context):
             remappings=[
                 ("cmd_vel", "/neupan_nav2_raw_cmd_vel"),
                 ("cmd_vel_smoothed", "/neupan_nav2_smoothed_cmd_vel"),
+                ("cmd_vel_provenance", "/neupan_nav2_smoothed_provenance"),
             ],
         ) if use_velocity_smoother else None,
         Node(

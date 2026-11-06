@@ -31,7 +31,7 @@ WS = Path('/home/rpp/neupan_failstop_ws')
 SOURCE_ROOT = Path(__file__).resolve().parents[3]
 CONTROLLER = WS/'install/nav2_controller/lib/nav2_controller/controller_server'
 GUARD = WS/'install/r1_collision_guard/lib/r1_collision_guard/r1_collision_guard_node'
-SMOOTHER = Path('/home/rpp/rpp_ws/install/nav2_velocity_smoother/lib/nav2_velocity_smoother/velocity_smoother')
+SMOOTHER = Path(os.environ.get('NEUPAN_TEST_SMOOTHER', '/home/rpp/neupan_failstop_ws/robustness/install/nav2_velocity_smoother/lib/nav2_velocity_smoother/velocity_smoother'))
 PREFIX = '/test_failstop_chain/'
 
 def destroy_actions(node):
@@ -136,6 +136,7 @@ class FailstopChainROS(unittest.TestCase):
             require_arms_stowed=False,require_localization_ready=False,require_dynamic_footprint=False,
             collision_check_enabled=True,cmd_vel_in_topic=PREFIX+'smooth',source_cmd_vel_topic=PREFIX+'raw',
             cmd_vel_out_topic=PREFIX+'output',status_topic=PREFIX+'status',scan_topic=PREFIX+'scan',
+            smoother_provenance_topic=PREFIX+'smoother_provenance',
             odom_topic=PREFIX+'odom',worker_health_topic=PREFIX+'health',planner_source_topic=PREFIX+'source',
             motion_grant_topic=PREFIX+'grant',planner_recovery_timeout_sec=1.)}}
         if getattr(self,'noncurrent_test_layer',False):
@@ -165,7 +166,7 @@ class FailstopChainROS(unittest.TestCase):
             log=open(self.report/'actual_worker_node.log','w');self.logs.append(log)
             self.procs.append(subprocess.Popen(args,env=getattr(self,'worker_environment',None),stdout=log,stderr=subprocess.STDOUT))
         self.start(GUARD,path,[])
-        self.start(SMOOTHER,path,['cmd_vel:='+PREFIX+'raw','cmd_vel_smoothed:='+PREFIX+'smooth'])
+        self.start(SMOOTHER,path,['cmd_vel:='+PREFIX+'raw','cmd_vel_smoothed:='+PREFIX+'smooth','cmd_vel_provenance:='+PREFIX+'smoother_provenance'])
         self.start(CONTROLLER,path,['cmd_vel:='+PREFIX+'raw'])
         self.lifecycle('velocity_smoother',1)
         self.lifecycle('velocity_smoother',3)
@@ -280,7 +281,7 @@ class FailstopChainROS(unittest.TestCase):
                     request_id=self.sequence,cycle_id=self.sequence,scan_counter=self.sequence,finite=True,
                     scan_receive_monotonic=now-.01,request_dispatched_monotonic=now-.008,
                     worker_solve_end_monotonic=now-.002,planner_result_monotonic=now,
-                    command=dict(linear_x=.1,angular_z=0.))
+                    command=dict(linear_x=getattr(self, "synthetic_linear", .1),angular_z=0.))
                 self.publish('source',source)
         rclpy.spin_once(self.node,timeout_sec=.01)
         if self.owner_enabled and self.context and self.context['state']=='ACTIVE' and self.context['navigation_attempt_id'] in self.owned_attempts:

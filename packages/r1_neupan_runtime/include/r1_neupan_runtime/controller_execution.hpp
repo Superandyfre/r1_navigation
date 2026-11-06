@@ -183,7 +183,8 @@ public:
     const auto & current_source = monitor_.latestSource();
     if (prepared_ && matched && current_source && freshSource(*current_source, now) &&
       guard_payload_.value("command_barrier_ready", false) &&
-      guard_payload_.value("authorization_state", "") == "PREPARED" &&
+      (guard_payload_.value("authorization_state", "") == "PREPARED" ||
+       guard_payload_.value("authorization_state", "") == "ROUTE_HANDOVER") &&
       (guard_payload_.value("physical_safety_state", "") == "PASS" ||
       guard_payload_.value("physical_safety_state", "") == "SLOW")) {committed_ = true;}
     auto grant = grantMessage(committed_ ? "COMMIT" : "PREPARE", now);
@@ -202,6 +203,29 @@ public:
     return active_ && !faulted() && task_failure_.empty() && decision.allowed && freshGuard(now) &&
            guard_payload_.value("authorization_state", "") == "ARMED" &&
            matchingGuardContext();
+  }
+
+  bool handoverPermitted(double now, double source_published)
+  {
+    watchdog(now);
+    const auto decision = monitor_.evaluate(now); syncFault();
+    if (!active_ || faulted() || !task_failure_.empty() || !decision.allowed || !freshGuard(now) ||
+      !monitor_.handoverFresh(now) || !monitor_.handoverSource() ||
+      monitor_.handoverSource()->published != source_published) {return false;}
+    const auto state = guard_payload_.value("authorization_state", "");
+    if (matchingGuardContext() && (state == "ROUTE_HANDOVER" || state == "ARMED")) {return true;}
+    // Before PREPARE reaches the final Guard, its still-ARMED context must
+    // exactly match the immutable old source from this same attempt.
+    try {
+      return state == "ARMED" && parseContext(guard_payload_) == monitor_.handoverSource()->context;
+    } catch (const std::exception &) {return false;}
+  }
+
+  bool handoverNewPermitted(double now, double source_published)
+  {
+    if (!handoverPermitted(now, source_published)) {return false;}
+    const auto state = guard_payload_.value("authorization_state", "");
+    return matchingGuardContext() && (state == "ROUTE_HANDOVER" || state == "ARMED");
   }
 
   std::optional<Json> end(double now)

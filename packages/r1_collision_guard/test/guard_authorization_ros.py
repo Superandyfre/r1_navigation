@@ -18,7 +18,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, PolygonStamped, Point32
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import String
+from std_msgs.msg import String, Float64MultiArray, MultiArrayDimension
 
 EXECUTABLE = Path(os.environ.get('NEUPAN_GUARD_EXECUTABLE', '/home/rpp/neupan_failstop_ws/install/r1_collision_guard/lib/r1_collision_guard/r1_collision_guard_node'))
 
@@ -44,7 +44,7 @@ class GuardAuthorizationROS(unittest.TestCase):
             'cmd_vel_out_topic': '/test_wp2/output', 'status_topic': '/test_wp2/status',
             'scan_topic': '/test_wp2/scan', 'odom_topic': '/test_wp2/odom',
             'worker_health_topic': '/test_wp2/health', 'planner_source_topic': '/test_wp2/source',
-            'motion_grant_topic': '/test_wp2/grant',
+            'motion_grant_topic': '/test_wp2/grant', 'smoother_provenance_topic': '/test_wp2/provenance',
             'worker_health_timeout_sec': '0.30', 'navigation_authority_timeout_sec': '0.30',
             'planner_source_timeout_sec': '0.30', 'planner_input_timeout_sec': '0.40',
             'planner_recovery_timeout_sec': '1.0',
@@ -62,7 +62,7 @@ class GuardAuthorizationROS(unittest.TestCase):
         ]
         self.pubs = {k:self.node.create_publisher(t,'/test_wp2/'+k,20) for k,t in [
             ('input',Twist),('raw',Twist),('scan',LaserScan),('odom',Odometry),
-            ('health',String),('source',String),('grant',String),('footprint',PolygonStamped)]}
+            ('health',String),('source',String),('grant',String),('footprint',PolygonStamped),('provenance',Float64MultiArray)]}
         self.pubs["localization"] = self.node.create_publisher(String, "/test_wp2/localization", 20)
         self.localization_state = "READY"
         self.health_seq = self.source_seq = self.grant_seq = 0
@@ -76,6 +76,7 @@ class GuardAuthorizationROS(unittest.TestCase):
         self.input_age=.01
         self.nonfinite_command=False
         self.command_value=0.
+        self.result_linear=.1
         self.old_source=None
         self.duplicate=False
         self.corrupt_duplicate=False
@@ -133,7 +134,7 @@ class GuardAuthorizationROS(unittest.TestCase):
                         cycle_id=self.source_seq,scan_counter=self.source_seq,finite=True,
                         scan_receive_monotonic=now-self.input_age,request_dispatched_monotonic=now-.008,
                         worker_solve_end_monotonic=now-.003,planner_result_monotonic=now,
-                        command=dict(linear_x=.1,angular_z=.0))
+                        command=dict(linear_x=self.result_linear,angular_z=.0))
                     self.old_source=source
                 source=json.loads(json.dumps(self.old_source))
                 if self.corrupt_duplicate:source['command']['linear_x']=.15
@@ -145,6 +146,10 @@ class GuardAuthorizationROS(unittest.TestCase):
                     state=self.grant_state,monotonic=now))
             cmd=Twist();cmd.linear.x=self.command_value
             if self.nonfinite_command:cmd.linear.x=float('nan')
+            if self.input_enabled and not self.nonfinite_command and getattr(self, 'provenance_enabled', True):
+                proof=Float64MultiArray();proof.layout.dim=[MultiArrayDimension(label='r1_smoother_provenance_v1')]
+                proof.data=[now,cmd.linear.x,cmd.angular.z,cmd.linear.x,cmd.angular.z]
+                self.pubs['provenance'].publish(proof)
             if self.input_enabled:self.pubs['input'].publish(cmd)
             self.pubs['raw'].publish(cmd)
         rclpy.spin_once(self.node,timeout_sec=.01)
@@ -183,6 +188,7 @@ class GuardAuthorizationROS(unittest.TestCase):
                           'observed_window_sec':time.monotonic()-start,'continuous_zero_samples':len(rows)}))
 
     def test_route_commit_cannot_reuse_nonzero_smoother_tail(self):
+        self.result_linear=.15
         self.route=2
         self.grant_id='grant-route-2'
         self.grant_state='PREPARE'
@@ -194,15 +200,43 @@ class GuardAuthorizationROS(unittest.TestCase):
         while time.monotonic()<start+.18:self.tick()
         rows=[r for r in self.outputs if r[0]>start+.04]
         self.assertTrue(rows)
-        self.assertTrue(all(abs(v)<1e-8 and abs(w)<1e-8 for _,v,w in rows),rows)
+        self.assertTrue(all(abs(v)<1e-8 or abs(v-.1)<1e-8 for _,v,w in rows),rows)
+        self.assertNotEqual(self.statuses[-1]['authorization_state'],'ARMED')
+        self.command_value=.17  # Matches neither the old nor the new authenticated target.
+        self.until(lambda:self.statuses[-1]['reason'] in
+                   ('route_handover_waiting_for_verified_command','planner_result_stale','awaiting_motion_commit'))
         self.assertNotEqual(self.statuses[-1]['authorization_state'],'ARMED')
         self.command_value=0.
         self.until(lambda:self.statuses[-1]['authorization_state']=='ARMED')
         cutoff=time.monotonic()
-        self.command_value=.1
+        self.command_value=.15
         self.until(lambda:any(t>cutoff and v>.05 for t,v,w in self.outputs))
         self.assertEqual(self.statuses[-1]['path_version'],2)
         self.assertEqual(self.statuses[-1]['grant_id'],self.grant_id)
+
+    def test_missing_smoother_provenance_cannot_authorize_seamless_handover(self):
+        self.provenance_enabled=False
+        self.route=2;self.grant_id="grant-no-proof";self.grant_state="PREPARE"
+        self.until(lambda:self.statuses[-1].get("grant_id")==self.grant_id)
+        start=time.monotonic()
+        while time.monotonic()<start+.18:self.tick()
+        self.assertFalse(self.statuses[-1].get("route_handover_seamless_ready",False))
+        self.grant_state="COMMIT"
+        start=time.monotonic()
+        while time.monotonic()<start+.12:self.tick()
+        self.assertNotEqual(self.statuses[-1]["authorization_state"],"ARMED")
+        self.command_value=0.
+        self.until(lambda:self.statuses[-1]["authorization_state"]=="ARMED")
+
+    def test_same_route_target_can_commit_without_zero_tail(self):
+        self.route=2;self.grant_id="grant-route-same";self.grant_state="PREPARE"
+        self.until(lambda:self.statuses[-1].get("grant_id")==self.grant_id)
+        self.until(lambda:self.statuses[-1].get("route_handover_seamless_ready",False))
+        start=time.monotonic();self.grant_state="COMMIT"
+        self.until(lambda:self.statuses[-1]["authorization_state"]=="ARMED")
+        rows=[v for t,v,w in self.outputs if t>start]
+        self.assertTrue(rows)
+        self.assertTrue(all(v>.05 for v in rows),rows)
 
     def test_localization_hold_blocks_old_nonzero_tail_until_both_streams_zero(self):
         self.localization_state = "HOLD"

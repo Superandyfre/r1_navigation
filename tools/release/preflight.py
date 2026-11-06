@@ -15,6 +15,8 @@ import sys
 # All are mandatory, preventing a Python-only or Guard-only release snapshot.
 ROLES = {
  'controller_server': ('nav2_controller','lib/nav2_controller/controller_server'),
+ 'velocity_smoother': ('nav2_velocity_smoother','lib/nav2_velocity_smoother/velocity_smoother'),
+ 'velocity_smoother_core': ('library','libvelocity_smoother_core.so'),
  'controller_core': ('library','libcontroller_server_core.so'),
  'controller_plugin': ('library','libnavigation_neupan_bridge.so'),
  'guard': ('r1_collision_guard','lib/r1_collision_guard/r1_collision_guard_node'),

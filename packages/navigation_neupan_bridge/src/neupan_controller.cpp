@@ -334,7 +334,7 @@ void NeuPANController::beginExecution(const std::string & authority, const std::
   execution_->begin(authority, attempt, monotonicNow());
   owner_lease_.begin(authority, execution_->boot(), attempt, monotonicNow());
   path_published_ = false; goal_published_ = false; plan_valid_ = false;
-  route_update_gate_.reset(); envelope_ = Envelope{};
+  route_update_gate_.reset(); envelope_ = Envelope{}; handover_envelope_ = Envelope{};
   envelope_recovery_active_ = false; guard_stop_active_ = false;
 }
 
@@ -503,6 +503,8 @@ void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
       route_update_gate_.consider(navigation_path, published_path_, now);
     publish_path = !path_published_ || !sameGoal(goal, published_goal_) || route_departed;
     if (publish_path) {
+      handover_envelope_ = path_published_ && sameGoal(goal, published_goal_) && !shadow_mode_ ?
+        envelope_ : Envelope{};
       ++path_version_;
       published_path_ = navigation_path;
       path_published_ = true;
@@ -648,7 +650,31 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
       throw nav2_core::PlannerException("planner_result_recovery_timeout");
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    const bool permitted = ownerReadyLocked(monotonicNow()) && execution_->permitted(monotonicNow());
+    const double now = monotonicNow();
+    const bool owner_ready = ownerReadyLocked(now);
+    // Continue the original still-fresh command until Guard acknowledges the
+    // new route. Once it does, expose the new validated source to the normal
+    // acceleration-limited smoother; Guard independently matches that raw
+    // target to a recent new-route result before committing.
+    if (owner_ready && handover_envelope_.valid &&
+      execution_->handoverPermitted(now, handover_envelope_.planner_result_monotonic)) {
+      const bool use_new = envelope_.valid &&
+        execution_->handoverNewPermitted(now, handover_envelope_.planner_result_monotonic);
+      const auto & selected = use_new ? envelope_ : handover_envelope_;
+      const double min_linear = allow_reverse_ ? -max_reverse_ : 0.0;
+      if (!finite(selected.linear_x) || !finite(selected.angular_z) ||
+        selected.linear_x < min_linear - kActuatorLimitRepresentationEpsilon ||
+        selected.linear_x > max_linear_ + kActuatorLimitRepresentationEpsilon ||
+        std::abs(selected.angular_z) > max_angular_ + kActuatorLimitRepresentationEpsilon) {
+        throw nav2_core::PlannerException("NeuPAN handover command violates limits");
+      }
+      geometry_msgs::msg::TwistStamped command;
+      command.header = pose.header; command.header.stamp = node_->now();
+      command.twist.linear.x = std::clamp(selected.linear_x, min_linear, max_linear_);
+      command.twist.angular.z = std::clamp(selected.angular_z, -max_angular_, max_angular_);
+      return command;
+    }
+    const bool permitted = owner_ready && execution_->permitted(now);
     if (execution_->faulted()) {throw nav2_core::PlannerException(execution_->fault());}
     if (!permitted) {
       geometry_msgs::msg::TwistStamped zero; zero.header = pose.header; zero.header.stamp = node_->now();

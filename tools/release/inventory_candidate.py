@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 
 CMAKE_PACKAGES = {"r1_neupan_runtime", "r1_lidar_preprocess", "r1_collision_guard",
-                  "navigation_2d", "nav2_controller", "navigation_neupan_bridge"}
+                  "navigation_2d", "nav2_controller", "nav2_velocity_smoother", "navigation_neupan_bridge"}
 PYTHON_PACKAGES = {"neupan_ros2", "r1_neupan_integration"}
 
 def inventory(root):

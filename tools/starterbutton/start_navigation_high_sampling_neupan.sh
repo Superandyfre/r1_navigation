@@ -17,7 +17,7 @@ export PYTHONPATH="${navigation_repo}/third_party/NeuPAN:${PYTHONPATH:-}"
 # Record raw ECOS statuses and failure inputs in all spawned workers.
 source "${navigation_repo}/tools/ecos_diagnostics/enable.bash" || exit 1
 
-for navigation_package in nav2_controller r1_neupan_runtime navigation_2d navigation_neupan_bridge \
+for navigation_package in nav2_controller nav2_velocity_smoother r1_neupan_runtime navigation_2d navigation_neupan_bridge \
   r1_neupan_integration r1_lidar_preprocess r1_collision_guard; do
   navigation_prefix="$(ros2 pkg prefix "${navigation_package}" 2>/dev/null || true)"
   case "${navigation_prefix}" in

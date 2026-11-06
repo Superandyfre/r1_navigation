@@ -99,6 +99,7 @@ def main():
     import failstop_chain_ros as chain
     chain.CONTROLLER=install/'nav2_controller/lib/nav2_controller/controller_server'
     chain.GUARD=install/'r1_collision_guard/lib/r1_collision_guard/r1_collision_guard_node'
+    chain.SMOOTHER=install/'nav2_velocity_smoother/lib/nav2_velocity_smoother/velocity_smoother'
     base=chain.FailstopChainROS
     if bundle:
         base.runtime_release_manifest=manifest

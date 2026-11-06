@@ -15,7 +15,7 @@ class CandidateInventory(unittest.TestCase):
             (path/"CMakeCache.txt").write_text("BUILD_TESTING:BOOL=OFF\n")
     def test_hashes_all_packages_without_approval(self):
         data=inventory(self.root)
-        self.assertEqual(data["installed_files"],8)
+        self.assertEqual(data["installed_files"],9)
         self.assertFalse(data["deployment_approved"])
     def test_rejects_test_build(self):
         (self.root/"build/nav2_controller/CMakeCache.txt").write_text("BUILD_TESTING:BOOL=ON\n")
