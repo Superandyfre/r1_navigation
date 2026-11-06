@@ -73,6 +73,14 @@ public:
       !std::isfinite(stable_fallback_after_) || stable_fallback_after_<0 || stable_fallback_after_>=tf_wait_ ||
       !std::isfinite(stable_fallback_span_) || stable_fallback_span_<=0 || stable_fallback_span_>.5)
     {throw std::invalid_argument("invalid shadow filter parameters");}
+    echo_box_=declare_parameter<std::vector<double>>("front_echo_box_base_xyz", std::vector<double>{});
+    if (!echo_box_.empty()) {
+      if (echo_box_.size()!=6 || !std::all_of(echo_box_.begin(),echo_box_.end(),
+          [](double v) {return std::isfinite(v);}) || echo_box_[0]>=echo_box_[1] ||
+          echo_box_[2]>=echo_box_[3] || echo_box_[4]>=echo_box_[5]) {
+        throw std::invalid_argument("invalid_front_echo_box_base_xyz");
+      }
+    }
     auto resources=armMeshResources();
     const auto extra_frames=declare_parameter<std::vector<std::string>>("additional_mesh_frames",std::vector<std::string>{});
     const auto extra_uris=declare_parameter<std::vector<std::string>>("additional_mesh_uris",std::vector<std::string>{});
@@ -204,7 +212,7 @@ private:
     std_msgs::msg::String m;
     m.data=nlohmann::json{{"schema","r1_self_filter_3d_shadow_v1"},
       {"sensor",sensor},{"state",state},{"reason",reason},{"input_points",input},
-      {"filtered_points",removed},{"processing_ms",ms},{"queue_age_sec",age},
+      {"filtered_points",removed},{"fixed_echo_filtered_points",fixed_echo_removed_},{"processing_ms",ms},{"queue_age_sec",age},
       {"dropped_frames",dropped},{"output_published",published},
       {"input_stamp_ns",input_stamp},{"output_stamp_ns",output_stamp},
       {"max_pose_time_error_sec",pose_error},{"mesh_parts",meshes_.size()},{"closed_meshes",closed_meshes_},
@@ -260,6 +268,19 @@ private:
       Poses values;if (!posesFor(input.header.frame_id,time,values)) {return Outcome::WAIT_TF;}
       poses.emplace(index,std::move(values));
     }
+    fcl::Transform3d base_from_cloud=fcl::Transform3d::Identity();
+    if (!echo_box_.empty() && input.header.frame_id!="base_link") {
+      try {
+        const auto t=tf_.lookupTransform("base_link",input.header.frame_id,
+          rclcpp::Time(start,get_clock()->get_clock_type()));
+        const auto & q=t.transform.rotation;const auto & v=t.transform.translation;
+        Eigen::Quaterniond rotation(q.w,q.x,q.y,q.z);
+        if (!rotation.coeffs().allFinite() || rotation.norm()<1e-9 ||
+            !std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) {return Outcome::INVALID;}
+        rotation.normalize();base_from_cloud.linear()=rotation.toRotationMatrix();
+        base_from_cloud.translation()=fcl::Vector3d(v.x,v.y,v.z);
+      } catch (const tf2::TransformException &) {return Outcome::WAIT_TF;}
+    }
     auto output=input;
     for (std::uint32_t row=0;row<output.height;++row) for (std::uint32_t col=0;col<output.width;++col) {
       auto * p=output.data.data()+static_cast<std::size_t>(row)*output.row_step+
@@ -269,7 +290,13 @@ private:
       auto stamp=*absoluteNanoseconds(read<double>(p+offsets.stamp));
       if (stamp<start && start-stamp<=1024) {stamp=start;}
       const auto bin=*sensorTimeBin(start,stamp,bin_ns_,span_ns_);
-      if (nearAnySurface({x,y,z},poses.at(bin.index))) {
+      const fcl::Vector3d base_point=base_from_cloud*fcl::Vector3d(x,y,z);
+      const bool fixed_echo=!echo_box_.empty() &&
+        base_point.x()>=echo_box_[0] && base_point.x()<=echo_box_[1] &&
+        base_point.y()>=echo_box_[2] && base_point.y()<=echo_box_[3] &&
+        base_point.z()>=echo_box_[4] && base_point.z()<=echo_box_[5];
+      if (fixed_echo) {++fixed_echo_removed_;}
+      if (fixed_echo || nearAnySurface({x,y,z},poses.at(bin.index))) {
         invalidate(p,offsets.x);invalidate(p,offsets.y);invalidate(p,offsets.z);++removed;
       }
     }
@@ -319,6 +346,7 @@ private:
     std::uint64_t lost;
     {std::lock_guard<std::mutex> lock(mutex_);if(queue.empty())return;item=queue.front();lost=drops;}
     const auto start=Steady::now();std::size_t removed=0,samples=0;
+    fixed_echo_removed_=0;
     allow_stable_fallback_=std::chrono::duration<double>(start-item.received).count() >= stable_fallback_after_;
     used_stable_fallback_=false;
     max_pose_time_error_sec_=static_cast<double>(bin_ns_)/2e9;
@@ -357,6 +385,8 @@ private:
   }
   tf2_ros::Buffer tf_;tf2_ros::TransformListener listener_;
   std::vector<MeshEntry> meshes_;
+  std::vector<double> echo_box_;
+  std::size_t fixed_echo_removed_{0};
   std::size_t closed_meshes_{0},additional_meshes_{0};std::vector<std::string> open_mesh_frames_;
   std::int64_t bin_ns_{},span_ns_{};double tf_wait_{},max_reuse_age_{},reuse_after_{};
   std::shared_ptr<Cloud> last_cloud_;std::shared_ptr<Scan> last_scan_;

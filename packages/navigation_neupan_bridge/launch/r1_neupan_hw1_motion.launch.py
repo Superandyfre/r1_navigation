@@ -196,6 +196,9 @@ def _build(context):
             "output_scan_topic": "/r1_arm_self_filter_3d/rear_scan",
             "status_topic": "/r1_arm_self_filter_3d/status",
             "rear_scan_enabled": scan_source == "dual",
+            # Fixed, observed front-Livox return cluster in base coordinates.
+            # This is a blind volume: physical objects inside it are also removed.
+            "front_echo_box_base_xyz": [0.045, 0.235, -0.405, -0.305, 0.670, 0.795],
             **extra_meshes,
         }],
     ) if use_3d else None

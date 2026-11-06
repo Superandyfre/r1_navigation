@@ -42,6 +42,7 @@ class MotionWiring(unittest.TestCase):
     def test_dual_3d_mode_has_one_filtered_navigation_path(self):
         c,n=self.build(mesh_filter_mode="3d")
         f=self.params(c,n["r1_arm_self_filter_3d"])
+        self.assertEqual(tuple(f["front_echo_box_base_xyz"]), (0.045, 0.235, -0.405, -0.305, 0.670, 0.795))
         self.assertAlmostEqual(self.params(c,n["r1_arm_footprint"])["mesh_projection_margin_m"],0.0)
         self.assertAlmostEqual(self.params(c,n["n1_16_production_bridge"])["dynamic_footprint_clearance_m"],0.04)
         self.assertFalse(self.params(c,n["r1_localization_monitor"])["static_map_overlap_hard_fault"])

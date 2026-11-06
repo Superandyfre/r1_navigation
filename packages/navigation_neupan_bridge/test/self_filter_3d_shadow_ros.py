@@ -37,7 +37,8 @@ class ShadowFilter(unittest.TestCase):
         exe=os.environ["NEUPAN_TEST_3D_SHADOW"];log=tempfile.TemporaryFile(mode="w+")
         uri="package://rpp_components_description/meshes/gripper/agibot/omniPicker/narrow1_Link.STL"
         proc=subprocess.Popen([exe,"--ros-args","-p","additional_mesh_frames:=[held_object]",
-            "-p","additional_mesh_uris:=["+uri+"]","-p","additional_mesh_scales:=[1.0]"],
+            "-p","additional_mesh_uris:=["+uri+"]","-p","additional_mesh_scales:=[1.0]",
+            "-p","front_echo_box_base_xyz:=[0.045,0.235,-0.405,-0.305,0.670,0.795]"],
             stdout=log,stderr=subprocess.STDOUT)
         position=1.;missing=False;last=0.
         def tick():
@@ -76,13 +77,14 @@ class ShadowFilter(unittest.TestCase):
             position=1.5;start=time.monotonic()
             while time.monotonic()<start+.35:tick()
             msg=PointCloud2();msg.header.frame_id="lidar_link";msg.header.stamp=captured.to_msg()
-            msg.height=1;msg.width=4;msg.is_bigendian=False;msg.is_dense=True;msg.point_step=20;msg.row_step=80
+            msg.height=1;msg.width=6;msg.is_bigendian=False;msg.is_dense=True;msg.point_step=20;msg.row_step=120
             msg.fields=[PointField(name="x",offset=0,datatype=7,count=1),PointField(name="y",offset=4,datatype=7,count=1),
                 PointField(name="z",offset=8,datatype=7,count=1),PointField(name="timestamp",offset=12,datatype=8,count=1)]
             ts=float(captured.nanoseconds)
             # Third point was acquired 150 ms later after the gripper moved.
-            msg.data=struct.pack("<fffdfffdfffdfffd",x,y,0.,ts,x,y,.40,ts,
-                1.5+vx,y,0.,ts+150000000.,2.5+vx,y,0.,ts)
+            msg.data=struct.pack("<"+"fffd"*6,x,y,0.,ts,x,y,.40,ts,
+                1.5+vx,y,0.,ts+150000000.,2.5+vx,y,0.,ts,
+                .15,-.35,.73,ts,.15,-.35,.80,ts)
             scan=LaserScan();scan.header.frame_id="laser_link";scan.header.stamp=captured.to_msg()
             scan.angle_min=math.atan2(y,x);scan.angle_max=scan.angle_min
             scan.angle_increment=.001;scan.time_increment=.0001;scan.scan_time=.001
@@ -97,6 +99,8 @@ class ShadowFilter(unittest.TestCase):
             self.assertTrue(all(math.isnan(v) for v in third),third)
             fourth=struct.unpack_from("<fff",clouds[-1].data,60)
             self.assertTrue(all(math.isnan(v) for v in fourth),fourth)
+            self.assertTrue(math.isnan(struct.unpack_from("<f",clouds[-1].data,80)[0]), "observed cluster was not filtered")
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,100)[0]), "nearby return outside box was removed")
             until(lambda:any(json.loads(x).get("additional_meshes")==1 for x in states),2.)
             self.assertTrue(math.isinf(scans[-1].ranges[0]),scans[-1].ranges)
             msg.width=2;msg.row_step=40
