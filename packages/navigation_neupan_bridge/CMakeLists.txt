@@ -71,6 +71,7 @@ ament_target_dependencies(r1_localization_monitor
 
 add_executable(r1_arm_footprint src/r1_arm_footprint_node.cpp)
 target_compile_features(r1_arm_footprint PUBLIC cxx_std_17)
+target_include_directories(r1_arm_footprint PRIVATE include)
 ament_target_dependencies(r1_arm_footprint geometric_shapes geometry_msgs rclcpp sensor_msgs std_msgs tf2 tf2_ros)
 
 add_executable(r1_dynamic_footprint_sync src/r1_dynamic_footprint_sync.cpp)
@@ -124,6 +125,8 @@ if(BUILD_TESTING)
   pluginlib_export_plugin_description_file(nav2_costmap_2d test/controlled_current_plugins.xml)
   install(TARGETS controlled_current_layer LIBRARY DESTINATION lib)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_mesh_pose_snapshot test/test_mesh_pose_snapshot.cpp)
+  target_include_directories(test_mesh_pose_snapshot PRIVATE include)
   ament_add_gtest(test_same_uuid_adapter_guard test/test_same_uuid_adapter_guard.cpp)
   target_compile_features(test_same_uuid_adapter_guard PUBLIC cxx_std_17)
   ament_target_dependencies(test_same_uuid_adapter_guard nav2_core nav2_costmap_2d pluginlib)

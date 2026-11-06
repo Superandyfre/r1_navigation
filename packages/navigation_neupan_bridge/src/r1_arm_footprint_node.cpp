@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "geometric_shapes/mesh_operations.h"
+#include "navigation_neupan_bridge/mesh_pose_snapshot.hpp"
 #include "geometry_msgs/msg/polygon.hpp"
 #include "geometry_msgs/msg/polygon_stamped.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -140,16 +142,16 @@ bool validJointState(const sensor_msgs::msg::JointState & message, const std::st
   if (message.name.size() != message.position.size()) {
     return false;
   }
-  int found = 0;
+  std::array<bool, 7> seen{};
   for (size_t index = 0; index < message.name.size(); ++index) {
-    if (message.name[index].rfind(prefix + "joint", 0) == 0) {
-      if (!std::isfinite(message.position[index])) {
-        return false;
+    for (size_t joint = 0; joint < seen.size(); ++joint) {
+      if (message.name[index] == prefix + "joint" + std::to_string(joint + 1)) {
+        if (seen[joint] || !std::isfinite(message.position[index])) {return false;}
+        seen[joint] = true;
       }
-      ++found;
     }
   }
-  return found == 7;
+  return std::all_of(seen.begin(), seen.end(), [](bool present) {return present;});
 }
 }  // namespace
 
@@ -171,6 +173,9 @@ public:
     mesh_projection_frequency_ = declare_parameter<double>("mesh_projection_frequency", 10.0);
     mesh_reprojection_joint_delta_rad_ = declare_parameter<double>(
       "mesh_reprojection_joint_delta_rad", 0.01);
+    mesh_translation_delta_m_ = declare_parameter<double>("mesh_translation_delta_m", 0.005);
+    mesh_tf_max_age_sec_ = declare_parameter<double>("mesh_tf_max_age_sec", 0.50);
+    mesh_cache_grace_sec_ = declare_parameter<double>("mesh_cache_grace_sec", 0.50);
     circle_samples_ = declare_parameter<int>("circle_samples", 12);
     base_footprint_ = declare_parameter<std::vector<double>>(
       "base_footprint_points", std::vector<double>{0.341, 0.266, 0.341, -0.266, -0.341, -0.266,
@@ -182,7 +187,8 @@ public:
       tool_radius_m_ <= 0.0 || projection_margin_m_ < 0.0 || mesh_projection_margin_m_ < 0.0 ||
       planner_footprint_margin_m_ < 0.0 ||
       mesh_filter_frequency_ <= 0.0 || mesh_projection_frequency_ <= 0.0 ||
-      mesh_reprojection_joint_delta_rad_ < 0.0 ||
+      mesh_reprojection_joint_delta_rad_ <= 0.0 || mesh_translation_delta_m_ <= 0.0 ||
+      mesh_tf_max_age_sec_ <= 0.0 || mesh_cache_grace_sec_ <= 0.0 ||
       circle_samples_ < 6 ||
       base_footprint_.size() < 6 || base_footprint_.size() % 2 != 0 ||
       fallback_footprint_.size() < 6 || fallback_footprint_.size() % 2 != 0)
@@ -200,7 +206,16 @@ public:
         if (!validJointState(*message, "left_")) {
           return;
         }
+        const auto stamp = rclcpp::Time(message->header.stamp, get_clock()->get_clock_type());
+        const double age = (get_clock()->now() - stamp).seconds();
+        if (stamp.nanoseconds() <= 0 || !std::isfinite(age) || age < -0.05 ||
+          age > state_timeout_sec_) {return;}
         std::lock_guard<std::mutex> lock(mutex_);
+        if (get_clock()->now().nanoseconds() + 50000000LL < left_state_stamp_ns_) {
+          left_state_stamp_ns_ = 0;  // ROS clock moved backwards.
+        }
+        if (stamp.nanoseconds() <= left_state_stamp_ns_) {return;}
+        left_state_stamp_ns_ = stamp.nanoseconds();
         left_state_received_ = std::chrono::steady_clock::now();
         left_state_valid_ = true;
         for (size_t index = 0; index < message->name.size(); ++index) {
@@ -216,7 +231,16 @@ public:
         if (!validJointState(*message, "right_")) {
           return;
         }
+        const auto stamp = rclcpp::Time(message->header.stamp, get_clock()->get_clock_type());
+        const double age = (get_clock()->now() - stamp).seconds();
+        if (stamp.nanoseconds() <= 0 || !std::isfinite(age) || age < -0.05 ||
+          age > state_timeout_sec_) {return;}
         std::lock_guard<std::mutex> lock(mutex_);
+        if (get_clock()->now().nanoseconds() + 50000000LL < right_state_stamp_ns_) {
+          right_state_stamp_ns_ = 0;  // ROS clock moved backwards.
+        }
+        if (stamp.nanoseconds() <= right_state_stamp_ns_) {return;}
+        right_state_stamp_ns_ = stamp.nanoseconds();
         right_state_received_ = std::chrono::steady_clock::now();
         right_state_valid_ = true;
         for (size_t index = 0; index < message->name.size(); ++index) {
@@ -488,34 +512,48 @@ private:
     }
   }
 
+  bool readMeshPoses(std::vector<MeshPose> & poses)
+  {
+    if (!mesh_model_ready_) {return false;}
+    const auto now = get_clock()->now();
+    for (const auto & part : mesh_parts_) {
+      try {
+        const auto stamped = tf_buffer_.lookupTransform(base_frame_, part.frame, tf2::TimePointZero);
+        const auto stamp = rclcpp::Time(stamped.header.stamp, now.get_clock_type());
+        const double age = (now - stamp).seconds();
+        // Static transforms have zero stamps. Dynamic transforms must not
+        // be accepted forever simply because joint messages are still arriving.
+        if (stamp.nanoseconds() != 0 && (!std::isfinite(age) || age < -0.05 ||
+          age > mesh_tf_max_age_sec_)) {return false;}
+        const auto & t = stamped.transform.translation;
+        const auto & q = stamped.transform.rotation;
+        MeshPose pose{t.x,t.y,t.z,q.x,q.y,q.z,q.w};
+        if (meshPosesDiffer({pose}, {pose}, mesh_translation_delta_m_,
+          mesh_reprojection_joint_delta_rad_)) {return false;}
+        poses.push_back(pose);
+      } catch (const tf2::TransformException &) {return false;}
+    }
+    return true;
+  }
+
   bool projectCollisionMeshes(
+    const std::vector<MeshPose> & poses,
     std::vector<std::vector<Point2D>> & component_polygons,
     std::vector<std::vector<Point2D>> & raw_polygons, std::vector<Point2D> & output)
   {
-    if (!mesh_model_ready_) {
-      return false;
-    }
+    if (poses.size() != mesh_parts_.size()) {return false;}
     std::vector<Point2D> all_points;
-    for (const auto & part : mesh_parts_) {
+    for (size_t i = 0; i < mesh_parts_.size(); ++i) {
+      const auto & part = mesh_parts_[i];
+      const auto & pose = poses[i];
       std::vector<Point2D> points;
-      try {
-        const auto transform = tf_buffer_.lookupTransform(
-          base_frame_, part.frame,
-          tf2::TimePointZero);
-        const tf2::Quaternion rotation_q(
-          transform.transform.rotation.x, transform.transform.rotation.y,
-          transform.transform.rotation.z, transform.transform.rotation.w);
-        const tf2::Matrix3x3 rotation(rotation_q);
-        const tf2::Vector3 translation(
-          transform.transform.translation.x, transform.transform.translation.y,
-          transform.transform.translation.z);
-        for (const auto & vertex : part.vertices) {
-          const auto projected = rotation *
-            tf2::Vector3(vertex.x, vertex.y, vertex.z) + translation;
-          points.push_back({projected.x(), projected.y()});
-        }
-      } catch (const tf2::TransformException &) {
-        return false;
+      tf2::Quaternion rotation_q(pose.qx, pose.qy, pose.qz, pose.qw);
+      rotation_q.normalize();
+      const tf2::Matrix3x3 rotation(rotation_q);
+      const tf2::Vector3 translation(pose.x, pose.y, pose.z);
+      for (const auto & vertex : part.vertices) {
+        const auto projected = rotation * tf2::Vector3(vertex.x, vertex.y, vertex.z) + translation;
+        points.push_back({projected.x(), projected.y()});
       }
       auto hull = convexHull(std::move(points));
       if (hull.size() < 3) {
@@ -548,11 +586,24 @@ private:
     }
     last_mesh_filter_started_ = steady_now;
     std::vector<std::vector<Point2D>> polygons;
+    std::string filter_state, filter_reason;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      polygons = mesh_self_filter_polygons_;
+      filter_state = mesh_filter_state_; filter_reason = mesh_filter_reason_;
+      if (last_mesh_verified_ != SteadyTime{} &&
+        std::chrono::duration<double>(steady_now - last_mesh_verified_).count() <= mesh_cache_grace_sec_)
+      {polygons = mesh_self_filter_polygons_;}
     }
     if (message->header.frame_id != base_frame_ || polygons.empty()) {
+      std_msgs::msg::String status;
+      const std::string reason = message->header.frame_id != base_frame_ ?
+        "scan_frame_mismatch" : (filter_reason == "tf_valid_cache" ||
+        filter_reason == "tf_valid_projected" ? "geometry_cache_expired" : filter_reason);
+      status.data = "{\"schema\":\"r1_arm_mesh_filter_status_v1\",\"state\":\"FAULT\","
+        "\"reason\":\"" + reason + "\",\"input_points\":" +
+        std::to_string(message->ranges.size()) +
+        ",\"self_filtered_points\":0,\"component_polygons\":0}";
+      mesh_filter_status_pub_->publish(status);
       return;
     }
     sensor_msgs::msg::LaserScan filtered = *message;
@@ -575,7 +626,8 @@ private:
     mesh_shadow_scan_pub_->publish(filtered);
     std_msgs::msg::String status;
     status.data =
-      "{\"schema\":\"r1_arm_mesh_filter_status_v1\",\"state\":\"READY\",\"input_points\":" +
+      "{\"schema\":\"r1_arm_mesh_filter_status_v1\",\"state\":\"" + filter_state +
+      "\",\"reason\":\"" + filter_reason + "\",\"input_points\":" +
       std::to_string(message->ranges.size()) + ",\"self_filtered_points\":" +
       std::to_string(removed) + ",\"component_polygons\":" + std::to_string(polygons.size()) + "}";
     mesh_filter_status_pub_->publish(status);
@@ -635,34 +687,65 @@ private:
     }
     if (!states_ready) {
       std::lock_guard<std::mutex> lock(mutex_);
+      mesh_filter_state_ = "FAULT"; mesh_filter_reason_ = "arm_state_stale";
       if (!mesh_self_filter_polygons_.empty()) {
         mesh_self_filter_polygons_.clear();
         mesh_cached_components_.clear();
         mesh_cached_raw_components_.clear();
         mesh_cached_shadow_.clear();
         mesh_projected_joint_positions_.clear();
+        mesh_projected_poses_.clear();
         publishMeshComponents({});
         publishGuardMeshComponents({}, {});
       }
       return;
     }
 
-    // The exact mesh is expensive to project but joint messages continue while
-    // the arms are stationary. Re-publish the validated cached geometry so
-    // downstream freshness checks remain live without reprocessing meshes.
+    // Every part's actual TF participates in cache validation. In particular,
+    // gripper articulation can change while all 14 arm joints remain still.
+    std::vector<MeshPose> poses;
+    if (!readMeshPoses(poses)) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const bool compatible = !geometry_changed && last_mesh_verified_ != SteadyTime{} &&
+        std::chrono::duration<double>(steady_now - last_mesh_verified_).count() <= mesh_cache_grace_sec_;
+      mesh_filter_state_ = compatible ? "DEGRADED" : "FAULT";
+      mesh_filter_reason_ = compatible ? "tf_gap_using_compatible_cache" : "tf_or_cache_invalid";
+      if (!compatible) {
+        mesh_self_filter_polygons_.clear(); mesh_cached_components_.clear();
+        mesh_cached_raw_components_.clear(); mesh_cached_shadow_.clear();
+        mesh_projected_joint_positions_.clear(); mesh_projected_poses_.clear();
+        publishMeshComponents({}); publishGuardMeshComponents({}, {});
+      }
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      geometry_changed = geometry_changed || meshPosesDiffer(
+        poses, mesh_projected_poses_, mesh_translation_delta_m_, mesh_reprojection_joint_delta_rad_);
+    }
+    // Stable validated transforms can reuse the expensive projected meshes.
     if (!geometry_changed && !cached_components.empty() && !cached_shadow.empty()) {
       publishMeshShadowPolygon(cached_shadow);
       publishMeshComponents(cached_components);
       publishGuardMeshComponents(cached_raw_components, cached_components);
       std::lock_guard<std::mutex> lock(mutex_);
       last_mesh_projection_ = std::chrono::steady_clock::now();
+      last_mesh_verified_ = last_mesh_projection_;
+      mesh_filter_state_ = "READY"; mesh_filter_reason_ = "tf_valid_cache";
       return;
     }
 
     std::vector<std::vector<Point2D>> mesh_components;
     std::vector<std::vector<Point2D>> raw_components;
     std::vector<Point2D> mesh_shadow;
-    if (!projectCollisionMeshes(mesh_components, raw_components, mesh_shadow)) {
+    if (!projectCollisionMeshes(poses, mesh_components, raw_components, mesh_shadow)) {
+      // New transforms cannot safely be represented by the older geometry.
+      std::lock_guard<std::mutex> lock(mutex_);
+      mesh_filter_state_ = "FAULT"; mesh_filter_reason_ = "mesh_projection_failed";
+      mesh_self_filter_polygons_.clear(); mesh_cached_components_.clear();
+      mesh_cached_raw_components_.clear(); mesh_cached_shadow_.clear();
+      mesh_projected_joint_positions_.clear(); mesh_projected_poses_.clear();
+      publishMeshComponents({}); publishGuardMeshComponents({}, {});
       return;
     }
     publishMeshShadowPolygon(mesh_shadow);
@@ -674,7 +757,10 @@ private:
     mesh_cached_raw_components_ = std::move(raw_components);
     mesh_cached_shadow_ = std::move(mesh_shadow);
     mesh_projected_joint_positions_ = std::move(current_joint_positions);
+    mesh_projected_poses_ = std::move(poses);
     last_mesh_projection_ = std::chrono::steady_clock::now();
+    last_mesh_verified_ = last_mesh_projection_;
+    mesh_filter_state_ = "READY"; mesh_filter_reason_ = "tf_valid_projected";
   }
 
   void footprintTick()
@@ -743,6 +829,9 @@ private:
   double mesh_filter_frequency_{10.0};
   double mesh_projection_frequency_{10.0};
   double mesh_reprojection_joint_delta_rad_{0.01};
+  double mesh_translation_delta_m_{0.005};
+  double mesh_tf_max_age_sec_{0.50};
+  double mesh_cache_grace_sec_{0.50};
   int circle_samples_{12};
   std::vector<double> base_footprint_;
   std::vector<double> fallback_footprint_;
@@ -754,12 +843,16 @@ private:
   std::vector<Point2D> mesh_cached_shadow_;
   std::unordered_map<std::string, double> latest_mesh_joint_positions_;
   std::unordered_map<std::string, double> mesh_projected_joint_positions_;
+  std::vector<MeshPose> mesh_projected_poses_;
+  SteadyTime last_mesh_verified_{};
+  std::string mesh_filter_state_{"FAULT"}, mesh_filter_reason_{"awaiting_geometry"};
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
   SteadyTime last_mesh_filter_started_{};
   std::mutex mutex_;
   SteadyTime left_state_received_{};
   SteadyTime right_state_received_{};
+  std::int64_t left_state_stamp_ns_{0}, right_state_stamp_ns_{0};
   SteadyTime last_footprint_published_{};
   SteadyTime last_mesh_projection_{};
   double last_publish_interval_sec_{-1.0};
