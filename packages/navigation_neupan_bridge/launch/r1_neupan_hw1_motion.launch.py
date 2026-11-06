@@ -69,6 +69,43 @@ def _validate_lidar_calibration(calibration):
             "HW1 lidar calibration differs from r1_description for: " + ", ".join(mismatches))
 
 
+def _validate_speed_profile(bridge_share, guard_share, command_profile):
+    """Refuse contradictory planner and command-chain velocity profiles."""
+    try:
+        def load(share, name):
+            with open(os.path.join(share, "config", name), encoding="utf-8") as source:
+                return yaml.safe_load(source)
+        planner = load(bridge_share, "planner_r1_hw1.yaml")
+        nav = load(bridge_share, "nav2_params_r1_neupan_hw1.yaml")
+        guard = load(guard_share, "r1_collision_guard_hw1.yaml")["r1_collision_guard"]["ros__parameters"]
+        controller = nav["controller_server"]["ros__parameters"]["FollowPath"]
+        smoother = nav["neupan_velocity_smoother"]["ros__parameters"]
+        linear, angular = map(float, planner["robot"]["max_speed"][:2])
+        reference = float(planner["ref_speed"])
+        limits = {"planner_linear": linear, "planner_angular": angular,
+                  "reference": reference, "controller_forward": float(controller["max_linear"]),
+                  "controller_reverse": float(controller["max_reverse"]),
+                  "controller_angular": float(controller["max_angular"]),
+                  "guard_forward": float(guard["max_linear_mps"]),
+                  "guard_reverse": float(guard["max_reverse_mps"]),
+                  "guard_angular": float(guard["max_angular_radps"])}
+        if command_profile == "smoothed":
+            limits.update(smoother_forward=float(smoother["max_velocity"][0]),
+                          smoother_reverse=-float(smoother["min_velocity"][0]),
+                          smoother_angular_forward=float(smoother["max_velocity"][2]),
+                          smoother_angular_reverse=-float(smoother["min_velocity"][2]))
+        if any(not math.isfinite(v) or v <= 0 for v in limits.values()):
+            raise ValueError("speed values must be finite and positive")
+        if reference > linear + 1e-9:
+            raise ValueError("reference exceeds planner linear speed")
+        for name, value in limits.items():
+            required = angular if "angular" in name else linear
+            if name not in {"planner_linear", "planner_angular", "reference"} and value + 1e-9 < required:
+                raise ValueError(f"{name}={value} is below planner limit {required}")
+    except (OSError, KeyError, TypeError, ValueError, IndexError, yaml.YAMLError) as error:
+        raise RuntimeError("inconsistent HW1 speed profile: " + str(error)) from error
+
+
 def _build(context):
     bridge_share = get_package_share_directory("navigation_neupan_bridge")
     integration_share = get_package_share_directory("r1_neupan_integration")
@@ -119,6 +156,7 @@ def _build(context):
         raise RuntimeError("planner_footprint_margin_m must be within [0.0, 0.30]")
     if command_profile not in {"direct", "smoothed"}:
         raise RuntimeError("command_profile must be direct or smoothed")
+    _validate_speed_profile(bridge_share, guard_share, command_profile)
     if not cmd_vel_out_topic.startswith("/"):
         raise RuntimeError("cmd_vel_out_topic must be an absolute ROS topic")
     required_sections = {

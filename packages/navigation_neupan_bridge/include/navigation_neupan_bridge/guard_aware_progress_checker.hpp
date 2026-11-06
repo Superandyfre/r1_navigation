@@ -42,6 +42,7 @@ private:
   struct NeupanInfeasibility
   {
     bool active{false};
+    double dune_min_m{0.0};
     rclcpp::Time started{0, 0, RCL_ROS_TIME};
     rclcpp::Time received{0, 0, RCL_ROS_TIME};
   };

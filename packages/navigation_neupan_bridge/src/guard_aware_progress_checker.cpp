@@ -78,6 +78,7 @@ void GuardAwareProgressChecker::neupanSemanticsCallback(
       dune_min.is_number() ? dune_min.get<double>() : 0.0;
     // Diagnose the optimizer response; no external obstacle policy drives it.
     infeasibility.active = stop && dune_min_m < 0.0;
+    infeasibility.dune_min_m = dune_min_m;
     wait.active = stop && !info.value("arrive", false) && !infeasibility.active;
   } catch (const std::exception &) {
     infeasibility.active = false;
@@ -197,10 +198,16 @@ bool GuardAwareProgressChecker::check(geometry_msgs::msg::PoseStamped & current_
   const auto now = clock_->now();
   const auto pose = toPose2D(current_pose);
   if (isNeupanInfeasible(now)) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    RCLCPP_WARN(rclcpp::get_logger("neupan_progress_checker"),
+      "progress failure: neupan_infeasible duration=%.3f dune_min_m=%.4f",
+      (now - neupan_infeasibility_.started).seconds(), neupan_infeasibility_.dune_min_m);
     return false;
   }
   const int wait_state = neupanWaitState(now);
   if (wait_state < 0) {
+    RCLCPP_WARN(rclcpp::get_logger("neupan_progress_checker"),
+      "progress failure: neupan_stopped_without_arrival exceeded %.3f sec", max_neupan_wait_sec_);
     return false;
   }
   if (wait_state > 0) {
@@ -215,6 +222,8 @@ bool GuardAwareProgressChecker::check(geometry_msgs::msg::PoseStamped & current_
     if (max_guarded_block_time_sec_ > 0.0 &&
       (now - guard_blocked_since_).seconds() > max_guarded_block_time_sec_)
     {
+      RCLCPP_WARN(rclcpp::get_logger("neupan_progress_checker"),
+        "progress failure: guard_blocked exceeded %.3f sec", max_guarded_block_time_sec_);
       return false;
     }
     resetBaseline(pose, now);
@@ -225,7 +234,14 @@ bool GuardAwareProgressChecker::check(geometry_msgs::msg::PoseStamped & current_
     resetBaseline(pose, now);
     return true;
   }
-  return (now - baseline_time_).seconds() <= movement_time_allowance_sec_;
+  const bool within_allowance = (now - baseline_time_).seconds() <= movement_time_allowance_sec_;
+  if (!within_allowance) {
+    RCLCPP_WARN(rclcpp::get_logger("neupan_progress_checker"),
+      "progress failure: insufficient_odometry_motion elapsed=%.3f displacement_m=%.4f yaw_change_rad=%.4f",
+      (now - baseline_time_).seconds(), std::hypot(pose.x - baseline_pose_.x, pose.y - baseline_pose_.y),
+      std::abs(normalizeAngle(pose.theta - baseline_pose_.theta)));
+  }
+  return within_allowance;
 }
 
 void GuardAwareProgressChecker::reset()

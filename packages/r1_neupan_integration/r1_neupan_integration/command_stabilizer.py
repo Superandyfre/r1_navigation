@@ -186,6 +186,8 @@ class GearTransitionGate:
         self._candidate_cycles = 0
         self._target_gear: int | None = None
         self._stop_started = 0.0
+        self._last_aligned = None
+        self._last_aligned_at = 0.0
 
     @staticmethod
     def _sign(value: float, deadband: float) -> int:
@@ -216,6 +218,8 @@ class GearTransitionGate:
             if low_speed_sign == 0:
                 return GearTransitionDecision(0.0, angular_z, "DRIVE", "linear_deadband")
             if low_speed_sign == active_gear:
+                self._last_aligned = (linear_x, angular_z, active_gear)
+                self._last_aligned_at = now
                 return GearTransitionDecision(
                     linear_x, angular_z, "DRIVE", "aligned_below_transition_deadband")
             return GearTransitionDecision(
@@ -223,6 +227,8 @@ class GearTransitionGate:
         if requested_gear == active_gear:
             if self._candidate_gear is not None or self._target_gear is not None:
                 self.reset()
+            self._last_aligned = (linear_x, angular_z, active_gear)
+            self._last_aligned_at = now
             return GearTransitionDecision(
                 linear_x, angular_z, "DRIVE", "gear_aligned")
 
@@ -233,6 +239,15 @@ class GearTransitionGate:
                 self._candidate_gear = requested_gear
                 self._candidate_cycles = 1
             if self._candidate_cycles < self.config.direction_commit_cycles:
+                # A single opposite-sign solve is not yet a change in intent.
+                # Only carry the last aligned command across a short, fresh
+                # confirmation window; never extend it or use stale odometry.
+                if (odom_fresh and self._last_aligned is not None and
+                        self._last_aligned[2] == active_gear and
+                        0.0 <= now - self._last_aligned_at <= 0.3):
+                    return GearTransitionDecision(
+                        self._last_aligned[0], self._last_aligned[1], "DRIVE",
+                        "opposite_direction_confirmation_hold")
                 return GearTransitionDecision(
                     0.0, 0.0, "CONFIRM", "opposite_direction_commit_pending")
             self._target_gear = requested_gear
@@ -244,9 +259,12 @@ class GearTransitionGate:
         if not odom_fresh:
             return GearTransitionDecision(0.0, 0.0, "STOPPING", "odom_stale_before_gear_change")
         if abs(observed_linear_x) > self.config.stopped_speed_mps:
-            return GearTransitionDecision(0.0, 0.0, "STOPPING", "waiting_for_zero_speed")
-        if now - self._stop_started > self.config.stop_timeout_sec:
-            return GearTransitionDecision(0.0, 0.0, "STOPPING", "gear_change_stop_timeout")
+            reason = ("gear_change_stop_timeout" if
+                      now - self._stop_started > self.config.stop_timeout_sec else
+                      "waiting_for_zero_speed")
+            return GearTransitionDecision(0.0, 0.0, "STOPPING", reason)
+        # A late but fresh stopped observation is still a valid confirmation.
+        # The timeout diagnoses a slow stop; it must not latch the gear forever.
         target = self._target_gear
         self.reset()
         return GearTransitionDecision(

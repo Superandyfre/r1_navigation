@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ensure all forward speed limits agree; reverse limits remain independent."""
+"""Keep planner and bidirectional command chain velocity limits consistent."""
 from pathlib import Path
 import unittest
 import yaml
@@ -32,9 +32,9 @@ class SpeedProfileConsistency(unittest.TestCase):
         self.assertGreaterEqual(controller['max_linear'], expected)
         self.assertGreaterEqual(smoother['max_velocity'][0], expected)
         self.assertGreaterEqual(guard['max_linear_mps'], expected)
-        self.assertEqual(controller['max_reverse'], .20)
-        self.assertEqual(smoother['min_velocity'][0], -.20)
-        self.assertEqual(guard['max_reverse_mps'], .20)
+        self.assertGreaterEqual(controller['max_reverse'], expected)
+        self.assertLessEqual(smoother['min_velocity'][0], -expected)
+        self.assertGreaterEqual(guard['max_reverse_mps'], expected)
         self.assertLessEqual(smoother['max_accel'][0], planner['robot']['max_acce'][0])
 
 if __name__ == '__main__':

@@ -8,8 +8,9 @@ from collections import defaultdict
 from pathlib import Path
 
 OBSERVE = {"/r1_collision_guard/status", "/r1_localization_health",
-           "/neupan_controller_status", "/neupan_worker_health", "/neupan_execution_context"}
-VELOCITIES = {"/neupan_nav2_raw_cmd_vel", "/neupan_nav2_smoothed_cmd_vel", "/cmd_vel"}
+           "/neupan_controller_status", "/neupan_worker_health", "/neupan_execution_context",
+           "/neupan_semantics"}
+VELOCITIES = {"/neupan_nav2_raw_cmd_vel", "/neupan_nav2_smoothed_cmd_vel", "/cmd_vel", "/odom"}
 
 def percentile(sorted_values, q):
     return sorted_values[min(len(sorted_values)-1, int(q*(len(sorted_values)-1)))] if sorted_values else None
@@ -37,13 +38,33 @@ def analyze(paths):
                     msg = deserialize_message(data, types[ident])
                     if name in OBSERVE:
                         payload = json.loads(msg.data)
-                        state = {key:payload.get(key) for key in ("state","reason","authorization_state",
-                            "authorization_reason","fault_latched","fault_reason","navigation_attempt_id") if key in payload}
-                        if state != previous.get(name):
+                        if name == "/neupan_semantics":
+                            info = payload.get("info") or {}
+                            gate = payload.get("gear_transition_gate") or {}
+                            dune = payload.get("dune") or {}
+                            signature = {"stop": info.get("stop"), "arrive": info.get("arrive"),
+                                         "active_gear": payload.get("active_gear"),
+                                         "requested_gear": payload.get("requested_gear"),
+                                         "gear_state": gate.get("state"), "gear_reason": gate.get("reason"),
+                                         "path_version": payload.get("path_version"),
+                                         "goal_version": payload.get("goal_version")}
+                            state = dict(signature, dune_min_m=dune.get("min_distance_m"),
+                                         obstacle_points=payload.get("obstacle_points_count"),
+                                         raw_linear_x=gate.get("raw_linear_x"),
+                                         output_linear_x=gate.get("linear_x"),
+                                         odom_fresh=gate.get("odom_fresh"),
+                                         goal_distance=payload.get("goal_distance"),
+                                         scan_filter=payload.get("scan_filter"))
+                        else:
+                            state = {key:payload.get(key) for key in ("state","reason","authorization_state",
+                                "authorization_reason","fault_latched","fault_reason","navigation_attempt_id") if key in payload}
+                            signature = state
+                        if signature != previous.get(name):
                             transitions.append(dict(topic=name, receive_ns=stamp, state=state))
-                            previous[name] = state
+                            previous[name] = signature
                     else:
-                        x, w = float(msg.linear.x), float(msg.angular.z)
+                        twist = msg.twist.twist if name == "/odom" else msg
+                        x, w = float(twist.linear.x), float(twist.angular.z)
                         is_zero = math.isfinite(x) and math.isfinite(w) and x == 0.0 and w == 0.0
                         # Store transitions only; this is a diagnostic, not a proof of physical motion.
                         state = "zero" if is_zero else "nonzero_or_nonfinite"

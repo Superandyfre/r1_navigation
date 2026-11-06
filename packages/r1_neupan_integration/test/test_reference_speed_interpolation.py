@@ -64,6 +64,29 @@ class ActualReferenceSpeed(unittest.TestCase):
         self.assertGreater(float(velocity[0, 0]), .35)
         self.assertLessEqual(float(velocity[0, 0]), .501)
 
+    def test_clear_reverse_path_respects_configured_limit(self):
+        from neupan import neupan
+        root = Path(__file__).resolve().parents[3]
+        cfg = yaml.safe_load((root / "packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml").read_text())
+        cfg["pan"]["dune_checkpoint"] = str(root / "packages/r1_neupan_integration/config/models/dune_model_5000.pth")
+        cfg["ipath"]["loop"] = False
+        core = neupan(**{k: v for k, v in cfg.items() if k not in ("robot", "ipath", "pan", "adjust")},
+            robot_kwargs=cfg["robot"], ipath_kwargs=cfg["ipath"],
+            pan_kwargs=cfg["pan"], adjust_kwargs=cfg["adjust"])
+        core.set_initial_path([np.array([[x], [0.], [0.], [-1.]]) for x in np.linspace(0., -10., 101)])
+        state = np.zeros((3, 1))
+        velocity = np.zeros((2, 1))
+        obstacles = np.array([[3., 5., 7.], [3., 3., 3.]])
+        samples = []
+        for _ in range(18):
+            velocity, info = core(state, obstacles, measured_velocity=velocity)
+            self.assertFalse(info["stop"])
+            samples.append(float(velocity[0, 0]))
+            state[0, 0] += samples[-1] * .25
+            state[2, 0] += float(velocity[1, 0]) * .25
+        self.assertLess(samples[-1], -.30)
+        self.assertGreaterEqual(min(samples), -.501)
+
 
 if __name__ == "__main__":
     unittest.main()

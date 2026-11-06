@@ -98,11 +98,28 @@ def main() -> None:
     timeout_gate.decide(
         linear_x=-0.10, angular_z=0.0, active_gear=1,
         observed_linear_x=0.10, odom_fresh=True, now=0.0)
+    still_moving = timeout_gate.decide(
+        linear_x=-0.10, angular_z=0.0, active_gear=1,
+        observed_linear_x=0.1, odom_fresh=True, now=0.6)
+    check(still_moving.reason == "gear_change_stop_timeout" and still_moving.request_gear is None,
+          "a moving base must continue waiting after a timeout")
     timed_out = timeout_gate.decide(
         linear_x=-0.10, angular_z=0.0, active_gear=1,
-        observed_linear_x=0.0, odom_fresh=True, now=0.6)
-    check(timed_out.state == "STOPPING" and timed_out.request_gear is None,
-          "a delayed stop confirmation must not trigger a gear change")
+        observed_linear_x=0.0, odom_fresh=True, now=0.7)
+    check(timed_out.request_gear == -1,
+          "fresh stopped odometry must complete a transition even after timeout")
+
+    hold_gate = GearTransitionGate(GearTransitionConfig(confirm_cycles=3))
+    hold_gate.decide(linear_x=0.2, angular_z=0.1, active_gear=1,
+                     observed_linear_x=0.2, odom_fresh=True, now=1.0)
+    held = hold_gate.decide(linear_x=-0.2, angular_z=-0.1, active_gear=1,
+                            observed_linear_x=0.2, odom_fresh=True, now=1.1)
+    check(held.linear_x == 0.2 and held.angular_z == 0.1,
+          "transient opposite solve must preserve the fresh aligned command")
+    stale_hold = hold_gate.decide(linear_x=-0.2, angular_z=0.0, active_gear=1,
+                                  observed_linear_x=0.2, odom_fresh=False, now=1.2)
+    check(stale_hold.linear_x == 0.0,
+          "stale odometry must not extend an aligned command")
 
     intent_gate = GearTransitionGate(GearTransitionConfig(
         confirm_cycles=1, opposite_direction_commit_cycles=4))

@@ -661,7 +661,12 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
         selected.linear_x < min_linear - kActuatorLimitRepresentationEpsilon ||
         selected.linear_x > max_linear_ + kActuatorLimitRepresentationEpsilon ||
         std::abs(selected.angular_z) > max_angular_ + kActuatorLimitRepresentationEpsilon) {
-        throw nav2_core::PlannerException("NeuPAN handover command violates limits");
+        const std::string detail = "NeuPAN handover command violates limits: linear_x=" +
+          std::to_string(selected.linear_x) + ", angular_z=" + std::to_string(selected.angular_z) +
+          ", allowed_linear=[" + std::to_string(min_linear) + "," +
+          std::to_string(max_linear_) + "], max_abs_angular=" + std::to_string(max_angular_);
+        publishDiagnostic("error", detail);
+        throw nav2_core::PlannerException(detail);
       }
       geometry_msgs::msg::TwistStamped command;
       command.header = pose.header; command.header.stamp = node_->now();
@@ -759,7 +764,14 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
   if (envelope.linear_x < minimum_linear - kActuatorLimitRepresentationEpsilon ||
       envelope.linear_x > max_linear_ + kActuatorLimitRepresentationEpsilon ||
       std::abs(envelope.angular_z) > max_angular_ + kActuatorLimitRepresentationEpsilon) {
-    throw nav2_core::PlannerException("NeuPAN envelope violates actuator limits");
+    const std::string detail = "NeuPAN envelope violates actuator limits: linear_x=" +
+      std::to_string(envelope.linear_x) + ", angular_z=" + std::to_string(envelope.angular_z) +
+      ", allowed_linear=[" + std::to_string(minimum_linear) + "," +
+      std::to_string(max_linear_) + "], max_abs_angular=" + std::to_string(max_angular_) +
+      ", path_version=" + std::to_string(envelope.path_version) +
+      ", goal_version=" + std::to_string(envelope.goal_version);
+    publishDiagnostic("error", detail);
+    throw nav2_core::PlannerException(detail);
   }
   const double bounded_linear = std::clamp(envelope.linear_x, minimum_linear, max_linear_);
   const double bounded_angular = std::clamp(
