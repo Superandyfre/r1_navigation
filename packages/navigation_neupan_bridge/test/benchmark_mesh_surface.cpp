@@ -16,6 +16,7 @@ int main()
   struct Part {std::unique_ptr<MeshSurfaceQuery> mesh; fcl::Vector3d translation;};
   std::vector<Part> parts;
   std::size_t surface_checks=0,surface_misses=0,negative_checks=0,negative_misclassified=0;
+  constexpr int pose_count=5;
   auto add=[&](const std::string & uri,double scale,const fcl::Vector3d & t) {
     std::unique_ptr<shapes::Mesh> mesh(shapes::createMeshFromResource(uri,Eigen::Vector3d(scale,scale,scale)));
     if (!mesh || !mesh->vertex_count || !mesh->triangle_count) throw std::runtime_error(uri);
@@ -24,25 +25,44 @@ int main()
     std::vector<fcl::Triangle> tri;tri.reserve(mesh->triangle_count);
     for (unsigned i=0;i<mesh->triangle_count;++i) tri.emplace_back(mesh->triangles[i*3],mesh->triangles[i*3+1],mesh->triangles[i*3+2]);
     auto query=std::make_unique<MeshSurfaceQuery>(v,tri,.02);
-    for (std::size_t sample=0;sample<100;++sample) {
-      const auto & face=tri[(sample*tri.size())/100];
-      const auto & a=v[face[0]],&b=v[face[1]],&c=v[face[2]];
-      fcl::Vector3d normal=(b-a).cross(c-a);
-      if (normal.norm()<1e-10) {continue;}
-      normal.normalize();
-      const fcl::Vector3d point=(a+b+c)/3.;
-      for (double offset : {-.005,.005}) {
-        ++surface_checks;
-        if (!query->nearSurface(point+offset*normal)) {++surface_misses;}
+    // Synthetic labelled examples in five distinct 3D poses per real mesh.
+    // Ground truth: perturbed sampled triangle surface is self-return; a
+    // point above the mesh's entire world-Z range is an external obstacle.
+    for (int pose=0;pose<pose_count;++pose) {
+      fcl::Transform3d world_from_part=fcl::Transform3d::Identity();
+      world_from_part.linear()=(Eigen::AngleAxisd(.23*pose,fcl::Vector3d::UnitZ()) *
+        Eigen::AngleAxisd(.17*pose,fcl::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(-.11*pose,fcl::Vector3d::UnitX())).toRotationMatrix();
+      world_from_part.translation()=t+fcl::Vector3d(.03*pose,-.02*pose,.01*pose);
+      const fcl::Transform3d part_from_world=world_from_part.inverse();
+      for (std::size_t sample=0;sample<100;++sample) {
+        const auto & face=tri[(sample*tri.size())/100];
+        const auto & a=v[face[0]],&b=v[face[1]],&c=v[face[2]];
+        fcl::Vector3d normal=(b-a).cross(c-a);
+        if (normal.norm()<1e-10) {continue;}
+        normal.normalize();
+        const fcl::Vector3d point=(a+b+c)/3.;
+        for (double offset : {-.005,.005}) {
+          const auto world=world_from_part*(point+offset*normal);
+          ++surface_checks;
+          if (!query->nearSurface(part_from_world*world)) {++surface_misses;}
+        }
+      }
+      double top_z=(world_from_part*v.front()).z();
+      for (const auto & vertex:v) {
+        top_z=std::max(top_z,(world_from_part*vertex).z());
+      }
+      // Every XY is a transformed mesh vertex, but the obstacle is above
+      // the whole mesh. The legacy expanded XY hull covers each coordinate.
+      for (std::size_t sample=0;sample<100;++sample) {
+        fcl::Vector3d obstacle=world_from_part*v[(sample*v.size())/100];
+        for (double clearance : {.03,.10,.30}) {
+          obstacle.z()=top_z+clearance;
+          ++negative_checks;
+          if (query->nearSurface(part_from_world*obstacle)) {++negative_misclassified;}
+        }
       }
     }
-    // A point shares the topmost vertex's XY but lies 5 cm above the
-    // component's entire Z range. A 2D footprint would remove it; a 3D
-    // surface classifier must retain it.
-    const auto top=std::max_element(v.begin(),v.end(),
-      [](const auto & a,const auto & b){return a.z()<b.z();});
-    const fcl::Vector3d outside(top->x(),top->y(),top->z()+.05);
-    ++negative_checks;if (query->nearSurface(outside)) {++negative_misclassified;}
     parts.push_back({std::move(query),t});
   };
   for (int arm=0;arm<2;++arm) {
@@ -70,7 +90,8 @@ int main()
   }
   const double sec=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
   std::cout<<std::fixed<<std::setprecision(3)<<"parts="<<parts.size()<<" build_s="<<build
-    <<" closed="<<closed<<" surface_checks="<<surface_checks<<" surface_misses="<<surface_misses
+    <<" closed="<<closed<<" poses_per_part="<<pose_count
+    <<" surface_checks="<<surface_checks<<" surface_misses="<<surface_misses
     <<" negative_checks="<<negative_checks<<" negative_misclassified="<<negative_misclassified
     <<" points_per_frame="<<points.size()<<" frames=3 mean_frame_ms="<<(sec*1000/3)<<" hits="<<hits<<std::endl;
   return (surface_misses || negative_misclassified) ? 1 : 0;
