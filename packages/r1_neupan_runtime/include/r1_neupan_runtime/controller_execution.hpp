@@ -115,7 +115,7 @@ public:
     if (!authority_.empty() && authority != authority_) {
       fail("authority_instance_changed"); checkFault();
     }
-    authority_ = authority; attempt_ = attempt; active_ = true;
+    authority_ = authority; attempt_ = attempt; active_ = true; task_failure_.clear();
     started_ = now; last_check_ = now; path_ = -1; goal_ = -1; route_wait_since_.reset();
     has_plan_ = false; prepared_ = false; committed_ = false; first_source_ = false;
   }
@@ -166,6 +166,7 @@ public:
     }
     watchdog(now);
     checkFault();
+    if (!task_failure_.empty()) {throw std::runtime_error(task_failure_);}
     last_check_ = now;  // only the synchronous Action loop calls check()
   }
 
@@ -173,7 +174,7 @@ public:
   {
     if (!active_) {return std::nullopt;}
     watchdog(now);
-    if (faulted() || !has_plan_ || worker_boot_.empty() || !freshGuard(now)) {return std::nullopt;}
+    if (faulted() || !task_failure_.empty() || !has_plan_ || worker_boot_.empty() || !freshGuard(now)) {return std::nullopt;}
     // The current Worker/Attempt binding is enough to invalidate an old route.
     // Waiting for new route health here leaves the previous external grant live.
     if (!prepared_ && (health_payload_.value("state", "") != "RUNNING" ||
@@ -198,7 +199,7 @@ public:
   {
     watchdog(now);
     const auto decision = monitor_.evaluate(now); syncFault();
-    return active_ && !faulted() && decision.allowed && freshGuard(now) &&
+    return active_ && !faulted() && task_failure_.empty() && decision.allowed && freshGuard(now) &&
            guard_payload_.value("authorization_state", "") == "ARMED" &&
            matchingGuardContext();
   }
@@ -243,6 +244,7 @@ public:
   bool active() const {return active_;}
   bool armed() const {return armed_ && !faulted();}
   const std::string & fault() const {return fault_;}
+  const std::string & taskFailure() const {return task_failure_;}
   const std::string & boot() const {return boot_;}
   const std::string & authority() const {return authority_;}
   const std::string & attempt() const {return attempt_;}
@@ -283,9 +285,9 @@ private:
     {
       fail("worker_health_stale");
     } else if (route_wait_since_ && now - *route_wait_since_ > config_.recovery_timeout) {
-      fail("route_source_timeout");
+      task_failure_ = "route_source_timeout";
     } else if (!first_source_ && now - started_ > startup_timeout_) {
-      fail("initial_source_timeout");
+      task_failure_ = "initial_source_timeout";
     }
     monitor_.evaluate(now); syncFault();
   }
@@ -297,6 +299,7 @@ private:
       {"navigation_attempt_id", attempt_}, {"worker_boot_id", worker_boot_},
       {"worker_generation", worker_generation_}, {"path_version", path_}, {"goal_version", goal_}};
   }
+  std::string task_failure_;
   std::string boot_, authority_, attempt_, fault_, guard_boot_, health_boot_, worker_boot_,
     grant_id_;
   AuthorizationConfig config_;

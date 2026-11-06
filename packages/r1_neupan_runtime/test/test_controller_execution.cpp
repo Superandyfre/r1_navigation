@@ -172,7 +172,10 @@ TEST_F(Execution, RepeatedRouteChangesCannotRestartFirstSourceGrace) {
     } catch (const std::exception &) {
     }
   }
-  EXPECT_EQ(runtime.fault(), "route_source_timeout");
+  EXPECT_FALSE(runtime.faulted());
+  EXPECT_EQ(runtime.taskFailure(), "route_source_timeout");
+  EXPECT_FALSE(runtime.permitted(105.5));
+  EXPECT_TRUE(runtime.end(105.5));
 }
 TEST_F(Execution, DuplicateSourceNeverExtendsStaleRecoveryDeadline) {
   armed();

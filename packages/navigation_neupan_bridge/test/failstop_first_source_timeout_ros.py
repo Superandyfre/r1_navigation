@@ -28,7 +28,8 @@ class FirstSourceTimeout(chain.FailstopChainROS):
         ended=time.monotonic()
         self.assertGreaterEqual(ended-started,40.)
         self.assertLess(ended-started,41.)
-        self.until(lambda:any(j.get('fault_reason')=='initial_source_timeout' for _,j in self.runtime_statuses))
+        self.assertIn("initial_source_timeout",(self.report/"controller_server.log").read_text())
+        self.assertFalse(any(j.get("fault_latched") for _,j in self.runtime_statuses))
         active_health=[j for t,j in self.healths if started+5<t<ended]
         self.assertGreater(len(active_health),250)
         self.assertTrue(all(j['state']=='RUNNING' and j['fault_id'] is None for j in active_health))
@@ -37,13 +38,17 @@ class FirstSourceTimeout(chain.FailstopChainROS):
         self.until(lambda:any(j.get('nonce')==nonce for _,j in self.inject_acks))
         settle=time.monotonic()+.5;self.until(lambda:time.monotonic()>settle)
         self.assertFalse(any(v!=0. or w!=0. for t,v,w in self.outputs if t>ended))
-        retry=self.goal();self.assertEqual(self.future(retry.get_result_async()).status,GoalStatus.STATUS_ABORTED)
+        retry=self.goal();retry_result=retry.get_result_async()
+        marker=time.monotonic()
+        self.until(lambda:any(t>marker and v>.04 for t,v,w in self.outputs) or retry_result.done(),50)
+        self.assertFalse(retry_result.done())
+        self.future(retry.cancel_goal_async())
         (self.report/'first-source-timeout-result.json').write_text(json.dumps(dict(
             action='ABORTED',reason='initial_source_timeout',budget_seconds=40.,
             terminal_after_context_seconds=ended-started,goal_send_monotonic=sent,
             first_context_monotonic=started,parent_health_running_samples=len(active_health),
             sources_before_terminal=0,commit_before_terminal=False,continuous_final_zero=True,
-            new_goal='ABORTED',physical_motion=False,worker=self.worker_mode),indent=2))
+            new_goal='resumed',physical_motion=False,worker=self.worker_mode),indent=2))
 
 def load_tests(loader,tests,pattern):return unittest.TestSuite([FirstSourceTimeout('test_full_initial_source_deadline')])
 if __name__=='__main__':unittest.main()

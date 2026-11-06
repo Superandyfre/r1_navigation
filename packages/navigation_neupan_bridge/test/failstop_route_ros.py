@@ -99,7 +99,17 @@ class SameUUIDRoute(chain.FailstopChainROS):
             self.assertEqual(self.future(result).status,GoalStatus.STATUS_CANCELED)
         attempts={j['navigation_attempt_id'] for t,j in self.contexts}
         self.assertEqual(attempts,{attempt})
-        self.assertTrue(any(j['state']=='END' for t,j in self.contexts))
+        # Action result and END context are independent DDS deliveries.
+        self.until(lambda:any(j['state']=='END' for t,j in self.contexts))
+        if timeout:
+            self.hold_source(False)
+            retry=self.goal();retry_result=retry.get_result_async()
+            retry_started=time.monotonic()
+            self.until(lambda:any(t>retry_started and v>moving_threshold for t,v,w in self.outputs)
+                       or retry_result.done(),50)
+            self.assertFalse(retry_result.done(), "new attempt must not inherit route timeout")
+            self.assertNotEqual(self.context['navigation_attempt_id'],attempt)
+            self.future(retry.cancel_goal_async())
         record=dict(attempt=attempt,old_path=old_path,new_path=new_path,old_grant=original_grant,
                     new_grant=new_grant,source_timeout=timeout,repeated_routes=changed_routes,
                     replay_count=replay_count,worker=self.worker_mode,physical_motion=False,
