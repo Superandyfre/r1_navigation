@@ -766,9 +766,13 @@ private:
       stable_since_ = steady_now;
       stable_costmap_samples_ = 0;
     }
-    preflight_ready_ = candidate_healthy_ &&
-      std::chrono::duration<double>(steady_now - stable_since_).count() >= stable_window_sec_ &&
-      stable_costmap_samples_ >= 2;
+    // A brief geometry synchronization mismatch does not invalidate TF or
+    // localization. Require two fresh costmap observations but do not impose
+    // the full cold-start stability window on every small arm adjustment.
+    const bool stability_elapsed = footprint_sync_grace_.geometryOnly() ||
+      (preflight_ready_ && healthy) ||
+      std::chrono::duration<double>(steady_now - stable_since_).count() >= stable_window_sec_;
+    preflight_ready_ = candidate_healthy_ && stability_elapsed && stable_costmap_samples_ >= 2;
     if (preflight_ready_) {
       ever_ready_ = true;
     }

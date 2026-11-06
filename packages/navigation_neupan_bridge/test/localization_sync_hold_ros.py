@@ -22,7 +22,7 @@ class LocalizationSyncHold(unittest.TestCase):
         rclpy.init()
         self.node = Node("test_localization_sync_inputs")
         self.proc = subprocess.Popen([os.environ["NEUPAN_TEST_MONITOR"], "--ros-args",
-            "-p", "require_dynamic_footprint:=true", "-p", "stable_window_sec:=0.2",
+            "-p", "require_dynamic_footprint:=true", "-p", "stable_window_sec:=3.0",
             "-p", "costmap_service:=/test/costmap", "-p", "odom_topic:=/test/odom",
             "-p", "localization_status_topic:=/test/localization",
             "-p", "dynamic_footprint_topic:=/test/footprint",
@@ -79,7 +79,15 @@ class LocalizationSyncHold(unittest.TestCase):
         self.wait_for(lambda s:s["state"]=="HOLD")
         self.assertFalse(self.status[-1]["fault_latched"])
         self.mismatch=False
+        recovery_start=time.monotonic()
         self.wait_for(lambda s:s["state"]=="READY")
+        recovery_seconds=time.monotonic()-recovery_start
+        print(json.dumps(dict(scenario="footprint_sync_recovery", ready_seconds=recovery_seconds,
+                              cold_start_window_seconds=3.0,physical_motion=False)))
+        self.assertLess(recovery_seconds,2.8, "must not wait the full cold-start window")
+        until=time.monotonic()+1.0
+        while time.monotonic()<until:self.tick()
+        self.assertEqual(self.status[-1]["state"],"READY")
         self.assertFalse(any(s["state"]=="FAULT" for s in self.status))
 
     def test_brief_footprint_dropout_holds_and_recovers(self):

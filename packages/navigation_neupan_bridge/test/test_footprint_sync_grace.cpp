@@ -8,6 +8,7 @@ static Clock::time_point at(int ms) {return Clock::time_point{} + std::chrono::m
 TEST(FootprintSyncGrace, MismatchStopsUntilStableAndOtherFaultsAreImmediate) {
   FootprintSyncGrace s(1.0);
   EXPECT_EQ(s.observe(true, false, "costmap_footprint_not_synchronized", false, at(0)), Result::Hold);
+  EXPECT_TRUE(s.geometryOnly());
   EXPECT_EQ(s.observe(true, true, "", false, at(500)), Result::Hold);
   EXPECT_EQ(s.observe(true, true, "", true, at(3500)), Result::Healthy);
   EXPECT_EQ(s.observe(true, false, "dynamic_footprint_unavailable_or_stale", false, at(3600)), Result::Hold);
@@ -23,6 +24,7 @@ TEST(FootprintSyncGrace, AlternationDoesNotResetDeadline) {
 TEST(FootprintSyncGrace, AlternatingTransientReasonsCannotRenewBudget) {
   FootprintSyncGrace s(1.0);
   EXPECT_EQ(s.observe(true, false, "odom_stale", false, at(0)), Result::Hold);
+  EXPECT_FALSE(s.geometryOnly());
   EXPECT_EQ(s.observe(true, false, "tf_stale", false, at(1000)), Result::Fault);
 }
 TEST(FootprintSyncGrace, LocalizationStatusUsesMonitorAbsoluteDeadline) {

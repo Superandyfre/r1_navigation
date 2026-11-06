@@ -20,7 +20,12 @@ public:
   {
     if (!ever_ready) {reset(); return healthy ? Result::Healthy : Result::Fault;}
     if (!healthy && !transient(reason)) {reset(); return Result::Fault;}
-    if (!healthy && !started_) {started_ = now;}
+    if (!healthy && !started_) {
+      started_ = now;
+      geometry_only_ = reason == "costmap_footprint_not_synchronized";
+    } else if (!healthy && reason != "costmap_footprint_not_synchronized") {
+      geometry_only_ = false;
+    }
     if (!started_) {return Result::Healthy;}
     if (healthy && stabilized) {reset(); return Result::Healthy;}
     if (!healthy && reason != "localization_status_stale" &&
@@ -31,7 +36,8 @@ public:
     // monitor; HOLD persists until that stricter source-specific limit expires.
     return Result::Hold;
   }
-  void reset() {started_.reset();}
+  bool geometryOnly() const {return started_.has_value() && geometry_only_;}
+  void reset() {started_.reset(); geometry_only_ = false;}
 private:
   static bool transient(const std::string & reason)
   {
@@ -45,5 +51,6 @@ private:
   }
   double timeout_seconds_;
   std::optional<Clock::time_point> started_;
+  bool geometry_only_{false};
 };
 }
