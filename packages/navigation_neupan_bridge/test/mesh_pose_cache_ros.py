@@ -20,9 +20,11 @@ class MeshPoseCache(unittest.TestCase):
         left=node.create_publisher(JointState,"/left_arm/joint_states",20)
         right=node.create_publisher(JointState,"/right_arm/joint_states",20)
         scan_pub=node.create_publisher(LaserScan,"/scan_neupan",qos_profile_sensor_data)
-        components=[];states=[];scans=[];footprints=[]
+        components=[];states=[];scans=[];footprints=[];footprint_states=[]
         node.create_subscription(Float64MultiArray,"/r1_arm_mesh_components",
             lambda m:components.append((time.monotonic(),list(m.data))),20)
+        node.create_subscription(String,"/r1_arm_footprint/status",
+            lambda m:footprint_states.append((time.monotonic(),json.loads(m.data))),20)
         node.create_subscription(PolygonStamped,"/r1_arm_footprint",
             lambda m:footprints.append((time.monotonic(),m)),20)
         node.create_subscription(String,"/r1_arm_mesh_filter/status",
@@ -85,10 +87,19 @@ class MeshPoseCache(unittest.TestCase):
             until(lambda:components and len(components[-1][1])>0 and
                 states and states[-1][1].get("state")=="READY",15.)
             until(lambda:any(max((p.x for p in m.polygon.points),default=0)>2.4 for _,m in footprints),5.)
+            until(lambda:footprint_states and footprint_states[-1][1].get("geometry_version",0)>0 and
+                footprint_states[-1][1].get("left_gripper_tf_age_sec",-1)>=0 and
+                footprint_states[-1][1].get("right_gripper_tf_age_sec",-1)>=0,5.)
+            status=footprint_states[-1][1]
+            self.assertGreaterEqual(status["left_joint_stamp_age_sec"],0.)
+            self.assertGreaterEqual(status["right_joint_stamp_age_sec"],0.)
+            old_version=status["geometry_version"]
             before=component(components[-1][1],18);marker=time.monotonic()
             gripper=.10
             until(lambda:any(t>marker and data and component(data,18)!=before for t,data in components),5.)
             self.assertTrue(any(t>marker for t in scans))
+            until(lambda:any(t>marker and s.get("geometry_version",0)>old_version
+                for t,s in footprint_states),5.)
             # Arm joints never changed; only a gripper TF changed.
             missing=True;start=time.monotonic()
             until(lambda:any(t>start and s.get("reason")=="tf_gap_using_compatible_cache" for t,s in states),3.)

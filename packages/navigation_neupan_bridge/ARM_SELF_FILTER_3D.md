@@ -24,6 +24,12 @@ when input, transforms, or other navigation components remain unavailable.
 The `status_topic` is `/r1_arm_self_filter_3d/status` on the 3D motion path.
 It includes per-sensor state, reason, input and output timestamps, processing
 latency, dropped frames, maximum pose-time error, and `open_mesh_frames`.
+The footprint status topic `/r1_arm_footprint/status` separately exposes
+left/right joint message and source-stamp ages, the mesh geometry version,
+age since validation, and the latest maximum mesh and left/right gripper TF
+ages. A value of `-1` means that age has not been observed. During a TF gap,
+ages increase from their last verified values; geometry is not declared new.
+
 Open meshes have surface filtering but no reliable interior classification.
 The bundled robot models include open meshes, including a large opening in an
 arm link; do not claim complete interior removal without corrected, validated

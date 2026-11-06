@@ -316,9 +316,23 @@ private:
     double left_joint_age_sec = -1.0;
     double right_joint_age_sec = -1.0;
     double mesh_age_sec = -1.0;
+    double verified_age_sec = -1.0;
+    std::array<double,3> tf_ages{{-1.0,-1.0,-1.0}};
+    std::int64_t left_stamp = 0, right_stamp = 0;
+    std::uint64_t geometry_version = 0;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       publish_interval_sec = last_publish_interval_sec_;
+      left_stamp = left_state_stamp_ns_; right_stamp = right_state_stamp_ns_;
+      geometry_version = mesh_geometry_version_;
+      if (last_mesh_verified_ != SteadyTime{}) {
+        verified_age_sec = std::chrono::duration<double>(steady_now - last_mesh_verified_).count();
+        for (std::size_t index=0; index<tf_ages.size(); ++index) {
+          if (last_mesh_tf_ages_[index] >= 0.) {
+            tf_ages[index] = last_mesh_tf_ages_[index] + verified_age_sec;
+          }
+        }
+      }
       if (left_state_received_ != SteadyTime{}) {
         left_joint_age_sec =
           std::chrono::duration<double>(steady_now - left_state_received_).count();
@@ -331,6 +345,10 @@ private:
         mesh_age_sec = std::chrono::duration<double>(steady_now - last_mesh_projection_).count();
       }
     }
+    const auto now_ns = get_clock()->now().nanoseconds();
+    const auto source_age = [now_ns](std::int64_t stamp) {
+      return stamp > 0 ? static_cast<double>(now_ns-stamp)/1e9 : -1.0;
+    };
     std_msgs::msg::String message;
     message.data = "{\"schema\":\"r1_arm_footprint_status_v1\",\"state\":\"" + state +
       "\",\"reason\":\"" + reason + "\",\"points\":" + std::to_string(points) +
@@ -338,7 +356,14 @@ private:
       ",\"publish_interval_sec\":" + std::to_string(publish_interval_sec) +
       ",\"left_joint_age_sec\":" + std::to_string(left_joint_age_sec) +
       ",\"right_joint_age_sec\":" + std::to_string(right_joint_age_sec) +
-      ",\"mesh_age_sec\":" + std::to_string(mesh_age_sec) + "}";
+      ",\"mesh_age_sec\":" + std::to_string(mesh_age_sec) +
+      ",\"left_joint_stamp_age_sec\":" + std::to_string(source_age(left_stamp)) +
+      ",\"right_joint_stamp_age_sec\":" + std::to_string(source_age(right_stamp)) +
+      ",\"geometry_version\":" + std::to_string(geometry_version) +
+      ",\"geometry_verified_age_sec\":" + std::to_string(verified_age_sec) +
+      ",\"max_mesh_tf_age_sec\":" + std::to_string(tf_ages[0]) +
+      ",\"left_gripper_tf_age_sec\":" + std::to_string(tf_ages[1]) +
+      ",\"right_gripper_tf_age_sec\":" + std::to_string(tf_ages[2]) + "}";
     status_pub_->publish(message);
   }
 
@@ -498,7 +523,7 @@ private:
     }
   }
 
-  bool readMeshPoses(std::vector<MeshPose> & poses)
+  bool readMeshPoses(std::vector<MeshPose> & poses, std::array<double,3> & ages)
   {
     if (!mesh_model_ready_) {return false;}
     const auto now = get_clock()->now();
@@ -511,6 +536,11 @@ private:
         // be accepted forever simply because joint messages are still arriving.
         if (stamp.nanoseconds() != 0 && (!std::isfinite(age) || age < -0.05 ||
           age > mesh_tf_max_age_sec_)) {return false;}
+        if (stamp.nanoseconds() != 0) {
+          ages[0] = std::max(ages[0], age);
+          if (part.frame.rfind("L_omniPicker_", 0) == 0) {ages[1] = std::max(ages[1], age);}
+          if (part.frame.rfind("R_omniPicker_", 0) == 0) {ages[2] = std::max(ages[2], age);}
+        }
         const auto & t = stamped.transform.translation;
         const auto & q = stamped.transform.rotation;
         MeshPose pose{t.x,t.y,t.z,q.x,q.y,q.z,q.w};
@@ -690,7 +720,8 @@ private:
     // Every part's actual TF participates in cache validation. In particular,
     // gripper articulation can change while all 14 arm joints remain still.
     std::vector<MeshPose> poses;
-    if (!readMeshPoses(poses)) {
+    std::array<double,3> tf_ages{{-1.0,-1.0,-1.0}};
+    if (!readMeshPoses(poses, tf_ages)) {
       std::lock_guard<std::mutex> lock(mutex_);
       const bool compatible = !geometry_changed && last_mesh_verified_ != SteadyTime{} &&
         std::chrono::duration<double>(steady_now - last_mesh_verified_).count() <= mesh_cache_grace_sec_;
@@ -717,6 +748,7 @@ private:
       std::lock_guard<std::mutex> lock(mutex_);
       last_mesh_projection_ = std::chrono::steady_clock::now();
       last_mesh_verified_ = last_mesh_projection_;
+      last_mesh_tf_ages_ = tf_ages;
       mesh_filter_state_ = "READY"; mesh_filter_reason_ = "tf_valid_cache";
       return;
     }
@@ -744,8 +776,10 @@ private:
     mesh_cached_shadow_ = std::move(mesh_shadow);
     mesh_projected_joint_positions_ = std::move(current_joint_positions);
     mesh_projected_poses_ = std::move(poses);
+    ++mesh_geometry_version_;
     last_mesh_projection_ = std::chrono::steady_clock::now();
     last_mesh_verified_ = last_mesh_projection_;
+    last_mesh_tf_ages_ = tf_ages;
     mesh_filter_state_ = "READY"; mesh_filter_reason_ = "tf_valid_projected";
   }
 
@@ -853,6 +887,8 @@ private:
   std::unordered_map<std::string, double> mesh_projected_joint_positions_;
   std::vector<MeshPose> mesh_projected_poses_;
   SteadyTime last_mesh_verified_{};
+  std::array<double,3> last_mesh_tf_ages_{{-1.0,-1.0,-1.0}};
+  std::uint64_t mesh_geometry_version_{0};
   std::string mesh_filter_state_{"FAULT"}, mesh_filter_reason_{"awaiting_geometry"};
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
