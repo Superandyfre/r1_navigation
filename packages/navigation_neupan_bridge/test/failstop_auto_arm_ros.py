@@ -6,7 +6,7 @@ import failstop_chain_ros as chain
 
 class AutoArmChain(chain.FailstopChainROS):
     controller_parameters_override = dict(auto_arm_on_ready=True)
-    guard_parameters_override = dict(collision_check_enabled=False)
+    guard_parameters_override = dict()
 
     def arm_runtime(self):
         # Never call the arm service. Fixture supplies stopped odometry/Guard

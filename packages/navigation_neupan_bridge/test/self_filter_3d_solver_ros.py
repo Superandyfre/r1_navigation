@@ -10,13 +10,12 @@ chain.GUARD=Path(os.environ["NEUPAN_TEST_GUARD"])
 chain.SMOOTHER=Path(os.environ["NEUPAN_TEST_SMOOTHER"])
 
 class FilterSolver(chain.FailstopChainROS):
-    worker_parameters_override=dict(obstacle_motion_enabled=True,neupan_bypass_enabled=True,
-        auto_gear_transition_enabled=True,auto_gear_opposite_direction_commit_cycles=4,
+    worker_parameters_override=dict(auto_gear_transition_enabled=True,auto_gear_opposite_direction_commit_cycles=4,
         command_stabilizer_enabled=False,dynamic_footprint_enabled=True,
         dynamic_footprint_topic="/r1_arm_footprint",dynamic_mesh_components_enabled=True,
         dynamic_mesh_components_topic="/r1_arm_mesh_components",dynamic_footprint_timeout_sec=.5,
         dynamic_mesh_components_timeout_sec=1.5,dynamic_footprint_clearance_m=.04)
-    guard_parameters_override=dict(collision_check_enabled=False,require_dynamic_footprint=False)
+    guard_parameters_override=dict()
     def setUp(self):
         self.sidecars=[];self.sidecar_logs=[];self.gapflag=Path("/tmp")/("r1-shadow-gap-"+str(os.getpid()))
         self.addCleanup(self.stop_sidecars)
@@ -62,6 +61,9 @@ class FilterSolver(chain.FailstopChainROS):
 
     def test_real_solver_continues_through_short_tf_gap(self):
         self.assertEqual(self.worker_mode,"actual-solver")
+        # The filter loads 36 meshes asynchronously; wait for an actual
+        # published frame before starting the controller action watchdog.
+        self.until(lambda:any(j.get("output_published") for _,j in self.filter_status),30.)
         handle=self.goal();result=handle.get_result_async()
         self.until(lambda:any(v>.04 for _,v,_ in self.outputs) or result.done(),50.)
         self.assertFalse(result.done())

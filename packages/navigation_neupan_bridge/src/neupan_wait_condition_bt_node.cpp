@@ -403,8 +403,8 @@ public:
         bool waiting = false;
         try {
           const auto payload = nlohmann::json::parse(message->data);
-          const auto motion = payload.at("obstacle_motion");
-          waiting = motion.value("enabled", false) && motion.value("state", "") == "WAIT";
+          const auto info = payload.at("info");
+          waiting = info.value("stop", false) && !info.value("arrive", false);
         } catch (const std::exception &) {
           waiting = false;
         }

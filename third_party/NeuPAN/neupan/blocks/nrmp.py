@@ -27,7 +27,7 @@ from neupan.robot import robot
 from neupan.configuration import to_device, value_to_tensor, np_to_tensor, tensor_dtype
 from cvxpylayers.torch import CvxpyLayer
 from neupan.util import time_it
-from neupan.bypass import clearance_linearization
+from neupan.geometry import clearance_linearization
 from typing import Optional, List
 
 

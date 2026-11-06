@@ -45,8 +45,7 @@ class ExecutionContextROS(unittest.TestCase):
                     '-p', 'cmd_vel_topic:=/test_wp3_worker/observed_cmd',
                     '-p', 'forward_only_enabled:=false',
                     '-p', 'command_stabilizer_enabled:=false',
-                    '-p', 'auto_gear_transition_enabled:=false',
-                    '-p', 'obstacle_motion_enabled:=false'])
+                    '-p', 'auto_gear_transition_enabled:=false'])
                 node = None
                 executor = MultiThreadedExecutor(num_threads=3)
                 try:

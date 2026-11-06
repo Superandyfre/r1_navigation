@@ -29,9 +29,9 @@ class WorkerLaunchParameters(unittest.TestCase):
         # dedicated solver venv. Consume the independently generated draft.
         contract = json.loads(Path(os.environ['NEUPAN_WORKER_LAUNCH_CONTRACT']).read_text())
         self.assertEqual(contract['launch_arguments'], dict(scan_source='dual', command_profile='smoothed',
-                         use_mesh_self_filter=True, collision_check_enabled=True))
+                         use_mesh_self_filter=True))
         spec = contract['pins']['nodes']['/n1_16_production_bridge']
-        self.assertEqual(len(spec['parameters']), 82)
+        self.assertNotIn('obstacle_motion_enabled', spec['parameters'])
         self.assertNotIn('robot_type', spec['parameters'])
         self.assertIn('robot_type', contract['informational_launch_inputs']['/n1_16_production_bridge'])
         parameters = {name: pin['value'] for name, pin in spec['parameters'].items()}

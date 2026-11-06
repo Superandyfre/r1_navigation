@@ -9,10 +9,9 @@ chain.CONTROLLER=Path(os.environ["NEUPAN_TEST_CONTROLLER"])
 chain.GUARD=Path(os.environ["NEUPAN_TEST_GUARD"])
 
 class Hw1ProfileContinuity(chain.FailstopChainROS):
-    worker_parameters_override=dict(obstacle_motion_enabled=True,neupan_bypass_enabled=True,
-        auto_gear_transition_enabled=True,auto_gear_opposite_direction_commit_cycles=4,
+    worker_parameters_override=dict(auto_gear_transition_enabled=True,auto_gear_opposite_direction_commit_cycles=4,
         command_stabilizer_enabled=False)
-    guard_parameters_override=dict(collision_check_enabled=False,require_dynamic_footprint=False)
+    guard_parameters_override=dict()
 
     def test_empty_corridor_does_not_intermittently_zero(self):
         self.assertEqual(self.worker_mode,"actual-solver")

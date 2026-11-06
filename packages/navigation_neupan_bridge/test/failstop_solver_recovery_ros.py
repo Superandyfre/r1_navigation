@@ -8,7 +8,7 @@ import failstop_chain_ros as chain
 
 
 class SolverRecovery(chain.FailstopChainROS):
-    guard_parameters_override = dict(collision_check_enabled=False)
+    guard_parameters_override = dict()
 
     def fail_solves(self, count):
         nonce=str(time.time_ns())

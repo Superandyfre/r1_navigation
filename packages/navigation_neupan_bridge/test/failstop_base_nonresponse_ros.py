@@ -8,7 +8,7 @@ import failstop_chain_ros as chain
 
 class BaseNonresponse(chain.FailstopChainROS):
     controller_parameters_override=dict(detect_base_nonresponse=True)
-    guard_parameters_override=dict(collision_check_enabled=False)
+    guard_parameters_override=dict()
 
     def test_actual_nonresponse_is_bounded_without_stronger_motion(self):
         handle=self.goal();result=handle.get_result_async()

@@ -59,7 +59,7 @@ TEST(NeuPANWaitBehaviorTree, KeepsAcceptedPathWhenCandidateFails)
     auto publisher = node->create_publisher<std_msgs::msg::String>(
       "/test_neupan_wait_semantics", 10);
     std_msgs::msg::String semantic;
-    semantic.data = R"({"obstacle_motion":{"enabled":true,"state":"WAIT"}})";
+    semantic.data = R"({"info":{"stop":true,"arrive":false}})";
     bool waiting = false;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     while (std::chrono::steady_clock::now() < deadline) {

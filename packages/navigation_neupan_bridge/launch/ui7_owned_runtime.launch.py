@@ -22,5 +22,5 @@ def generate_launch_description():
         include('navigation_neupan.launch.py',['command_profile','runtime_auto_arm'],{'mode':'hw1'}),
         include('r1_neupan_hw1_motion.launch.py',['calibration_record','scan_source','use_mesh_self_filter',
             'mesh_filter_mode','arm_extra_mesh_config','mesh_projection_margin_m','mesh_3d_projection_margin_m','command_profile',
-            'cmd_vel_out_topic'],{'collision_check_enabled':'false'}),
+            'cmd_vel_out_topic']),
     ])

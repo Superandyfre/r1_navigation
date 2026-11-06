@@ -17,7 +17,6 @@ scan_source=dual
 mesh_self_filter=true
 mesh_filter_mode=3d
 mesh_3d_projection_margin_m=0.0
-collision_check_enabled=false
 left_arm_ip=192.168.11.60
 right_arm_ip=192.168.11.61
 arm_local_ip=192.168.11.11

@@ -25,7 +25,7 @@ for scale in [1.,.1]:
   core.update_initial_path_from_goal(np.zeros((3,1)),np.array([[2.],[0.],[0.]]))
   for cycle in range(10):
    started=time.monotonic()
-   action,info=core(np.zeros((3,1)),points,measured_velocity=np.zeros((2,1)),reference_speed_profile=np.full(20,.2),bypass_mode=False,bypass_route_clear=True)
+   action,info=core(np.zeros((3,1)),points,measured_velocity=np.zeros((2,1)),reference_speed_profile=np.full(20,.2))
    rows.append(dict(scale=scale,scenario=scenario,cycle=cycle,seconds=time.monotonic()-started,action=np.asarray(action).tolist(),stop=bool(info['stop'])))
 args.output.write_text(json.dumps(rows,indent=2))
 for scale in [1.,.1]:

@@ -63,7 +63,6 @@ mesh_self_filter="${RPP_NEUPAN_USE_MESH_SELF_FILTER:-true}"
 mesh_filter_mode="${RPP_NEUPAN_MESH_FILTER_MODE:-3d}"
 mesh_3d_projection_margin_m="${RPP_NEUPAN_MESH_3D_PROJECTION_MARGIN_M:-0.0}"
 arm_extra_mesh_config="${RPP_ARM_EXTRA_MESH_CONFIG:-}"
-collision_check_enabled="${RPP_NEUPAN_COLLISION_CHECK_ENABLED:-${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-false}}"
 
 if [[ "${scan_source}" != "livox_only" && "${scan_source}" != "dual" ]]; then
   echo "RPP_NEUPAN_SCAN_SOURCE must be livox_only or dual" >&2
@@ -81,11 +80,6 @@ if [[ "${mesh_filter_mode}" != "2d" && "${mesh_filter_mode}" != "3d" ]]; then
 fi
 if [[ -n "${arm_extra_mesh_config}" && ( "${arm_extra_mesh_config}" != /* || ! -f "${arm_extra_mesh_config}" ) ]]; then
   echo "RPP_ARM_EXTRA_MESH_CONFIG must be an existing absolute path" >&2
-  exit 1
-fi
-
-if [[ "${collision_check_enabled}" != "false" ]]; then
-  echo "HW1 duplicate collision checks were removed; RPP_NEUPAN_COLLISION_CHECK_ENABLED must be false" >&2
   exit 1
 fi
 
@@ -152,7 +146,6 @@ fi
   mesh_filter_mode:="${mesh_filter_mode}" \
   mesh_3d_projection_margin_m:="${mesh_3d_projection_margin_m}" \
   "${extra_mesh_launch_args[@]}" \
-  collision_check_enabled:="${collision_check_enabled}" \
   calibration_record:=/home/rpp/rpp_ws/config/r1_hw1_calibration.json \
   start_arm_drivers:=false \
   left_robot_ip:="${left_arm_ip}" \

@@ -24,7 +24,7 @@ from math import inf
 from typing import Optional
 from neupan.configuration import to_device, tensor_to_np
 from neupan.util import downsample_decimation
-from neupan.bypass import signed_clearances
+from neupan.geometry import signed_clearances
 
 class PAN(torch.nn.Module):
     """

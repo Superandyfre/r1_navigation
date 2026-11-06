@@ -10,7 +10,7 @@ from failstop_navigator_ros import NavigatorFailstop
 
 
 class SolverBTRecovery(NavigatorFailstop):
-    guard_parameters_override=dict(collision_check_enabled=False)
+    guard_parameters_override=dict()
 
     def test_parent_task_stops_after_one_replan_and_new_goal_works(self):
         client=ActionClient(self.node,NavigateToPose,'/navigate_to_pose')

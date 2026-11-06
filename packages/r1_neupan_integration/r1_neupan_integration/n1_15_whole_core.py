@@ -996,7 +996,6 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
         path_version = int(spec.get("initial_path_version", 0))
         goal_version = -1
         active_goal_pose = _planner_path_matrix(planner)[:3, -1:].copy()
-        active_local_reference_id = 0
         sequence = 0
         while True:
             raw_request = conn.recv_bytes()
@@ -1058,41 +1057,14 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
             same_goal = same_terminal_pose(active_goal_pose, next_goal_pose)
             if requested_path_version > path_version:
                 next_path = normalize_path_matrix(_unpack_array(request["path"]))
-                preserve_bypass = (same_goal and request.get("bypass_mode", False)
-                                   and getattr(planner, "bypass_guide", None) is not None)
-                if preserve_bypass:
-                    if planner.bypass_guide.phase == "route_rejoin":
-                        planner.bypass_guide = None
-                    planner.bypass_recovery.clear_since = None
-                    planner.ipath.set_initial_path([
-                        next_path[:, index:index + 1]
-                        for index in range(next_path.shape[1])
-                    ])
-                    planner.ipath.arrive_flag = False
-                    planner.cur_vel_array = np.zeros_like(planner.cur_vel_array)
-                else:
-                    _set_path(planner, next_path)
-                    planner.reset()
+                _set_path(planner, next_path)
+                planner.reset()
                 planner.pan.current_nom_values = [None, None, None, None]
                 path_version = requested_path_version
-                active_local_reference_id = 0
             elif not same_goal:
                 planner.reset()
                 planner.pan.current_nom_values = [None, None, None, None]
             active_goal_pose = np.asarray(next_goal_pose, dtype=np.float64).reshape(3, 1).copy()
-            local_reference = request.get("local_reference_path")
-            local_reference_id = int(request.get("local_reference_id", 0))
-            if local_reference is not None and local_reference_id > 0:
-                if active_local_reference_id != local_reference_id:
-                    _set_path(planner, _unpack_array(local_reference))
-                    planner.reset()
-                    planner.pan.current_nom_values = [None, None, None, None]
-                    active_local_reference_id = local_reference_id
-            elif active_local_reference_id:
-                _set_path(planner, _unpack_array(request["path"]))
-                planner.reset()
-                planner.pan.current_nom_values = [None, None, None, None]
-                active_local_reference_id = 0
             if requested_goal_version > goal_version:
                 # The endpoint is envelope metadata only. The corresponding
                 # SMAC path was already supplied above; regenerating a direct
@@ -1129,8 +1101,6 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                         state, points,
                         reference_speed_profile=speed_profile,
                         measured_velocity=measured_velocity,
-                        bypass_mode=bool(request.get("bypass_mode", False)),
-                        bypass_route_clear=bool(request.get("bypass_route_clear", False)),
                     )
             except Exception as exc:
                 status = "exception"
@@ -1166,14 +1136,6 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                 "info": {
                     "stop": bool(getattr(planner, "info", {}).get("stop", False)),
                     "arrive": bool(getattr(planner, "info", {}).get("arrive", False)),
-                    "bypass_valid": bool(getattr(planner, "info", {}).get("bypass_valid", False)),
-                    "bypass_side": int(getattr(planner, "info", {}).get("bypass_side", 0)),
-                    "bypass_phase": str(getattr(planner, "info", {}).get("bypass_phase", "none")),
-                    "bypass_clearance_m": getattr(planner, "info", {}).get("bypass_clearance_m"),
-                    "bypass_solver_failures": int(getattr(planner, "info", {}).get("bypass_solver_failures", 0)),
-                    "bypass_candidates": getattr(planner, "info", {}).get("bypass_candidates", []),
-                    "bypass_rebuilds": int(getattr(planner, "info", {}).get("bypass_rebuilds", 0)),
-                    "bypass_recovery_exhausted": bool(getattr(planner, "info", {}).get("bypass_recovery_exhausted", False)),
                     "stop_reason": str(getattr(planner, "info", {}).get("stop_reason", "none")),
                 },
                 "semantic": _planner_semantics(planner),

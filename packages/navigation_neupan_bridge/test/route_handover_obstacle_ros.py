@@ -6,10 +6,9 @@ import unittest
 from route_handover_continuity_ros import RouteHandoverContinuity
 
 class ObstacleDuringHandover(RouteHandoverContinuity):
-    worker_parameters_override=dict(obstacle_motion_enabled=True,neupan_bypass_enabled=True,
-        auto_gear_transition_enabled=True,auto_gear_opposite_direction_commit_cycles=4,
+    worker_parameters_override=dict(auto_gear_transition_enabled=True,auto_gear_opposite_direction_commit_cycles=4,
         command_stabilizer_enabled=False)
-    guard_parameters_override=dict(collision_check_enabled=False,require_dynamic_footprint=False)
+    guard_parameters_override=dict()
 
     def test_new_obstacle_and_route_revision_keep_fresh_output(self):
         self.assertEqual(self.worker_mode,"actual-solver")

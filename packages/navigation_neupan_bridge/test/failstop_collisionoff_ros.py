@@ -9,19 +9,15 @@ import failstop_chain_ros as chain
 
 
 class CollisionOffChain(chain.FailstopChainROS):
-    guard_parameters_override = dict(collision_check_enabled=False, require_dynamic_footprint=True,
-        use_exact_mesh_components=True, mesh_self_filter_preapplied=False,
-        scan_topic=chain.PREFIX + 'guard_scan_never_published',
-        dynamic_footprint_topic=chain.PREFIX + 'guard_footprint_never_published',
-        mesh_components_topic=chain.PREFIX + 'guard_mesh_never_published')
+    guard_parameters_override = {}
 
     def test_no_geometry_dependency_and_immutable_profile(self):
         handle = self.goal()
         result = handle.get_result_async()
         self.until(lambda: any(v > .04 for _, v, _ in self.outputs) or result.done(), 50.)
         self.assertFalse(result.done(), 'Guard still gates motion on duplicate collision inputs')
-        self.until(lambda: self.statuses[-1][1]['reason'] == 'collision_check_disabled')
-        self.assertFalse(self.statuses[-1][1]['collision_check_enabled'])
+        self.until(lambda: self.statuses[-1][1]['reason'] == 'planner_command')
+        self.assertNotIn('collision_check_enabled', self.statuses[-1][1])
         topics = dict(self.node.get_subscriber_names_and_types_by_node('r1_collision_guard', '/'))
         for topic in ('guard_scan_never_published', 'guard_footprint_never_published', 'guard_mesh_never_published'):
             self.assertNotIn(chain.PREFIX + topic, topics)
@@ -34,7 +30,7 @@ class CollisionOffChain(chain.FailstopChainROS):
             self.assertFalse(response.results[0].successful)
             self.until(getter.service_is_ready)
             actual = self.future(getter.call_async(GetParameters.Request(names=['collision_check_enabled'])))
-            self.assertFalse(actual.values[0].bool_value)
+            self.assertTrue(not actual.values or actual.values[0].type == ParameterType.PARAMETER_NOT_SET)
             (self.report / 'collisionoff-result.json').write_text(json.dumps(dict(
                 no_guard_scan_mesh_or_footprint_published=True, worker_scan_still_required=True,
                 reenable_refused=True, reason=response.results[0].reason, physical_motion=False), indent=2))

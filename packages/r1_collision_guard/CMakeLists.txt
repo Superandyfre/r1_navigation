@@ -15,30 +15,17 @@ if(NOT R1_FAILSTOP_BUILD_REVISION)
   set(R1_FAILSTOP_BUILD_REVISION "unknown")
 endif()
 
-add_library(${PROJECT_NAME}_logic SHARED src/guard_logic.cpp)
-target_compile_features(${PROJECT_NAME}_logic PUBLIC cxx_std_17)
-target_include_directories(${PROJECT_NAME}_logic PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>)
-
 add_executable(${PROJECT_NAME}_node src/collision_guard_node.cpp)
 target_compile_features(${PROJECT_NAME}_node PUBLIC cxx_std_17)
-target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME}_logic)
+target_include_directories(${PROJECT_NAME}_node PRIVATE include)
 ament_target_dependencies(${PROJECT_NAME}_node geometry_msgs nav_msgs rclcpp sensor_msgs std_msgs std_srvs r1_neupan_runtime)
 target_compile_definitions(${PROJECT_NAME}_node PRIVATE R1_FAILSTOP_BUILD_REVISION="${R1_FAILSTOP_BUILD_REVISION}")
 
-install(TARGETS ${PROJECT_NAME}_logic ${PROJECT_NAME}_node
+install(TARGETS ${PROJECT_NAME}_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
-
-if(BUILD_TESTING)
-  find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_guard_logic test/test_guard_logic.cpp)
-  target_link_libraries(test_guard_logic ${PROJECT_NAME}_logic)
-  target_include_directories(test_guard_logic PRIVATE include)
-endif()
 
 ament_package()

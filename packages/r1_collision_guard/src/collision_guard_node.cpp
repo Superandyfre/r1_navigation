@@ -4,8 +4,6 @@
 #include "r1_collision_guard/guard_logic.hpp"
 #include "r1_neupan_runtime/motion_authorization.hpp"
 #include "r1_neupan_runtime/command_barrier.hpp"
-#include "r1_collision_guard/mesh_components.hpp"
-#include "r1_collision_guard/scan_filter.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -24,12 +22,10 @@
 #include "geometry_msgs/msg/twist.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/laser_scan.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
 #include "std_msgs/msg/float64_multi_array.hpp"
-#include "geometry_msgs/msg/polygon_stamped.hpp"
 
 namespace r1_collision_guard
 {
@@ -41,7 +37,6 @@ using SteadyTime = std::chrono::steady_clock::time_point;
 struct OdomSample
 {
   rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
-  Pose2D pose{};
   double linear_x{0.0};
   double angular_z{0.0};
   std::string frame;
@@ -57,12 +52,6 @@ struct LocalizationHealth
   bool available{false};
 };
 
-struct ScanSample
-{
-  sensor_msgs::msg::LaserScan scan;
-  SteadyTime received{};
-};
-
 struct ArmState
 {
   bool available{false};
@@ -75,32 +64,6 @@ struct ArmState
   SteadyTime stable_since{};
 };
 
-struct DynamicFootprint
-{
-  std::vector<Point2D> points;
-  SteadyTime received{};
-  bool available{false};
-};
-
-double yawFromQuaternion(const geometry_msgs::msg::Quaternion & quaternion)
-{
-  const double siny = 2.0 * (quaternion.w * quaternion.z + quaternion.x * quaternion.y);
-  const double cosy = 1.0 - 2.0 * (quaternion.y * quaternion.y + quaternion.z * quaternion.z);
-  return std::atan2(siny, cosy);
-}
-
-Point2D transformPoint(const Point2D & point, const Pose2D & from, const Pose2D & to)
-{
-  const double from_cosine = std::cos(from.yaw);
-  const double from_sine = std::sin(from.yaw);
-  const double world_x = from.x + from_cosine * point.x - from_sine * point.y;
-  const double world_y = from.y + from_sine * point.x + from_cosine * point.y;
-  const double dx = world_x - to.x;
-  const double dy = world_y - to.y;
-  const double to_cosine = std::cos(to.yaw);
-  const double to_sine = std::sin(to.yaw);
-  return {to_cosine * dx + to_sine * dy, -to_sine * dx + to_cosine * dy};
-}
 }  // namespace
 
 class CollisionGuardNode : public rclcpp::Node
@@ -109,16 +72,9 @@ public:
   CollisionGuardNode()
   : Node("r1_collision_guard")
   {
-    const auto footprint_points = declare_parameter<std::vector<double>>(
-      "footprint_points", std::vector<double>{});
-    GuardConfig config;
-    config.max_linear_mps = declare_parameter<double>("max_linear_mps", 0.15);
-    config.max_reverse_mps = declare_parameter<double>("max_reverse_mps", 0.15);
-    config.max_angular_radps = declare_parameter<double>("max_angular_radps", 0.4);
-    max_linear_mps_ = config.max_linear_mps;
-    max_reverse_mps_ = config.max_reverse_mps;
-    max_angular_radps_ = config.max_angular_radps;
-    collision_check_enabled_ = declare_parameter<bool>("collision_check_enabled", true);
+    max_linear_mps_ = declare_parameter<double>("max_linear_mps", 0.15);
+    max_reverse_mps_ = declare_parameter<double>("max_reverse_mps", 0.15);
+    max_angular_radps_ = declare_parameter<double>("max_angular_radps", 0.4);
     // There is no runtime bypass for motion authorization. Old producer stacks
     // without the new grant and source contract remain disarmed.
     r1_neupan_runtime::AuthorizationConfig authorization_config;
@@ -133,24 +89,11 @@ public:
     const auto planner_source_topic = declare_parameter<std::string>("planner_source_topic", "/neupan_planner_result");
     const auto motion_grant_topic = declare_parameter<std::string>("motion_grant_topic", "/neupan_motion_grant");
     control_frequency_ = declare_parameter<double>("control_frequency", 50.0);
-    config.control_period_sec = 1.0 / control_frequency_;
-    config.reaction_delay_sec = declare_parameter<double>("reaction_delay_sec", 0.10);
-    config.braking_deceleration_mps2 = declare_parameter<double>("braking_deceleration_mps2", 0.30);
-    config.braking_angular_deceleration_radps2 = declare_parameter<double>(
-      "braking_angular_deceleration_radps2", 0.80);
-    config.geometry_margin_m = declare_parameter<double>("geometry_margin_m", 0.02);
-    config.tracking_error_mps = declare_parameter<double>("tracking_error_mps", 0.0);
-    config.binary_search_iterations = declare_parameter<int>("binary_search_iterations", 10);
-    config.allow_reverse = declare_parameter<bool>("allow_reverse", false);
-    scan_timeout_sec_ = declare_parameter<double>("scan_timeout_sec", 0.25);
     odom_timeout_sec_ = declare_parameter<double>("odom_timeout_sec", 0.15);
     command_timeout_sec_ = declare_parameter<double>("command_timeout_sec", 0.20);
     source_command_timeout_sec_ = declare_parameter<double>("source_command_timeout_sec", command_timeout_sec_);
-    scan_history_size_ = declare_parameter<int>("scan_history_size", 32);
-    max_scan_range_m_ = declare_parameter<double>("max_scan_range_m", 8.0);
     base_frame_ = declare_parameter<std::string>("base_frame_id", "base_link");
     odom_frame_ = declare_parameter<std::string>("odom_frame_id", "odom");
-    const auto scan_topic = declare_parameter<std::string>("scan_topic", "/scan_neupan");
     const auto odom_topic = declare_parameter<std::string>("odom_topic", "/odom");
     const auto command_topic = declare_parameter<std::string>(
       "cmd_vel_in_topic", "/neupan_nav2_cmd_vel");
@@ -169,16 +112,6 @@ public:
     require_localization_ready_ = declare_parameter<bool>(
       "require_localization_ready", true);
     require_arms_stowed_ = declare_parameter<bool>("require_arms_stowed", true);
-    require_dynamic_footprint_ = declare_parameter<bool>("require_dynamic_footprint", false);
-    mesh_self_filter_preapplied_ = declare_parameter<bool>("mesh_self_filter_preapplied", false);
-    use_exact_mesh_components_ = declare_parameter<bool>("use_exact_mesh_components", false);
-    mesh_components_timeout_sec_ = declare_parameter<double>("mesh_components_timeout_sec", 1.50);
-    const auto mesh_components_topic = declare_parameter<std::string>(
-      "mesh_components_topic", "/r1_arm_guard_mesh_components");
-    dynamic_footprint_timeout_sec_ = declare_parameter<double>(
-      "dynamic_footprint_timeout_sec", 0.50);
-    const auto dynamic_footprint_topic = declare_parameter<std::string>(
-      "dynamic_footprint_topic", "/r1_arm_footprint");
     joint_state_timeout_sec_ = declare_parameter<double>("joint_state_timeout_sec", 0.50);
     arm_stow_tolerance_rad_ = declare_parameter<double>("arm_stow_tolerance_rad", 0.035);
     arm_motion_tolerance_radps_ = declare_parameter<double>(
@@ -191,41 +124,18 @@ public:
     arm_joint_state_topics_ = declare_parameter<std::vector<std::string>>(
       "arm_joint_state_topics", std::vector<std::string>{});
 
-    if (config.max_linear_mps <= 0.0 || config.max_reverse_mps <= 0.0 ||
-      control_frequency_ <= 0.0 || scan_timeout_sec_ <= 0.0 || odom_timeout_sec_ <= 0.0 ||
-      command_timeout_sec_ <= 0.0 || source_command_timeout_sec_ <= 0.0 ||
-      localization_health_timeout_sec_ <= 0.0 ||
-      dynamic_footprint_timeout_sec_ <= 0.0 ||
-      mesh_components_timeout_sec_ <= 0.0 ||
+    if (max_linear_mps_ <= 0.0 || max_reverse_mps_ <= 0.0 || max_angular_radps_ <= 0.0 ||
+      control_frequency_ <= 0.0 || odom_timeout_sec_ <= 0.0 || command_timeout_sec_ <= 0.0 ||
+      source_command_timeout_sec_ <= 0.0 || localization_health_timeout_sec_ <= 0.0 ||
       joint_state_timeout_sec_ <= 0.0 || arm_stow_tolerance_rad_ <= 0.0 ||
-      arm_motion_tolerance_radps_ < 0.0 || arm_settle_time_sec_ < 0.0 ||
-      scan_history_size_ < 2 ||
-      (collision_check_enabled_ &&
-      (footprint_points.size() < 6 || footprint_points.size() % 2 != 0)))
-    {
-      throw std::runtime_error("invalid R1 collision guard parameters");
-    }
+      arm_motion_tolerance_radps_ < 0.0 || arm_settle_time_sec_ < 0.0)
+    {throw std::runtime_error("invalid R1 command guard parameters");}
     if (require_arms_stowed_ && (arm_joint_names_.empty() ||
       arm_joint_names_.size() != arm_stowed_positions_.size() ||
       arm_joint_state_topics_.empty()))
     {
       throw std::runtime_error("arm stow guard requires matching joint names and positions");
     }
-    if (collision_check_enabled_ && use_exact_mesh_components_ &&
-      (!require_dynamic_footprint_ || mesh_self_filter_preapplied_))
-    {
-      throw std::runtime_error("exact mesh guard requires a live footprint and raw scan");
-    }
-    if (collision_check_enabled_) {
-      std::vector<Point2D> footprint;
-      footprint.reserve(footprint_points.size() / 2);
-      for (size_t index = 0; index < footprint_points.size(); index += 2) {
-        footprint.push_back({footprint_points[index], footprint_points[index + 1]});
-      }
-      base_footprint_ = footprint;
-      logic_ = std::make_unique<GuardLogic>(config, std::move(footprint));
-    }
-
     recovery_stop_ = create_service<std_srvs::srv::Trigger>("~/stop_for_recovery",
       [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
@@ -284,11 +194,6 @@ public:
         smoother_provenance_topic, rclcpp::QoS(20),
         std::bind(&CollisionGuardNode::smootherProvenanceCallback, this, std::placeholders::_1));
     }
-    if (collision_check_enabled_) {
-      scan_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
-        scan_topic, rclcpp::SensorDataQoS(),
-        std::bind(&CollisionGuardNode::scanCallback, this, std::placeholders::_1));
-    }
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       odom_topic, rclcpp::QoS(50),
       std::bind(&CollisionGuardNode::odomCallback, this, std::placeholders::_1));
@@ -299,16 +204,6 @@ public:
       arm_joint_state_subs_.push_back(create_subscription<sensor_msgs::msg::JointState>(
         topic, rclcpp::QoS(20),
         std::bind(&CollisionGuardNode::jointStateCallback, this, std::placeholders::_1)));
-    }
-    if (collision_check_enabled_) {
-      dynamic_footprint_sub_ = create_subscription<geometry_msgs::msg::PolygonStamped>(
-        dynamic_footprint_topic, rclcpp::QoS(20),
-        std::bind(&CollisionGuardNode::dynamicFootprintCallback, this, std::placeholders::_1));
-    }
-    if (collision_check_enabled_ && use_exact_mesh_components_) {
-      mesh_components_sub_ = create_subscription<std_msgs::msg::Float64MultiArray>(
-        mesh_components_topic, rclcpp::QoS(10),
-        std::bind(&CollisionGuardNode::meshComponentsCallback, this, std::placeholders::_1));
     }
     command_pub_ = create_publisher<geometry_msgs::msg::Twist>(output_topic, rclcpp::QoS(20));
     status_pub_ = create_publisher<std_msgs::msg::String>(status_topic, rclcpp::QoS(20));
@@ -328,11 +223,6 @@ public:
           {
             result.successful = false;
             result.reason = "authorization configuration requires controlled restart";
-            return result;
-          }
-          if (name == "collision_check_enabled") {
-            result.successful = false;
-            result.reason = "collision-check profile is fixed at startup; controlled restart required";
             return result;
           }
         }
@@ -367,26 +257,10 @@ private:
     source_command_valid_ = std::isfinite(message->linear.x) && std::isfinite(message->angular.z);
   }
 
-  void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr message)
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    scan_ = *message;
-    scan_received_ = std::chrono::steady_clock::now();
-    scan_history_.push_back({*message, scan_received_});
-    while (static_cast<int>(scan_history_.size()) > scan_history_size_) {
-      scan_history_.pop_front();
-    }
-    scan_available_ = true;
-  }
-
   void odomCallback(const nav_msgs::msg::Odometry::SharedPtr message)
   {
     OdomSample sample;
     sample.stamp = message->header.stamp;
-    sample.pose = {
-      message->pose.pose.position.x,
-      message->pose.pose.position.y,
-      yawFromQuaternion(message->pose.pose.orientation)};
     sample.linear_x = message->twist.twist.linear.x;
     sample.angular_z = message->twist.twist.angular.z;
     sample.frame = message->header.frame_id;
@@ -543,133 +417,6 @@ private:
     arm_state_ = std::move(arm);
   }
 
-  void dynamicFootprintCallback(const geometry_msgs::msg::PolygonStamped::SharedPtr message)
-  {
-    DynamicFootprint footprint;
-    if (message->header.frame_id != base_frame_ || message->polygon.points.size() < 3) {
-      return;
-    }
-    footprint.points.reserve(message->polygon.points.size());
-    for (const auto & point : message->polygon.points) {
-      if (!std::isfinite(point.x) || !std::isfinite(point.y)) {
-        return;
-      }
-      footprint.points.push_back({point.x, point.y});
-    }
-    footprint.received = std::chrono::steady_clock::now();
-    footprint.available = true;
-    std::lock_guard<std::mutex> lock(mutex_);
-    dynamic_footprint_ = std::move(footprint);
-  }
-
-  void meshComponentsCallback(const std_msgs::msg::Float64MultiArray::SharedPtr message)
-  {
-    try {
-      if (message->layout.dim.empty() ||
-        message->layout.dim[0].label != "r1_arm_guard_mesh_components_v1")
-      {
-        throw std::invalid_argument("mesh component schema invalid");
-      }
-      const size_t count = message->layout.dim[0].size;
-      auto components = decodeGuardMeshComponents(message->data, count);
-      if (message->layout.data_offset != 0U ||
-        message->layout.dim[0].stride != message->data.size())
-      {
-        throw std::invalid_argument("mesh component layout invalid");
-      }
-      components.expanded.insert(components.expanded.begin(), base_footprint_);
-      components.raw.insert(components.raw.begin(), base_footprint_);
-      std::lock_guard<std::mutex> lock(mutex_);
-      logic_->setFootprints(std::move(components.expanded));
-      mesh_self_filter_polygons_ = std::move(components.raw);
-      mesh_components_received_ = std::chrono::steady_clock::now();
-      mesh_component_count_ = count;
-      mesh_components_available_ = true;
-    } catch (const std::exception & error) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      mesh_components_available_ = false;
-      mesh_component_count_ = 0U;
-      mesh_self_filter_polygons_.clear();
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
-        "Invalid arm mesh components: %s", error.what());
-    }
-  }
-
-  bool interpolateOdom(const std::deque<OdomSample> & history, const rclcpp::Time & stamp,
-    OdomSample & output) const
-  {
-    if (history.empty() || stamp.nanoseconds() == 0) {
-      return false;
-    }
-    if (stamp < history.front().stamp || stamp > history.back().stamp) {
-      return false;
-    }
-    if (stamp == history.front().stamp) {
-      output = history.front();
-      return true;
-    }
-    for (size_t index = 1; index < history.size(); ++index) {
-      const auto & before = history[index - 1];
-      const auto & after = history[index];
-      // The driver can publish several transport messages with the same odom
-      // stamp. They do not form an interpolation interval.
-      if (after.stamp <= before.stamp) {
-        continue;
-      }
-      if (stamp > after.stamp) {
-        continue;
-      }
-      const double span = (after.stamp - before.stamp).seconds();
-      if (span <= 0.0) {
-        return false;
-      }
-      const double ratio = (stamp - before.stamp).seconds() / span;
-      output = after;
-      output.stamp = stamp;
-      output.pose.x = before.pose.x + ratio * (after.pose.x - before.pose.x);
-      output.pose.y = before.pose.y + ratio * (after.pose.y - before.pose.y);
-      output.pose.yaw = before.pose.yaw + ratio * std::atan2(
-        std::sin(after.pose.yaw - before.pose.yaw), std::cos(after.pose.yaw - before.pose.yaw));
-      output.linear_x = before.linear_x + ratio * (after.linear_x - before.linear_x);
-      output.angular_z = before.angular_z + ratio * (after.angular_z - before.angular_z);
-      return true;
-    }
-    return false;
-  }
-
-  bool selectAlignedScan(const std::deque<ScanSample> & history,
-    const rclcpp::Time & latest_odom_stamp, ScanSample & output) const
-  {
-    for (auto sample = history.rbegin(); sample != history.rend(); ++sample) {
-      if (rclcpp::Time(sample->scan.header.stamp).nanoseconds() != 0 &&
-        rclcpp::Time(sample->scan.header.stamp) <= latest_odom_stamp)
-      {
-        output = *sample;
-        return true;
-      }
-    }
-    return false;
-  }
-
-  std::vector<Point2D> currentObstaclePoints(
-    const sensor_msgs::msg::LaserScan & scan, const OdomSample & scan_odom,
-    const OdomSample & current_odom) const
-  {
-    std::vector<Point2D> points;
-    points.reserve(scan.ranges.size());
-    double angle = scan.angle_min;
-    for (const float range : scan.ranges) {
-      if (std::isfinite(range) && range >= scan.range_min && range <= scan.range_max &&
-        range <= max_scan_range_m_)
-      {
-        points.push_back(transformPoint(
-          {range * std::cos(angle), range * std::sin(angle)}, scan_odom.pose, current_odom.pose));
-      }
-      angle += scan.angle_increment;
-    }
-    return points;
-  }
-
   Decision fault(const std::string & reason) const
   {
     Decision decision;
@@ -700,48 +447,33 @@ private:
   void tick()
   {
     geometry_msgs::msg::Twist command;
-    sensor_msgs::msg::LaserScan scan;
-    std::deque<ScanSample> scan_history;
     std::deque<OdomSample> odom_history;
     SteadyTime command_received{};
     SteadyTime source_command_received{};
-    SteadyTime scan_received{};
     std::uint64_t command_epoch = 0;
     bool command_available = false;
     bool source_command_available = false;
     bool source_command_valid = false;
-    bool scan_available = false;
     bool localization_ready_seen = false;
     LocalizationHealth localization_health;
     ArmState arm_state;
-    DynamicFootprint dynamic_footprint;
-    bool mesh_components_available = false;
-    SteadyTime mesh_components_received{};
     {
       std::lock_guard<std::mutex> lock(mutex_);
       command_epoch = command_epoch_;
       command = command_;
-      scan = scan_;
-      scan_history = scan_history_;
       odom_history = odom_history_;
       command_received = command_received_;
       source_command_received = source_command_received_;
-      scan_received = scan_received_;
       command_available = command_available_;
       source_command_available = source_command_available_;
       source_command_valid = source_command_valid_;
-      scan_available = scan_available_;
       localization_ready_seen = localization_ready_seen_;
       localization_health = localization_health_;
       arm_state = arm_state_;
-      dynamic_footprint = dynamic_footprint_;
-      mesh_components_available = mesh_components_available_;
-      mesh_components_received = mesh_components_received_;
     }
     const auto steady_now = std::chrono::steady_clock::now();
     const auto ros_now = now();
     Decision decision;
-    size_t self_filtered_scan_points{0};
     const bool localization_health_stale = !localization_health.available ||
       std::chrono::duration<double>(steady_now - localization_health.received).count() >
       localization_health_timeout_sec_;
@@ -749,12 +481,6 @@ private:
       arm_state.oldest_joint_received == SteadyTime{} ||
       std::chrono::duration<double>(steady_now - arm_state.oldest_joint_received).count() >
       joint_state_timeout_sec_;
-    const bool dynamic_footprint_stale = !dynamic_footprint.available ||
-      std::chrono::duration<double>(steady_now - dynamic_footprint.received).count() >
-      dynamic_footprint_timeout_sec_;
-    const bool mesh_components_stale = !mesh_components_available ||
-      std::chrono::duration<double>(steady_now - mesh_components_received).count() >
-      mesh_components_timeout_sec_;
     if (require_localization_ready_ && !localization_ready_seen &&
       (localization_health_stale || localization_health.state == "BOOTSTRAP"))
     {
@@ -768,10 +494,6 @@ private:
       decision = stop("localization_hold:" + localization_health.reason);
     } else if (require_localization_ready_ && localization_health.state != "READY") {
       decision = fault("localization_" + localization_health.state + ":" + localization_health.reason);
-    } else if (collision_check_enabled_ && require_dynamic_footprint_ && dynamic_footprint_stale) {
-      decision = fault("dynamic_footprint_stale");
-    } else if (collision_check_enabled_ && use_exact_mesh_components_ && mesh_components_stale) {
-      decision = fault("mesh_components_stale");
     } else if (require_arms_stowed_ && arm_state_stale) {
       decision = fault("arm_joint_state_stale");
     } else if (require_arms_stowed_ && !arm_state.valid) {
@@ -793,9 +515,6 @@ private:
       decision = fault("source_command_nonfinite");
     } else if (!command_available || std::chrono::duration<double>(steady_now - command_received).count() > command_timeout_sec_) {
       decision = fault("command_stale");
-    } else if (collision_check_enabled_ &&
-      (!scan_available || std::chrono::duration<double>(steady_now - scan_received).count() > scan_timeout_sec_)) {
-      decision = fault("scan_stale");
     } else if (odom_history.empty() ||
       std::chrono::duration<double>(steady_now - odom_history.back().received).count() > odom_timeout_sec_) {
       decision = fault("odom_stale");
@@ -812,66 +531,13 @@ private:
       !std::isfinite(odom_history.back().linear_x) || !std::isfinite(odom_history.back().angular_z))
     {
       decision = fault("nonfinite_input");
-    } else if (!collision_check_enabled_) {
-      decision.state = Decision::State::PASS;
-      decision.reason = "collision_check_disabled";
-      decision.linear_x = std::clamp(command.linear.x, -max_reverse_mps_, max_linear_mps_);
-      decision.angular_z = std::clamp(
-        command.angular.z, -max_angular_radps_, max_angular_radps_);
     } else {
-      ScanSample aligned_scan;
-      if (!selectAlignedScan(scan_history, odom_history.back().stamp, aligned_scan)) {
-        decision = stop("waiting_scan_odom_alignment");
-      } else {
-        scan = aligned_scan.scan;
-        if (scan.header.frame_id != base_frame_) {
-          decision = fault("scan_frame_mismatch");
-        } else if ((ros_now - rclcpp::Time(scan.header.stamp)).seconds() < -0.02 ||
-          (ros_now - rclcpp::Time(scan.header.stamp)).seconds() > scan_timeout_sec_)
-        {
-          decision = fault("scan_stamp_stale_or_future");
-        } else {
-          OdomSample scan_odom;
-          if (!interpolateOdom(odom_history, scan.header.stamp, scan_odom)) {
-            decision = stop("waiting_scan_odom_interpolation");
-          } else {
-            // The final guard uses the raw scan. Remove only returns strictly
-            // inside the physical mesh; retain the expanded tolerance band.
-            if (require_dynamic_footprint_ && !use_exact_mesh_components_) {
-              logic_->setFootprint(dynamic_footprint.points);
-            }
-            auto points = currentObstaclePoints(scan, scan_odom, odom_history.back());
-            if (use_exact_mesh_components_) {
-              const auto first_self_return = std::remove_if(
-                points.begin(), points.end(), [this](const Point2D & point) {
-                  return std::any_of(
-                    mesh_self_filter_polygons_.begin(), mesh_self_filter_polygons_.end(),
-                    [&point](const auto & polygon) {
-                      return strictlyInsidePolygon(point, polygon);
-                    });
-                });
-              self_filtered_scan_points = static_cast<size_t>(
-                std::distance(first_self_return, points.end()));
-              points.erase(first_self_return, points.end());
-            }
-            if (require_dynamic_footprint_ && !use_exact_mesh_components_) {
-              const auto first_self_return = std::remove_if(
-                points.begin(), points.end(), [&dynamic_footprint](const Point2D & point) {
-                  return strictlyInsidePolygon(point, dynamic_footprint.points);
-                });
-              self_filtered_scan_points = static_cast<size_t>(
-                std::distance(first_self_return, points.end()));
-              points.erase(first_self_return, points.end());
-            }
-            decision = logic_->evaluate(
-              command.linear.x, command.angular.z,
-              odom_history.back().linear_x, odom_history.back().angular_z, points);
-          }
-        }
-      }
+      decision.state = Decision::State::PASS;
+      decision.reason = "planner_command";
+      decision.linear_x = std::clamp(command.linear.x, -max_reverse_mps_, max_linear_mps_);
+      decision.angular_z = std::clamp(command.angular.z, -max_angular_radps_, max_angular_radps_);
     }
-    // Recheck at the final actuator boundary, after the existing geometry and
-    // sensor checks, including when collision_check_enabled is false.
+    // Recheck command ownership at the actuator boundary.
     {
       std::lock_guard<std::mutex> lock(mutex_);
       if (command_epoch != command_epoch_) {decision = stop("command_epoch_changed");}
@@ -920,53 +586,31 @@ private:
       command_pub_->publish(output);
     }
     publishStatus(
-      decision, command, scan, odom_history, localization_health, scan_history.size(),
-      command_available, command_received, source_command_available, source_command_valid,
-      source_command_received, arm_state, dynamic_footprint, self_filtered_scan_points, steady_now, command_epoch);
+      decision, command, odom_history, localization_health, command_available, command_received,
+      source_command_available, source_command_valid, source_command_received, arm_state,
+      steady_now, command_epoch);
   }
 
   void publishStatus(const Decision & decision, const geometry_msgs::msg::Twist & command,
-    const sensor_msgs::msg::LaserScan & scan, const std::deque<OdomSample> & odom_history,
-    const LocalizationHealth & localization_health, const size_t scan_history_size,
+    const std::deque<OdomSample> & odom_history, const LocalizationHealth & localization_health,
     const bool command_available, const SteadyTime & command_received,
     const bool source_command_available, const bool source_command_valid,
     const SteadyTime & source_command_received, const ArmState & arm_state,
-    const DynamicFootprint & dynamic_footprint, const size_t self_filtered_scan_points,
     const SteadyTime & steady_now, const std::uint64_t command_epoch)
   {
     std_msgs::msg::String message;
-    const bool dynamic_footprint_ready = dynamic_footprint.available &&
-      std::chrono::duration<double>(steady_now - dynamic_footprint.received).count() <=
-      dynamic_footprint_timeout_sec_;
-    const double dynamic_footprint_age_sec = dynamic_footprint.available ?
-      std::chrono::duration<double>(steady_now - dynamic_footprint.received).count() : -1.0;
     // JSON serialization escapes diagnostic strings and emits null for
     // nonfinite requested input, so the safety status itself stays parseable.
     nlohmann::json payload = {
       {"schema", "r1_collision_guard_status_v1"},
-      {"collision_check_enabled", collision_check_enabled_},
       {"state", stateName(decision.state)}, {"reason", decision.reason},
       {"requested_linear_x", command.linear.x}, {"requested_angular_z", command.angular.z},
       {"output_linear_x", decision.linear_x}, {"output_angular_z", decision.angular_z},
-      {"safe_scale", decision.safe_scale}, {"stopping_distance_m", decision.stopping_distance_m},
-      {"collision_time_sec", decision.collision_time_sec},
-      {"collision_point_x", decision.collision_point.x}, {"collision_point_y", decision.collision_point.y},
       {"localization_state", localization_health.state}, {"localization_reason", localization_health.reason},
-      {"arm_state", (!collision_check_enabled_ && !require_arms_stowed_) ? "NOT_REQUIRED" : require_dynamic_footprint_ ?
-        (dynamic_footprint_ready ? "DYNAMIC_PROJECTION_READY" : "DYNAMIC_PROJECTION_STALE") :
+      {"arm_state", !require_arms_stowed_ ? "NOT_REQUIRED" :
         (!arm_state.available ? "MISSING" : !arm_state.valid ? "INVALID" :
         !arm_state.stowed ? "NOT_STOWED" : arm_state.moving ? "MOVING" : "STOWED")},
       {"arm_max_position_error_rad", arm_state.max_position_error},
-      {"dynamic_footprint_points", dynamic_footprint.points.size()},
-      {"dynamic_footprint_ready", dynamic_footprint_ready},
-      {"dynamic_footprint_age_sec", dynamic_footprint_age_sec},
-      {"mesh_self_filter_preapplied", mesh_self_filter_preapplied_},
-      {"exact_mesh_components_enabled", collision_check_enabled_ && use_exact_mesh_components_},
-      {"mesh_component_count", mesh_component_count_},
-      {"mesh_components_age_sec", mesh_components_available_ ?
-        std::chrono::duration<double>(steady_now - mesh_components_received_).count() : -1.0},
-      {"self_filtered_scan_points", self_filtered_scan_points}, {"scan_history_size", scan_history_size},
-      {"scan_stamp_ns", rclcpp::Time(scan.header.stamp).nanoseconds()},
       {"source_command_ready", source_command_available && source_command_valid}};
     if (command_available) {
       payload["command_age_sec"] = std::chrono::duration<double>(steady_now - command_received).count();
@@ -1009,7 +653,6 @@ private:
   }
 
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr recovery_stop_;
-  std::unique_ptr<GuardLogic> logic_;
   r1_neupan_runtime::CommandBarrier command_barrier_;
   std::uint64_t command_epoch_{0};
   std::int64_t status_sequence_{0};
@@ -1022,32 +665,18 @@ private:
   double max_linear_mps_{0.15};
   double max_reverse_mps_{0.15};
   double max_angular_radps_{0.4};
-  bool collision_check_enabled_{true};
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_;
   double control_frequency_{50.0};
-  double scan_timeout_sec_{0.25};
   double odom_timeout_sec_{0.15};
   double command_timeout_sec_{0.20};
   double source_command_timeout_sec_{0.20};
-  int scan_history_size_{32};
   double localization_health_timeout_sec_{0.50};
-  double dynamic_footprint_timeout_sec_{0.50};
-  double mesh_components_timeout_sec_{1.50};
   double joint_state_timeout_sec_{0.50};
   double arm_stow_tolerance_rad_{0.035};
   double arm_motion_tolerance_radps_{0.020};
   double arm_settle_time_sec_{1.0};
-  double max_scan_range_m_{8.0};
   bool require_localization_ready_{true};
   bool require_arms_stowed_{true};
-  bool require_dynamic_footprint_{false};
-  bool mesh_self_filter_preapplied_{false};
-  bool use_exact_mesh_components_{false};
-  bool mesh_components_available_{false};
-  size_t mesh_component_count_{0U};
-  SteadyTime mesh_components_received_{};
-  std::vector<Point2D> base_footprint_;
-  std::vector<std::vector<Point2D>> mesh_self_filter_polygons_;
   std::string base_frame_;
   std::string odom_frame_;
   std::vector<std::string> arm_joint_names_;
@@ -1056,8 +685,6 @@ private:
   std::mutex mutex_;
   geometry_msgs::msg::Twist command_;
   geometry_msgs::msg::Twist source_command_;
-  sensor_msgs::msg::LaserScan scan_;
-  std::deque<ScanSample> scan_history_;
   std::deque<OdomSample> odom_history_;
   bool same_command_topics_{false};
   struct SmootherProvenance {
@@ -1070,25 +697,19 @@ private:
   double localization_recovery_after_{0.0};
   SteadyTime command_received_{};
   SteadyTime source_command_received_{};
-  SteadyTime scan_received_{};
   bool command_available_{false};
   bool source_command_available_{false};
   bool source_command_valid_{false};
-  bool scan_available_{false};
   bool localization_ready_seen_{false};
   LocalizationHealth localization_health_;
   ArmState arm_state_;
-  DynamicFootprint dynamic_footprint_;
   std::unordered_map<std::string, double> arm_positions_;
   std::unordered_map<std::string, SteadyTime> arm_joint_received_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr command_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr source_command_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr localization_health_sub_;
   std::vector<rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr> arm_joint_state_subs_;
-  rclcpp::Subscription<geometry_msgs::msg::PolygonStamped>::SharedPtr dynamic_footprint_sub_;
-  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr mesh_components_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr command_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::TimerBase::SharedPtr timer_;

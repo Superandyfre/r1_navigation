@@ -100,24 +100,13 @@ class InitialPath:
             state_pre_list.append(pre_state)
 
             ref_speed_forward = speed_profile[t] * self.dt
-            if ref_speed_forward == 0.0:
-                pass
-            elif ref_speed_forward >= self.interval:
-                inc_index = int((ref_speed_forward) / self.interval)
-                ref_index = ref_index + inc_index
-
-                if ref_index > len(self.cur_curve) - 1:
-                    ref_index = len(self.cur_curve) - 1
-                    gear_list[t] = 0
-
-                ref_state = self.cur_curve[ref_index][0:3]
-
-            else:
+            if ref_speed_forward > 0.0:
+                # Preserve fractional waypoint progress. Integer truncation
+                # quantized 1.0 m/s down to 0.8 m/s with 0.1 m waypoints.
                 ref_state, ref_index = self.find_interaction_point(
                     ref_state, ref_index, ref_speed_forward
                 )
-
-                if ref_index > len(self.cur_curve) - 1:
+                if ref_index >= len(self.cur_curve) - 1:
                     gear_list[t] = 0
 
             diff = ref_state[2, 0] - pre_state[2, 0]

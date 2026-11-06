@@ -41,7 +41,6 @@ def _select(context):
             launch_arguments["arm_extra_mesh_config"] = LaunchConfiguration("arm_extra_mesh_config")
             launch_arguments["command_profile"] = LaunchConfiguration("command_profile")
             launch_arguments["cmd_vel_out_topic"] = LaunchConfiguration("cmd_vel_out_topic")
-            launch_arguments["collision_check_enabled"] = LaunchConfiguration("collision_check_enabled")
     return [IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([package_share, "launch", launches[mode]]),
@@ -93,8 +92,5 @@ def generate_launch_description():
             "cmd_vel_out_topic", default_value="/cmd_vel",
             description="Collision-guard output; use an isolated topic for no-motion integration tests.",
         ),
-        DeclareLaunchArgument(
-            "collision_check_enabled", default_value="false", choices=["false"],
-            description="HW1 uses NeuPAN collision avoidance; the final node enforces runtime authorization only."),
         OpaqueFunction(function=_select),
     ])

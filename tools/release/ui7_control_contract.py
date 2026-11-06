@@ -15,18 +15,17 @@ from types import SimpleNamespace
 from launch_parameter_contract import compile_contract
 
 
-def button_options(environment, collision_default='true'):
-    allowed = {'RPP_NEUPAN_SCAN_SOURCE', 'RPP_NEUPAN_USE_MESH_SELF_FILTER',
-               'RPP_NEUPAN_COLLISION_CHECK_ENABLED', 'RPP_NEUPAN_COLLISION_CHECK_DEFAULT'}
+def button_options(environment, collision_default=None):
+    # Old launcher environment variables are accepted but have no effect.
+    allowed = {"RPP_NEUPAN_SCAN_SOURCE", "RPP_NEUPAN_USE_MESH_SELF_FILTER",
+               "RPP_NEUPAN_COLLISION_CHECK_ENABLED", "RPP_NEUPAN_COLLISION_CHECK_DEFAULT"}
     if set(environment) - allowed or any(not isinstance(v, str) for v in environment.values()):
-        raise ValueError('unsupported_UI7_environment_input')
-    scan = environment.get('RPP_NEUPAN_SCAN_SOURCE') or 'dual'
-    mesh = environment.get('RPP_NEUPAN_USE_MESH_SELF_FILTER') or 'true'
-    collision = environment.get('RPP_NEUPAN_COLLISION_CHECK_ENABLED') or (
-        environment.get('RPP_NEUPAN_COLLISION_CHECK_DEFAULT') or collision_default)
-    if scan not in ('dual', 'livox_only') or mesh not in ('true', 'false') or collision not in ('true', 'false'):
-        raise ValueError('invalid_UI7_environment_override')
-    return dict(scan_source=scan, use_mesh_self_filter=mesh, collision_check_enabled=collision)
+        raise ValueError("unsupported_UI7_environment_input")
+    scan = environment.get("RPP_NEUPAN_SCAN_SOURCE") or "dual"
+    mesh = environment.get("RPP_NEUPAN_USE_MESH_SELF_FILTER") or "true"
+    if scan not in ("dual", "livox_only") or mesh not in ("true", "false"):
+        raise ValueError("invalid_UI7_environment_override")
+    return dict(scan_source=scan, use_mesh_self_filter=mesh)
 
 
 def trace(bundle, calibration, environment):
@@ -50,12 +49,7 @@ def trace(bundle, calibration, environment):
     button = bundle / 'tools/starterbutton/start_navigation_high_sampling_neupan.sh'
     inputs[str(button)] = hashlib.sha256(button.read_bytes()).hexdigest()
     script = button.read_text()
-    if '${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-false}' in script:
-        collision_default = 'false'
-    elif '${RPP_NEUPAN_COLLISION_CHECK_DEFAULT:-true}' in script:
-        collision_default = 'true'
-    else:
-        raise ValueError('unreviewed_UI7_collision_default_expression')
+    collision_default = None
     registration_path = bundle / 'tools/starterbutton/navigation7_button.json'
     inputs[str(registration_path)] = hashlib.sha256(registration_path.read_bytes()).hexdigest()
     registration = json.loads(registration_path.read_text())
@@ -134,7 +128,6 @@ def trace(bundle, calibration, environment):
         raise ValueError('UI7_override_not_forwarded')
     contract = compile_contract(bundle, calibration, profile=motion['command_profile'],
                                 mesh=motion['use_mesh_self_filter'] == 'true',
-                                collision=motion['collision_check_enabled'] == 'true',
                                 scan_source=motion['scan_source'])
     contract['inputs'].update(inputs)
     contract['ui7_trace'] = dict(button_options=options, nav_profile=nav['command_profile'],

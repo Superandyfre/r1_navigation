@@ -56,7 +56,7 @@ class MotionWiring(unittest.TestCase):
         self.assertEqual(fusion["rear_scan_topic"],f["output_scan_topic"])
         self.assertEqual(fusion["output_scan_topic"],"/scan_neupan_mesh_shadow")
         self.assertEqual(self.params(c,n["n1_16_production_bridge"])["scan_topic"],fusion["output_scan_topic"])
-        self.assertEqual(self.params(c,n["r1_collision_guard"])["scan_topic"],fusion["output_scan_topic"])
+        self.assertNotIn("scan_topic",self.params(c,n["r1_collision_guard"]))
         self.assertEqual(self.remaps(c,n["r1_arm_footprint"])["/scan_neupan_mesh_shadow"],"/r1_arm_legacy_2d_scan")
     def test_front_only_3d_mode_and_incompatible_option(self):
         c,n=self.build(mesh_filter_mode="3d",scan_source="livox_only")

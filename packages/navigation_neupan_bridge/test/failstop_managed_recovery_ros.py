@@ -28,7 +28,7 @@ import failstop_chain_ros as chain
 
 
 class ManagedRecovery(PartialRestart):
-    guard_parameters_override=dict(collision_check_enabled=False)
+    guard_parameters_override=dict()
     controller_parameters_override=dict(auto_arm_on_ready=True)
 
     def setUp(self):

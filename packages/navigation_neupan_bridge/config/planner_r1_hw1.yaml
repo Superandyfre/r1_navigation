@@ -4,9 +4,6 @@ step_time: 0.25
 ref_speed: 1.0
 device: 'cpu'
 time_print: false
-bypass_enabled: true
-bypass_lateral_scale: 0.20
-bypass_min_clearance: 0.05
 # NRMP constrains its distance slack to d_min=0.01. The collision threshold
 # must be strictly below that numerical lower bound or every finite solve is
 # falsely reported as a collision due to floating-point roundoff.

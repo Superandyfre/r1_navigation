@@ -80,7 +80,6 @@ def _build(context):
     mesh_filter_mode = LaunchConfiguration("mesh_filter_mode").perform(context)
     extra_mesh_path = LaunchConfiguration("arm_extra_mesh_config").perform(context)
     extra_meshes = _load_extra_meshes(extra_mesh_path)
-    collision_check_enabled = LaunchConfiguration("collision_check_enabled").perform(context)
     mesh_projection_margin_m = float(
         LaunchConfiguration("mesh_projection_margin_m").perform(context))
     mesh_3d_projection_margin_m = float(
@@ -112,8 +111,6 @@ def _build(context):
         raise RuntimeError("use_mesh_self_filter must be true or false")
     if mesh_filter_mode not in {"2d", "3d"}:
         raise RuntimeError("mesh_filter_mode must be 2d or 3d")
-    if collision_check_enabled != "false":
-        raise RuntimeError("HW1 duplicate collision checks were removed; collision_check_enabled must be false")
     if not 0.0 <= mesh_projection_margin_m <= 0.10:
         raise RuntimeError("mesh_projection_margin_m must be within [0.0, 0.10]")
     if not 0.0 <= mesh_3d_projection_margin_m <= 0.10:
@@ -361,14 +358,7 @@ def _build(context):
             os.path.join(guard_share, "config", "r1_collision_guard_hw1.yaml"),
             {
                 "use_sim_time": False,
-                "footprint_points": footprint_points,
                 "odom_topic": "/odom",
-                "scan_topic": (navigation_scan_topic if use_3d else
-                               "/scan_neupan" if use_mesh_self_filter == "true" else navigation_scan_topic),
-                "mesh_self_filter_preapplied": False,
-                "use_exact_mesh_components": False,
-                "require_dynamic_footprint": False,
-                "collision_check_enabled": False,
                 "cmd_vel_in_topic": (
                     "/neupan_nav2_smoothed_cmd_vel"
                     if command_profile == "smoothed" else "/neupan_nav2_cmd_vel"),
@@ -445,9 +435,6 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "arm_extra_mesh_config", default_value="",
             description="Optional YAML file listing attached mesh frames, URIs and scales."),
-        DeclareLaunchArgument(
-            "collision_check_enabled", default_value="false", choices=["false"],
-            description="HW1 final node checks runtime authorization without duplicate collision geometry."),
         DeclareLaunchArgument(
             "mesh_projection_margin_m", default_value="0.06",
             description="Local mesh-only LiDAR self-return edge tolerance in metres."),

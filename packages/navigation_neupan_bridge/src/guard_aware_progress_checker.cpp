@@ -76,14 +76,9 @@ void GuardAwareProgressChecker::neupanSemanticsCallback(
     const auto dune_min = payload.at("dune").at("min_distance_m");
     const double dune_min_m =
       dune_min.is_number() ? dune_min.get<double>() : 0.0;
-    // A bounded reverse recovery may resolve the current infeasible segment.
-    infeasibility.active = stop && dune_min_m < 0.0 &&
-      !payload.value("recovery_reverse_requested", false);
-    const auto motion = payload.value("obstacle_motion", nlohmann::json::object());
-    infeasibility.active = infeasibility.active ||
-      (stop && motion.value("bypass_recovery_exhausted", false));
-    wait.active = motion.value("enabled", false) &&
-      motion.value("state", "") == "WAIT" && !infeasibility.active;
+    // Diagnose the optimizer response; no external obstacle policy drives it.
+    infeasibility.active = stop && dune_min_m < 0.0;
+    wait.active = stop && !info.value("arrive", false) && !infeasibility.active;
   } catch (const std::exception &) {
     infeasibility.active = false;
     wait.active = false;
