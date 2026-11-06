@@ -30,6 +30,13 @@ done
 # must not inherit an interactive Conda Python when starting ROS executables.
 export PATH=/usr/bin:/bin:$PATH
 
+# Refuse a conflicting discovered runtime before starting a second navigation
+# stack. This is a read-only discovery snapshot, not a cross-machine lock.
+if ! /usr/bin/python3 "${script_dir}/navigation_graph_preflight.py"; then
+  echo "Navigation graph conflicts detected; stop the conflicting runtime before starting UI7." >&2
+  exit 1
+fi
+
 # UI7 startup is operator controlled; release acceptance is tracked separately.
 # Runtime authorization and fault/timeout stopping remain in the ROS nodes.
 
