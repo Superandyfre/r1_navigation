@@ -94,6 +94,40 @@ TEST(ContinuationAuthorization, OlderSolveCannotOverwriteMoreRecentWallObservati
  gate.source(source(100.70,4),100.70);  // input 100.60 sees the new wall
  EXPECT_EQ(gate.latestSource()->request,4);EXPECT_TRUE(gate.evaluate(100.70).allowed);
 }
+TEST(ContinuationAuthorization, OlderSolveIsPromotedOnlyAfterNewSceneValidation) {
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.3,2),100.3);gate.authorization(grant("COMMIT",100.3,3),100.3);
+ gate.health(health(100.55,3),100.55);gate.authorization(grant("COMMIT",100.55,4),100.55);
+ gate.continuation(continuationProof(),100.56);ASSERT_TRUE(gate.evaluate(100.56).allowed);
+ auto next=source(100.56,2);next["trajectory"]={{"step_sec",.25},{"controls",{{.1,.2},{.15,-.1},{.2,0.}}}};
+ gate.source(next,100.56);ASSERT_EQ(gate.latestSource()->request,1);
+ auto proof=continuationProof();proof["parent_request_id"]=2;proof["parent_cycle_id"]=2;
+ proof["parent_scan_counter"]=2;proof["scan_counter"]=3;proof["plan_started_monotonic"]=100.56;
+ proof["scan_receive_monotonic"]=100.59;proof["pose_receive_monotonic"]=100.59;
+ proof["validation_started_monotonic"]=100.60;proof["validated_monotonic"]=100.61;
+ proof["published_monotonic"]=100.62;proof["command"]={{"linear_x",.1},{"angular_z",.2}};
+ gate.continuation(proof,100.63);ASSERT_EQ(gate.latestSource()->request,2);
+ ASSERT_TRUE(gate.evaluate(100.63).allowed);ASSERT_TRUE(gate.continuationAction(100.63));
+ EXPECT_DOUBLE_EQ(gate.continuationAction(100.63)->at(0),.1);
+}
+TEST(ContinuationAuthorization, InvalidPendingPlanRevokesOldContinuation) {
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.3,2),100.3);gate.authorization(grant("COMMIT",100.3,3),100.3);
+ gate.health(health(100.55,3),100.55);gate.authorization(grant("COMMIT",100.55,4),100.55);
+ gate.continuation(continuationProof(),100.56);
+ auto next=source(100.56,2);next["trajectory"]={{"step_sec",.25},{"controls",{{.1,.2},{.15,-.1}}}};
+ gate.source(next,100.56);ASSERT_EQ(gate.latestSource()->request,1);
+ auto proof=continuationProof(false);proof["parent_request_id"]=2;proof["parent_cycle_id"]=2;
+ proof["parent_scan_counter"]=2;proof["scan_counter"]=3;proof["plan_started_monotonic"]=100.56;
+ proof["scan_receive_monotonic"]=100.59;proof["pose_receive_monotonic"]=100.59;
+ proof["validation_started_monotonic"]=100.60;proof["validated_monotonic"]=100.61;
+ proof["published_monotonic"]=100.62;gate.continuation(proof,100.63);
+ ASSERT_EQ(gate.latestSource()->request,1);EXPECT_FALSE(gate.evaluate(100.63).allowed);
+}
 TEST(ContinuationAuthorization, DisabledOrCancelledNeverAllowsProof) {
  MotionAuthorization gate("guard-a");gate.health(health(),100.);gate.source(trajectorySource(),100.);
  gate.authorization(grant(),100.);gate.authorization(grant("COMMIT",100.,2),100.);

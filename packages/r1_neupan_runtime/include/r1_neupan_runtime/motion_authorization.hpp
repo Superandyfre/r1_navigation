@@ -346,8 +346,23 @@ public:
         // A later revalidation has seen a newer scene. A solve computed from
         // an older scan must never overwrite it, especially after wall denial.
         if (config_.continuation_enabled && committed_ && !source_->trajectory.empty() &&
-            (candidate.scan < continuation_.observationScan() ||
-             candidate.input < continuation_.observationTime())) {return;}
+            (candidate.scan < validated_scan_ || candidate.input < validated_input_)) {
+          // Keep the current certified action while the candidate is checked
+          // against a scan at least as new as the last observed scene.
+          if (candidate.trajectory.empty() || candidate.request <= source_->request ||
+              candidate.cycle <= source_->cycle || candidate.solved <= source_->solved) {return;}
+          if (pending_source_) {
+            if (candidate.sameIdentity(*pending_source_)) {
+              if (!candidate.sameContents(*pending_source_)) {latch("duplicate_command_mismatch");}
+              return;
+            }
+            if (candidate.request <= pending_source_->request || candidate.cycle <= pending_source_->cycle ||
+                candidate.scan <= pending_source_->scan || candidate.solved <= pending_source_->solved) {return;}
+          }
+          pending_source_=candidate;
+          pending_continuation_.install(candidate,candidate.trajectory_step,candidate.trajectory);
+          return;
+        }
         if (candidate.sameIdentity(*source_)) {
           if (!candidate.sameContents(*source_)) {latch("duplicate_command_mismatch");}
           return;  // even exact duplicates do not refresh time or recovery
@@ -358,6 +373,8 @@ public:
         {protocolFailure("source_identity_regressed"); return;}
       }
       source_ = candidate;
+      validated_scan_=candidate.scan;validated_input_=candidate.input;
+      pending_source_.reset();pending_continuation_.clear();
       continuation_rejected_ = false;
       if (config_.continuation_enabled && !candidate.trajectory.empty()) {
         continuation_.install(candidate, candidate.trajectory_step, candidate.trajectory);
@@ -373,7 +390,24 @@ public:
   {
     if (!config_.continuation_enabled || faulted() || !committed_ || !grant_ || !source_ ||
         !(source_->context == *grant_)) {return;}
+    if (pending_source_ && j.is_object() && j.value("parent_request_id",-1LL)==pending_source_->request &&
+        pending_continuation_.accept(j,now,config_.input_timeout)) {
+      validated_scan_=pending_continuation_.observationScan();
+      validated_input_=pending_continuation_.observationTime();
+      if (j.at("valid").get<bool>()) {
+        source_=*pending_source_;
+        continuation_=std::move(pending_continuation_);
+        continuation_rejected_=false;
+      } else {
+        // A newly seen wall invalidates both the new plan and old proof.
+        continuation_.clear();continuation_rejected_=true;
+      }
+      pending_source_.reset();pending_continuation_.clear();
+      return;
+    }
     if (continuation_.accept(j,now,config_.input_timeout)) {
+      validated_scan_=continuation_.observationScan();
+      validated_input_=continuation_.observationTime();
       continuation_rejected_ = !j.at("valid").get<bool>();
     }
   }
@@ -405,6 +439,7 @@ public:
           retired_grants_.insert(grant_id_);
           grant_.reset(); committed_ = false; grant_id_.clear(); source_stale_since_.reset();
           handover_source_.reset(); handover_new_sources_.clear();
+          pending_source_.reset();pending_continuation_.clear();continuation_.clear();
         }
         return;
       }
@@ -582,7 +617,10 @@ private:
   bool ever_prepared_{false}, committed_{false};
   std::optional<Context> grant_;
   std::optional<Source> source_;
-  TrajectoryProofVerifier continuation_;
+  TrajectoryProofVerifier continuation_, pending_continuation_;
+  std::optional<Source> pending_source_;
+  std::int64_t validated_scan_{0};
+  double validated_input_{0.};
   bool continuation_rejected_{false};
   std::optional<Source> handover_source_;
   std::deque<Source> handover_new_sources_;
