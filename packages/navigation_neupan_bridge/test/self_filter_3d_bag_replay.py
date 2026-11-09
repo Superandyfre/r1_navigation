@@ -14,7 +14,10 @@ rclpy.init();node=rclpy.create_node("self_filter_3d_replay_observer");rows=[];fu
 node.create_subscription(LaserScan,"/test_3d_fused",lambda msg:fused.append(time.monotonic()),qos_profile_sensor_data)
 node.create_subscription(String,"/r1_self_filter_3d_shadow/status",lambda msg:rows.append(json.loads(msg.data)),50)
 log=tempfile.TemporaryFile(mode="w+")
-shadow=subprocess.Popen([exe,"--ros-args","-p","use_sim_time:=true"],stdout=log,stderr=subprocess.STDOUT)
+shadow_cmd=[exe,"--ros-args","-p","use_sim_time:=true"]
+if os.environ.get("NEUPAN_CONFIRMED_ECHO_FILE"):
+    shadow_cmd += ["-p","confirmed_livox_echo_file:="+os.environ["NEUPAN_CONFIRMED_ECHO_FILE"]]
+shadow=subprocess.Popen(shadow_cmd,stdout=log,stderr=subprocess.STDOUT)
 extra=[]
 if os.environ.get("NEUPAN_3D_REPLAY_FUSION")=="1":
     commands=[

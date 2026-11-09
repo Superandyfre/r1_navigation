@@ -33,14 +33,18 @@ class ShadowFilter(unittest.TestCase):
         for arm,g in (("left_","L_"),("right_","R_")):
             frames += [arm+"moduan_link",g+"omniPicker_base_link"]
             frames += [g+"omniPicker_hand_"+s for s in ("narrow1_Link","narrow2_Link","narrow3_Link","narrow_loop_Link","wide1_Link","wide2_Link","wide3_Link","wide_loop_Link")]
-        target="L_omniPicker_hand_narrow1_Link";frames.append("held_object")
+        target="L_omniPicker_hand_narrow1_Link";target_right="R_omniPicker_hand_narrow1_Link";frames.append("held_object")
         exe=os.environ["NEUPAN_TEST_3D_SHADOW"];log=tempfile.TemporaryFile(mode="w+")
         uri="package://rpp_components_description/meshes/gripper/agibot/omniPicker/narrow1_Link.STL"
-        proc=subprocess.Popen([exe,"--ros-args","-p","additional_mesh_frames:=[held_object]",
-            "-p","additional_mesh_uris:=["+uri+"]","-p","additional_mesh_scales:=[1.0]",
-            "-p","front_echo_box_base_xyz:=[0.045,0.235,-0.405,-0.305,0.670,0.795]"],
+        calibration=tempfile.NamedTemporaryFile(mode="w",suffix=".json")
+        json.dump({"schema":"confirmed_livox_link_echo_v1","templates":[
+            {"frame":target,"sensor_frame":"lidar_link","radius_m":.008,"points_m":[[.3,0.,.3],[.3,0.,vz]]},
+            {"frame":target_right,"sensor_frame":"lidar_link","radius_m":.008,"points_m":[[.3,.2,.3]]}]},calibration);calibration.flush()
+        proc=subprocess.Popen([exe,"--ros-args","-p","confirmed_livox_echo_file:="+calibration.name,
+            "-p","additional_mesh_frames:=[held_object]",
+            "-p","additional_mesh_uris:=["+uri+"]","-p","additional_mesh_scales:=[1.0]"],
             stdout=log,stderr=subprocess.STDOUT)
-        position=1.;missing=False;last=0.
+        position=1.;right_position=2.;missing=False;last=0.
         def tick():
             nonlocal last
             self.assertIsNone(proc.poll(),"shadow process exited")
@@ -48,11 +52,12 @@ class ShadowFilter(unittest.TestCase):
             if now-last>.02:
                 last=now;stamp=node.get_clock().now().to_msg()
                 transforms=[]
-                for f in ["lidar_link","laser_link",*frames]:
+                for f in ["lidar_link","other_lidar_link","laser_link",*frames]:
                     if missing and f==target:continue
                     t=TransformStamped();t.header.stamp=stamp;t.header.frame_id="base_link";t.child_frame_id=f;t.transform.rotation.w=1.
-                    if f in ("lidar_link","laser_link"): pass
+                    if f in ("lidar_link","other_lidar_link","laser_link"): pass
                     elif f==target:t.transform.translation.x=position;t.transform.translation.z=-vz
+                    elif f==target_right:t.transform.translation.x=right_position;t.transform.translation.z=-vz
                     elif f=="held_object":t.transform.translation.x=2.5;t.transform.translation.z=-vz
                     else:t.transform.translation.x=20.
                     transforms.append(t)
@@ -99,7 +104,7 @@ class ShadowFilter(unittest.TestCase):
             self.assertTrue(all(math.isnan(v) for v in third),third)
             fourth=struct.unpack_from("<fff",clouds[-1].data,60)
             self.assertTrue(all(math.isnan(v) for v in fourth),fourth)
-            self.assertTrue(math.isnan(struct.unpack_from("<f",clouds[-1].data,80)[0]), "observed cluster was not filtered")
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,80)[0]), "legacy base-frame blind box must not filter a real point")
             self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,100)[0]), "nearby return outside box was removed")
             until(lambda:any(json.loads(x).get("additional_meshes")==1 for x in states),2.)
             self.assertTrue(math.isinf(scans[-1].ranges[0]),scans[-1].ranges)
@@ -112,6 +117,42 @@ class ShadowFilter(unittest.TestCase):
             self.assertTrue(any(e["mesh_frame"]==target and e["index"]==2 and
                 e["point_stamp_ns"]>entries[0]["point_stamp_ns"] for e in entries))
             self.assertTrue(any(e["mesh_frame"]=="held_object" for e in entries))
+            # Calibrated self return follows the moving gripper, while a nearby
+            # obstacle and the same old world coordinate remain unchanged.
+            captured=node.get_clock().now();msg.header.stamp=captured.to_msg();ts=float(captured.nanoseconds)
+            msg.width=3;msg.row_step=60
+            msg.data=struct.pack("<"+"fffd"*3,1.8,0.,.3-vz,ts,1.3,0.,.3-vz,ts,1.82,0.,.3-vz,ts)
+            clouds.clear();states.clear();cp.publish(msg)
+            until(lambda:bool(clouds),4.)
+            self.assertTrue(math.isnan(struct.unpack_from("<f",clouds[-1].data,0)[0]))
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,20)[0]))
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,40)[0]))
+            until(lambda:any(any(e.get("reason")=="confirmed_link_echo" for e in json.loads(x).get("removed_sample",[])) for x in states),2.)
+            scans.clear();scan.header.stamp=captured.to_msg();scan.angle_min=0.;scan.angle_max=0.;scan.ranges=[1.8]
+            sp.publish(scan);until(lambda:bool(scans),4.)
+            self.assertTrue(math.isfinite(scans[-1].ranges[0]), "Livox-only calibration must not filter rear scan")
+            # The calibrated front-sensor pattern is not applied to a different sensor.
+            msg.header.frame_id="other_lidar_link";msg.width=1;msg.row_step=20
+            msg.data=struct.pack("<fffd",1.8,0.,.3-vz,ts)
+            clouds.clear();cp.publish(msg);until(lambda:bool(clouds),4.)
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,0)[0]))
+            msg.header.frame_id="lidar_link"
+            # Right gripper moves independently; it is filtered from its own
+            # mesh TF, and its old position is not treated as a fixed mask.
+            right_position=2.1;start=time.monotonic()
+            while time.monotonic()<start+.35:tick()
+            captured=node.get_clock().now();msg.header.stamp=captured.to_msg();ts=float(captured.nanoseconds)
+            msg.width=4;msg.row_step=80
+            msg.data=struct.pack("<"+"fffd"*4,2.1+vx,y,0.,ts,2.+vx,y,0.,ts,
+                2.4,.2,.3-vz,ts,2.3,.2,.3-vz,ts)
+            clouds.clear();states.clear();cp.publish(msg);until(lambda:bool(clouds),4.)
+            self.assertTrue(math.isnan(struct.unpack_from("<f",clouds[-1].data,0)[0]))
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,20)[0]))
+            self.assertTrue(math.isnan(struct.unpack_from("<f",clouds[-1].data,40)[0]))
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,60)[0]))
+            until(lambda:any(json.loads(q).get("removed_by_mesh",{}).get(target_right,0)>0 for q in states),2.)
+            self.assertTrue(any(e.get("reason")=="confirmed_link_echo" and e.get("mesh_frame")==target_right
+                for q in states for e in json.loads(q).get("removed_sample",[])))
             msg.width=2;msg.row_step=40
             # Pause only one unchanged part TF for a short time. The filter
             # must emit an explicitly degraded, temporally bounded result

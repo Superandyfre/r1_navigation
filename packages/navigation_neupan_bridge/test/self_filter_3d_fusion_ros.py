@@ -28,8 +28,11 @@ class ShadowFusion(unittest.TestCase):
             frames += [g+"omniPicker_hand_"+s for s in ("narrow1_Link","narrow2_Link","narrow3_Link","narrow_loop_Link","wide1_Link","wide2_Link","wide3_Link","wide_loop_Link")]
         target="L_omniPicker_hand_narrow1_Link";missing=False;last_tf=last_scan=0.
         paths=[os.environ["NEUPAN_TEST_3D_SHADOW"],os.environ["NEUPAN_TEST_CLOUD_TO_SCAN"],os.environ["NEUPAN_TEST_SCAN_FUSION"]]
+        shadow=[paths[0]]
+        if os.environ.get("NEUPAN_CONFIRMED_ECHO_FILE"):
+            shadow += ["--ros-args","-p","confirmed_livox_echo_file:="+os.environ["NEUPAN_CONFIRMED_ECHO_FILE"]]
         commands=[
-            [paths[0]],
+            shadow,
             [paths[1],"--ros-args","--params-file",os.environ["NEUPAN_TEST_CLOUD_CONFIG"],
              "-r","cloud_in:=/r1_self_filter_3d_shadow/cloud","-r","scan:=/test_3d_front"],
             [paths[2],"--ros-args","--params-file",os.environ["NEUPAN_TEST_FUSION_CONFIG"],

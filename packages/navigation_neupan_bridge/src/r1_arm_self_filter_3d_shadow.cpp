@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -42,6 +43,11 @@ struct MeshEntry
   std::string frame;
   std::unique_ptr<MeshSurfaceQuery> mesh;
 };
+struct EchoTemplate
+{
+  std::size_t mesh_index; double radius_sq; std::string sensor_frame;
+  fcl::Vector3d lower,upper; std::vector<fcl::Vector3d> points;
+};
 template<class Message> struct Pending
 {
   std::shared_ptr<const Message> msg;
@@ -72,14 +78,6 @@ public:
       !std::isfinite(stable_fallback_after_) || stable_fallback_after_<0 || stable_fallback_after_>=tf_wait_ ||
       !std::isfinite(stable_fallback_span_) || stable_fallback_span_<=0 || stable_fallback_span_>.5)
     {throw std::invalid_argument("invalid shadow filter parameters");}
-    echo_box_=declare_parameter<std::vector<double>>("front_echo_box_base_xyz", std::vector<double>{});
-    if (!echo_box_.empty()) {
-      if (echo_box_.size()!=6 || !std::all_of(echo_box_.begin(),echo_box_.end(),
-          [](double v) {return std::isfinite(v);}) || echo_box_[0]>=echo_box_[1] ||
-          echo_box_[2]>=echo_box_[3] || echo_box_[4]>=echo_box_[5]) {
-        throw std::invalid_argument("invalid_front_echo_box_base_xyz");
-      }
-    }
     auto resources=armMeshResources();
     const auto extra_frames=declare_parameter<std::vector<std::string>>("additional_mesh_frames",std::vector<std::string>{});
     const auto extra_uris=declare_parameter<std::vector<std::string>>("additional_mesh_uris",std::vector<std::string>{});
@@ -106,6 +104,41 @@ public:
       if (geometry->hasClosedSurface()) {++closed_meshes_;}
       else {open_mesh_frames_.push_back(resource.frame);}
       meshes_.push_back({resource.frame,std::move(geometry)});
+    }
+    const auto echo_file=declare_parameter<std::string>("confirmed_livox_echo_file", "");
+    if (!echo_file.empty()) {
+      std::ifstream stream(echo_file); nlohmann::json data;
+      if (!stream || !(stream >> data) || data.value("schema","")!="confirmed_livox_link_echo_v1" ||
+          !data.contains("templates") || !data["templates"].is_array()) {
+        throw std::invalid_argument("invalid_confirmed_livox_echo_file");
+      }
+      for (const auto & entry:data["templates"]) {
+        const auto frame=entry.at("frame").get<std::string>();
+        const double radius=entry.at("radius_m").get<double>();
+        const auto & points=entry.at("points_m");
+        auto match=std::find_if(meshes_.begin(),meshes_.end(),[&](const auto & m){return m.frame==frame;});
+        if (match==meshes_.end() || !std::isfinite(radius) || radius<=0. || radius>.01 ||
+            !points.is_array() || points.size()>1000) {
+          throw std::invalid_argument("invalid_confirmed_livox_echo_template");
+        }
+        EchoTemplate model; model.sensor_frame=entry.at("sensor_frame").get<std::string>();
+        if (model.sensor_frame.empty()) {throw std::invalid_argument("invalid_echo_sensor_frame");}
+        model.mesh_index=static_cast<std::size_t>(match-meshes_.begin());
+        // An empty side means no calibrated returns have been recorded yet.
+        // Its independent robot meshes remain active.
+        if (points.empty()) {continue;}
+        model.radius_sq=radius*radius;
+        model.lower=fcl::Vector3d::Constant(std::numeric_limits<double>::infinity());
+        model.upper=fcl::Vector3d::Constant(-std::numeric_limits<double>::infinity());
+        for (const auto & p:points) {
+          if (!p.is_array() || p.size()!=3) {throw std::invalid_argument("invalid_echo_point");}
+          fcl::Vector3d point(p[0].get<double>(),p[1].get<double>(),p[2].get<double>());
+          if (!point.allFinite() || (point.array().abs()>1.).any()) {throw std::invalid_argument("invalid_echo_point");}
+          model.points.push_back(point); model.lower=model.lower.cwiseMin(point); model.upper=model.upper.cwiseMax(point);
+        }
+        model.lower.array()-=radius; model.upper.array()+=radius;
+        echo_templates_.push_back(std::move(model));
+      }
     }
     const bool rear_enabled=declare_parameter<bool>("rear_scan_enabled",true);
     const auto input_cloud=declare_parameter<std::string>("input_cloud_topic","/lidar/pointcloud");
@@ -201,6 +234,22 @@ private:
     }
     return false;
   }
+  bool nearConfirmedEcho(const fcl::Vector3d & point,const Poses & poses,
+    const std::string & sensor_frame,std::string & matched_frame)
+  {
+    for (const auto & model:echo_templates_) {
+      if (model.sensor_frame!=sensor_frame) {continue;}
+      const auto local=poses[model.mesh_index]*point;
+      if ((local.array()<model.lower.array()).any() || (local.array()>model.upper.array()).any()) {continue;}
+      for (const auto & sample:model.points) {
+        if ((local-sample).squaredNorm()<=model.radius_sq) {
+          matched_frame=meshes_[model.mesh_index].frame;
+          ++removed_by_mesh_[matched_frame]; return true;
+        }
+      }
+    }
+    return false;
+  }
   static std::int64_t ns(const builtin_interfaces::msg::Time & t)
   {return static_cast<std::int64_t>(t.sec)*1000000000LL+t.nanosec;}
 
@@ -211,7 +260,7 @@ private:
     std_msgs::msg::String m;
     m.data=nlohmann::json{{"schema","r1_self_filter_3d_shadow_v1"},
       {"sensor",sensor},{"state",state},{"reason",reason},{"input_points",input},
-      {"filtered_points",removed},{"removed_by_mesh",removed_by_mesh_},{"removed_sample",removed_sample_},{"fixed_echo_filtered_points",fixed_echo_removed_},{"processing_ms",ms},{"queue_age_sec",age},
+      {"filtered_points",removed},{"removed_by_mesh",removed_by_mesh_},{"removed_sample",removed_sample_},{"processing_ms",ms},{"queue_age_sec",age},
       {"dropped_frames",dropped},{"output_published",published},
       {"input_stamp_ns",input_stamp},{"output_stamp_ns",output_stamp},
       {"max_pose_time_error_sec",pose_error},{"mesh_parts",meshes_.size()},{"closed_meshes",closed_meshes_},
@@ -267,19 +316,6 @@ private:
       Poses values;if (!posesFor(input.header.frame_id,time,values)) {return Outcome::WAIT_TF;}
       poses.emplace(index,std::move(values));
     }
-    fcl::Transform3d base_from_cloud=fcl::Transform3d::Identity();
-    if (!echo_box_.empty() && input.header.frame_id!="base_link") {
-      try {
-        const auto t=tf_.lookupTransform("base_link",input.header.frame_id,
-          rclcpp::Time(start,get_clock()->get_clock_type()));
-        const auto & q=t.transform.rotation;const auto & v=t.transform.translation;
-        Eigen::Quaterniond rotation(q.w,q.x,q.y,q.z);
-        if (!rotation.coeffs().allFinite() || rotation.norm()<1e-9 ||
-            !std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) {return Outcome::INVALID;}
-        rotation.normalize();base_from_cloud.linear()=rotation.toRotationMatrix();
-        base_from_cloud.translation()=fcl::Vector3d(v.x,v.y,v.z);
-      } catch (const tf2::TransformException &) {return Outcome::WAIT_TF;}
-    }
     auto output=input;
     for (std::uint32_t row=0;row<output.height;++row) for (std::uint32_t col=0;col<output.width;++col) {
       auto * p=output.data.data()+static_cast<std::size_t>(row)*output.row_step+
@@ -289,19 +325,15 @@ private:
       auto stamp=*absoluteNanoseconds(read<double>(p+offsets.stamp));
       if (stamp<start && start-stamp<=1024) {stamp=start;}
       const auto bin=*sensorTimeBin(start,stamp,bin_ns_,span_ns_);
-      const fcl::Vector3d base_point=base_from_cloud*fcl::Vector3d(x,y,z);
-      const bool fixed_echo=!echo_box_.empty() &&
-        base_point.x()>=echo_box_[0] && base_point.x()<=echo_box_[1] &&
-        base_point.y()>=echo_box_[2] && base_point.y()<=echo_box_[3] &&
-        base_point.z()>=echo_box_[4] && base_point.z()<=echo_box_[5];
-      if (fixed_echo) {++fixed_echo_removed_;}
       std::string matched_frame;
-      if (fixed_echo || nearAnySurface({x,y,z},poses.at(bin.index),matched_frame)) {
+      const bool mesh_echo=nearAnySurface({x,y,z},poses.at(bin.index),matched_frame);
+      const bool calibrated_echo=!mesh_echo && nearConfirmedEcho({x,y,z},poses.at(bin.index),input.header.frame_id,matched_frame);
+      if (mesh_echo || calibrated_echo) {
         if (removed_sample_.size()<64) {
           removed_sample_.push_back({{"index",static_cast<std::size_t>(row)*output.width+col},
             {"xyz_sensor",{x,y,z}},{"point_stamp_ns",stamp},
             {"pose_stamp_ns",bin.representative_ns},
-            {"reason",fixed_echo?"fixed_echo_box":"robot_mesh"},
+            {"reason",calibrated_echo?"confirmed_link_echo":"robot_mesh"},
             {"mesh_frame",matched_frame}});
         }
         invalidate(p,offsets.x);invalidate(p,offsets.y);invalidate(p,offsets.z);++removed;
@@ -361,7 +393,6 @@ private:
     std::uint64_t lost;
     {std::lock_guard<std::mutex> lock(mutex_);if(queue.empty())return;item=queue.front();lost=drops;}
     const auto start=Steady::now();std::size_t removed=0,samples=0;
-    fixed_echo_removed_=0;
     removed_by_mesh_.clear();
     removed_sample_.clear();
     allow_stable_fallback_=std::chrono::duration<double>(start-item.received).count() >= stable_fallback_after_;
@@ -412,8 +443,7 @@ private:
   }
   tf2_ros::Buffer tf_;tf2_ros::TransformListener listener_;
   std::vector<MeshEntry> meshes_;
-  std::vector<double> echo_box_;
-  std::size_t fixed_echo_removed_{0};
+  std::vector<EchoTemplate> echo_templates_;
   std::map<std::string,std::size_t> removed_by_mesh_;
   std::vector<nlohmann::json> removed_sample_;
   std::size_t closed_meshes_{0},additional_meshes_{0};std::vector<std::string> open_mesh_frames_;
