@@ -14,7 +14,7 @@ class ReferenceSpeedInterpolation(unittest.TestCase):
         p.T = 6
         p.dt = .25
         p.interval = .1
-        p.robot = SimpleNamespace(L=1.)
+        p.robot = SimpleNamespace(L=1., speed_lower_bound=np.array([[-1.], [-1.]]))
         p.curve_list = [[np.array([[x], [0.], [0.], [1.]])
                          for x in np.linspace(0., endpoint, int(round(endpoint / .1)) + 1)]]
         p.curve_index = 0
@@ -43,7 +43,7 @@ class ReferenceSpeedInterpolation(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("NEUPAN_SOLVER_REGRESSION") == "1", "actual solver opt-in")
 class ActualReferenceSpeed(unittest.TestCase):
-    def test_clear_path_respects_configured_half_metre_per_second_limit(self):
+    def test_clear_path_respects_configured_forward_speed_limit(self):
         from neupan import neupan
         root = Path(__file__).resolve().parents[3]
         cfg = yaml.safe_load((root / "packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml").read_text())
@@ -62,7 +62,7 @@ class ActualReferenceSpeed(unittest.TestCase):
             state[0, 0] += float(velocity[0, 0]) * .25
             state[2, 0] += float(velocity[1, 0]) * .25
         self.assertGreater(float(velocity[0, 0]), .35)
-        self.assertLessEqual(float(velocity[0, 0]), .501)
+        self.assertLessEqual(float(velocity[0, 0]), .701)
 
     def test_clear_reverse_path_respects_configured_limit(self):
         from neupan import neupan
@@ -84,8 +84,8 @@ class ActualReferenceSpeed(unittest.TestCase):
             samples.append(float(velocity[0, 0]))
             state[0, 0] += samples[-1] * .25
             state[2, 0] += float(velocity[1, 0]) * .25
-        self.assertLess(samples[-1], -.30)
-        self.assertGreaterEqual(min(samples), -.501)
+        self.assertLess(samples[-1], -.25)
+        self.assertGreaterEqual(min(samples), -.301)
 
 
 if __name__ == "__main__":

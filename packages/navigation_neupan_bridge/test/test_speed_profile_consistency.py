@@ -27,15 +27,19 @@ class SpeedProfileConsistency(unittest.TestCase):
         smoother = nav['neupan_velocity_smoother']['ros__parameters']
         guard = guard['r1_collision_guard']['ros__parameters']
         expected = planner['ref_speed']
-        self.assertAlmostEqual(expected, 0.5)
+        self.assertAlmostEqual(expected, 0.7)
         self.assertEqual(planner['robot']['max_speed'][0], expected)
         self.assertGreaterEqual(controller['max_linear'], expected)
         self.assertGreaterEqual(smoother['max_velocity'][0], expected)
         self.assertGreaterEqual(guard['max_linear_mps'], expected)
-        self.assertGreaterEqual(controller['max_reverse'], expected)
-        self.assertLessEqual(smoother['min_velocity'][0], -expected)
-        self.assertGreaterEqual(guard['max_reverse_mps'], expected)
-        self.assertLessEqual(smoother['max_accel'][0], planner['robot']['max_acce'][0])
+        reverse = planner['robot']['max_reverse_speed']
+        self.assertAlmostEqual(reverse, 0.3)
+        self.assertGreaterEqual(controller['max_reverse'], reverse)
+        self.assertLessEqual(smoother['min_velocity'][0], -reverse)
+        self.assertGreaterEqual(guard['max_reverse_mps'], reverse)
+        for axis, index in enumerate((0, 2)):
+            self.assertLessEqual(planner['robot']['max_accel'][axis], smoother['max_accel'][index])
+            self.assertLessEqual(planner['robot']['max_decel'][axis], -smoother['max_decel'][index])
 
 if __name__ == '__main__':
     unittest.main()

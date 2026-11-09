@@ -41,6 +41,7 @@ from r1_neupan_integration.command_stabilizer import (
 from r1_neupan_integration.n2_3_contract import make_context, make_planner_envelope
 from r1_neupan_integration.forward_only import ForwardOnlyConfig, ForwardOnlyController
 from r1_neupan_integration.latest_input_scheduler import LatestInputScheduler
+from r1_neupan_integration.latency_compensation import SolveLatency, predict_pose
 
 
 def encode_semantic(payload: dict[str, Any]) -> str:
@@ -102,6 +103,7 @@ N116_TIMING_FIELDS = [
     "main_validation_complete_monotonic", "planner_result_publish_monotonic",
     "relay_source_receive_monotonic", "relay_publish_monotonic",
     "gate_relay_receive_monotonic", "gate_output_publish_monotonic",
+    "pose_prediction_sec", "solve_latency_estimate_sec", "tf_age_sec",
 ]
 
 
@@ -314,6 +316,7 @@ class N116Node(N115Node):
         self._continuation_timeout = float(self.get_parameter("continuation_input_timeout_sec").value)
         if not math.isfinite(self._continuation_timeout) or self._continuation_timeout <= 0.:
             raise ValueError("invalid_continuation_input_timeout")
+        self._solve_latency = SolveLatency(self._continuation_timeout)
         if bool(self.get_parameter("continuation_enabled").value):
             if not self._require_execution_context or self.auto_gear_transition_enabled or self.forward_only_enabled:
                 raise ValueError("continuation requires task identity and direct NeuPAN commands")
@@ -934,6 +937,14 @@ class N116Node(N115Node):
                 gear_transition_pending = self.pending_gear is not None
                 previous_scan = int(self.last_processed_scan)
                 self.last_processed_scan = scan_counter
+            # Predict the pose at command availability from stamped TF and
+            # measured twist; the world obstacle observation is unchanged.
+            ros_now = self.get_clock().now().nanoseconds * 1e-9
+            tf_age = ros_now - tf_stamp
+            estimated_solve = self._solve_latency.estimate()
+            state, prediction_sec = predict_pose(
+                state, measured_velocity, tf_age, estimated_solve,
+                self._continuation_timeout)
             # Cache the exact task a rebuilt worker must resume. These arrays
             # are rebuilt every cycle and never mutated in place, so keeping
             # references is safe and costs nothing per cycle.
@@ -1009,6 +1020,10 @@ class N116Node(N115Node):
                 self._handle_fatal_error("bridge_exception", str(exc))
                 return
 
+            self._solve_latency.observe(time.monotonic() - cycle_start)
+            record.setdefault("timings", {})["pose_prediction_sec"] = float(prediction_sec)
+            record["timings"]["solve_latency_estimate_sec"] = float(estimated_solve)
+            record["timings"]["tf_age_sec"] = float(tf_age)
             fresh, reason = self._fresh_for_publish(record, scan_counter, path_version, goal_version, execution_context)
             main_validation_complete_monotonic = time.monotonic()
             if not fresh:

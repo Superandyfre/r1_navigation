@@ -182,6 +182,18 @@ N116_TIMING_FIELDS = [
     'worker_pid', 'worker_generation', 'worker_failure', 'finite', 'nan_inf',
     'stale_response',
 ]
+# Optional fields appended by newer workers; old N1.16 records remain valid.
+N116_TIMING_EXTENSION_FIELDS = [
+    'cloud_receive_monotonic', 'scan_callback_receive_monotonic',
+    'scan_update_monotonic', 'request_created_monotonic',
+    'request_dispatched_monotonic', 'worker_request_received_monotonic',
+    'worker_solve_start_monotonic', 'worker_solve_end_monotonic',
+    'worker_response_sent_monotonic', 'main_response_received_monotonic',
+    'main_validation_complete_monotonic', 'planner_result_publish_monotonic',
+    'relay_source_receive_monotonic', 'relay_publish_monotonic',
+    'gate_relay_receive_monotonic', 'gate_output_publish_monotonic',
+    'pose_prediction_sec', 'solve_latency_estimate_sec', 'tf_age_sec',
+]
 N116_STAGE_FIELDS = [field for field in N116_TIMING_FIELDS if field.endswith('_ms')]
 ALL_STAGE_FIELDS = list(dict.fromkeys(STAGE_FIELDS + N115_STAGE_FIELDS + N116_STAGE_FIELDS))
 
@@ -326,7 +338,7 @@ class N1Metrics(Node):
         if len(data) >= len(N116_TIMING_FIELDS) and data[0] == 4.0:
             record = {
                 field: float(value)
-                for field, value in zip(N116_TIMING_FIELDS, data)
+                for field, value in zip(N116_TIMING_FIELDS + N116_TIMING_EXTENSION_FIELDS, data)
             }
             record['planner_start_monotonic'] = record['worker_core_start_monotonic']
             record['planner_end_monotonic'] = record['worker_core_end_monotonic']
@@ -680,7 +692,7 @@ class N1Metrics(Node):
         os.makedirs(os.path.dirname(csv_file), exist_ok=True)
         with open(csv_file, 'w', encoding='utf-8', newline='') as stream:
             if any(record.get('schema') == 4.0 for record in self.timing_records):
-                fieldnames = N116_TIMING_FIELDS
+                fieldnames = N116_TIMING_FIELDS + N116_TIMING_EXTENSION_FIELDS
             elif any(record.get('schema') == 3.0 for record in self.timing_records):
                 fieldnames = N115_TIMING_FIELDS
             else:

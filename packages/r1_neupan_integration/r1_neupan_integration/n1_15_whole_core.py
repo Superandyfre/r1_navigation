@@ -1082,8 +1082,17 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                 previous_side = getattr(planner, "preferred_avoidance_side", 0) if same_goal else 0
                 previous_cursor = getattr(planner, "candidate_search_cursor", 0) if same_goal else 0
                 previous_mode = getattr(planner, "preferred_avoidance_mode", None) if same_goal else None
+                # A refreshed path to the same endpoint is not a new motion
+                # task. Retain the shifted velocity warm start, while clearing
+                # obstacle-dependent optimizer state below.
+                previous_velocity = (np.asarray(planner.cur_vel_array).copy()
+                                     if same_goal else None)
                 _set_path(planner, next_path)
                 planner.reset()
+                if (previous_velocity is not None and
+                        previous_velocity.shape == planner.cur_vel_array.shape and
+                        np.isfinite(previous_velocity).all()):
+                    planner.cur_vel_array = previous_velocity
                 if hasattr(planner, "preferred_avoidance_side"):
                     planner.preferred_avoidance_side = previous_side
                     planner.preferred_avoidance_mode = previous_mode

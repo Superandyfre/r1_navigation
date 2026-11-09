@@ -155,6 +155,51 @@ def test_clear_path_needs_no_detour_candidates():
     assert action[0,0] > 0
     assert len(info['avoidance_candidates']) == 1
     assert info['avoidance_side'] == 0
+def test_nearby_but_clear_rollout_skips_redundant_solver_candidates():
+    core = planner()
+    action, info = core(np.zeros((3, 1)), np.array([[1.], [.7]]),
+                        measured_velocity=np.zeros((2, 1)))
+    assert not info["stop"]
+    assert action[0, 0] > 0
+    assert len(info["avoidance_candidates"]) == 1
+    candidate = info["avoidance_candidates"][0]
+    assert candidate["feasible"] and candidate["min_distance"] >= .25
+
+
+def test_fast_approach_brakes_smoothly_with_actuator_dynamics():
+    core = planner()
+    wall = np.vstack((np.full(21, 2.), np.linspace(-.4, .4, 21)))
+    state = np.zeros((3, 1))
+    velocity = np.array([[.7], [0.]])
+    samples = []
+    for _ in range(20):
+        action, info = core(state, wall, measured_velocity=velocity)
+        assert not info["stop"]
+        # Follow the configured downstream smoother's acceleration bounds.
+        velocity[0, 0] += np.clip(action[0, 0] - velocity[0, 0], -.03, .04)
+        velocity[1, 0] += np.clip(action[1, 0] - velocity[1, 0], -.08, .06)
+        state = core.ipath.motion_predict_model(state, velocity, core.robot.L, .1)
+        samples.append(float(velocity[0, 0]))
+        dx, dy = wall[0] - state[0, 0], wall[1] - state[1, 0]
+        yaw = state[2, 0]
+        x = np.cos(yaw)*dx + np.sin(yaw)*dy
+        y = -np.sin(yaw)*dx + np.cos(yaw)*dy
+        assert not np.any((np.abs(x) < .341) & (np.abs(y) < .266))
+    assert min(samples) > .2
+    assert samples[0] < .7 and state[0, 0] > .7
+
+
+def test_reverse_seed_turns_toward_its_selected_bypass_side():
+    core = planner()
+    state = np.zeros((3, 1))
+    ref = np.vstack((np.linspace(0., -2., core.T + 1),
+                     np.zeros(core.T + 1), np.zeros(core.T + 1)))
+    _, controls, _, _ = core._avoidance_seed(
+        state, ref, np.full(core.T, -.3), side=1, reverse_first=False)
+    rollout = core._rollout_controls(state, controls)
+    assert rollout[1, -1] > 0.
+
+
 from r1_neupan_integration.command_stabilizer import GearTransitionConfig, GearTransitionGate
 
 
@@ -232,15 +277,38 @@ def test_reverse_path_bypasses_obstacle_without_intersection():
         assert selected.ndim == 2 and selected.shape[1] == 2 and len(selected) > 0
         assert np.allclose(selected[:, 0], -1.)  # the reverse wall survived selection
     states = core._rollout_controls(state, info['vel_tensor'].detach().numpy(), subdivisions=3)
-    # With reverse capped at 0.3 m/s, still require meaningful progress over
-    # the five-second horizon while checking the complete body trajectory.
-    assert states[0, -1] < -.6
+    # The one-horizon prediction should begin the bypass. The actual
+    # receding-horizon controller is checked through completion below; with
+    # .25 m desired clearance its first horizon need not finish the maneuver.
+    assert states[0, -1] < -.5
     assert np.max(np.abs(states[1])) > .25
     for x, y, yaw in states.T:
         dx, dy = points[0]-x, points[1]-y
         local_x = np.cos(yaw)*dx + np.sin(yaw)*dy
         local_y = -np.sin(yaw)*dx + np.cos(yaw)*dy
         assert not np.any((np.abs(local_x)<.341) & (np.abs(local_y)<.266))
+
+
+def test_reverse_wall_bypass_completes_with_replanning():
+    core = planner()
+    core.set_initial_path([np.array([[x], [0.], [0.], [-1.]])
+                           for x in np.linspace(0., -4., 41)])
+    wall = np.vstack((np.full(11, -1.), np.linspace(-.32, .32, 11)))
+    state = np.zeros((3, 1))
+    velocity = np.zeros((2, 1))
+    for _ in range(80):
+        action, info = core(state, wall, measured_velocity=velocity)
+        assert not info["stop"]
+        velocity[0, 0] += np.clip(action[0, 0] - velocity[0, 0], -.04, .03)
+        velocity[1, 0] += np.clip(action[1, 0] - velocity[1, 0], -.08, .06)
+        state = core.ipath.motion_predict_model(state, velocity, core.robot.L, .1)
+        dx, dy = wall[0] - state[0, 0], wall[1] - state[1, 0]
+        yaw = state[2, 0]
+        local_x = np.cos(yaw)*dx + np.sin(yaw)*dy
+        local_y = -np.sin(yaw)*dx + np.cos(yaw)*dy
+        assert not np.any((np.abs(local_x) < .341) & (np.abs(local_y) < .266))
+    assert state[0, 0] < -1.1
+    assert abs(state[1, 0]) > .3
 
 
 def test_continuation_scene_uses_scan_time_pose_without_warping_points():

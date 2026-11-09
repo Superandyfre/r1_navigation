@@ -18,6 +18,7 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 from rclpy.exceptions import ParameterUninitializedException
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.duration import Duration
 from rclpy.parameter import Parameter
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 from sensor_msgs.msg import LaserScan
@@ -363,7 +364,7 @@ class N115Node(Node):
         self.plan_pub = self.create_publisher(Path, str(self.get_parameter("plan_output_topic").value), 10)
         self.ref_pub = self.create_publisher(Path, str(self.get_parameter("ref_state_topic").value), 10)
         self.timing_pub = self.create_publisher(Float64MultiArray, str(self.get_parameter("timing_topic").value), 50)
-        qos = QoSProfile(depth=50, reliability=QoSReliabilityPolicy.BEST_EFFORT)
+        qos = QoSProfile(depth=1, reliability=QoSReliabilityPolicy.BEST_EFFORT)
         self.create_subscription(LaserScan, str(self.get_parameter("scan_topic").value), self.scan_callback, qos, callback_group=self.callback_group)
         # Both arm geometry streams are latest-state inputs. Queuing older
         # meshes starves fresh scan callbacks without improving safety.
@@ -572,8 +573,9 @@ class N115Node(Node):
         current_pose_mesh_proximity_points = 0
         path_tangent_base = _path_tangent_in_base_frame(path_matrix, state)
         if valid_ranges.size == 0:
-            points = None
-            raw_points = np.empty((2, 0), dtype=np.float64)
+            points = np.empty((2, 0), dtype=np.float64)
+            local_scan_snapshot = points.copy()
+            raw_points = points.copy()
             transform_ms = 0.0
             tf_lookup_ms = 0.0
             geometry_ms = 0.0
@@ -669,21 +671,24 @@ class N115Node(Node):
                     nearest_distance = None
                     nearest_xy = None
                 planner_input_count = int(local_points.shape[1])
-                # ``state`` was obtained from the current map->base_link
-                # transform before this scan callback. A second lookup here
-                # can be delayed for seconds under a busy TF executor, which
-                # starves the newest-scan scheduler and makes velocity output
-                # intermittent. At 0.15 m/s the one control-cycle pose age is
-                # below 1.5 cm; the final collision guard still checks the
-                # base-frame scan independently.
+                # Project the observation at its acquisition timestamp.
+                # Obstacles remain in their real map position.
                 geometry_ms = (time.perf_counter() - geometry_started) * 1000.0
-                rotation = _rotation(float(state[2, 0]))
-                points = rotation @ local_points + state[:2, :]
-                raw_points = rotation @ raw_local_points + state[:2, :]
+                scan_tf_started = time.perf_counter()
+                scan_tf = self.tf_buffer.lookup_transform(
+                    self.map_frame, self.base_frame,
+                    rclpy.time.Time(nanoseconds=stamp_ns),
+                    timeout=Duration(seconds=0.05))
+                tf_lookup_ms += (time.perf_counter() - scan_tf_started) * 1000.0
+                scan_yaw = quat_to_yaw(scan_tf.transform.rotation)
+                scan_xy = np.asarray([[float(scan_tf.transform.translation.x)],
+                                      [float(scan_tf.transform.translation.y)]])
+                rotation = _rotation(scan_yaw)
+                points = rotation @ local_points + scan_xy
+                raw_points = rotation @ raw_local_points + scan_xy
             except (tf2_ros.LookupException, tf2_ros.ConnectivityException, tf2_ros.ExtrapolationException):
-                points = None
-                raw_points = None
-                tf_lookup_ms = (time.perf_counter() - tf_started) * 1000.0
+                self.get_logger().warn("scan-time transform unavailable; waiting for a newer scan", throttle_duration_sec=1.0)
+                return
             transform_ms = (time.perf_counter() - transform_started) * 1000.0
         with self.state_lock:
             # A newer callback may have completed while this frame was being

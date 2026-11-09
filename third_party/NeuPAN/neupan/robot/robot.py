@@ -73,7 +73,17 @@ class robot:
             if not np.isfinite(reverse_limit) or reverse_limit <= 0 or reverse_limit > float(self.max_speed[0, 0]):
                 raise ValueError("invalid max_reverse_speed")
             self.speed_lower_bound[0, 0] = -reverse_limit
-        self.acce_bound = self.max_acce * self.dt
+        # The downstream actuator smoother has separate acceleration and
+        # deceleration limits. The convex velocity-difference constraints do
+        # not know in advance whether a knot will cross zero, so use the
+        # smaller magnitude in each axis. This is valid in both directions,
+        # including reversal, without assuming the nominal velocity sign.
+        self.max_accel = np.asarray(kwargs.get("max_accel", self.max_acce), dtype=float).reshape(2, 1)
+        self.max_decel = np.asarray(kwargs.get("max_decel", self.max_acce), dtype=float).reshape(2, 1)
+        if (np.isnan(self.max_accel).any() or np.isnan(self.max_decel).any() or
+                (self.max_accel <= 0).any() or (self.max_decel <= 0).any()):
+            raise ValueError("acceleration and deceleration must be positive")
+        self.acce_bound = np.minimum(self.max_accel, self.max_decel) * self.dt
         self.smooth_weight = float(kwargs.get("smooth_weight", 0.0))
         self.path_relative_cost = bool(kwargs.get("path_relative_cost", False))
         if not np.isfinite(self.smooth_weight) or self.smooth_weight < 0.0:
@@ -292,7 +302,7 @@ class robot:
                 self.speed_lower_bound, dtype=nom_u.dtype, device=nom_u.device)
             measured = torch.clamp(measured, speed_lower, speed_bound)
             first_step_bound = torch.as_tensor(
-                self.acce_bound + 0.005, dtype=nom_u.dtype, device=nom_u.device)
+                self.acce_bound, dtype=nom_u.dtype, device=nom_u.device)
 
         state_value_list = [nom_s, qs_ref_s, pu_ref_us, measured, first_step_bound]
 

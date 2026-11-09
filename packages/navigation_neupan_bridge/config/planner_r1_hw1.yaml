@@ -13,7 +13,11 @@ robot:
   kinematics: 'diff'
   max_speed: [0.7, 0.25]
   max_reverse_speed: 0.3
-  max_acce: [0.50, 0.50]
+  # Smoother limits; the convex planner conservatively uses the smaller
+  # acceleration/deceleration magnitude when a velocity can cross zero.
+  max_acce: [0.30, 0.60]
+  max_accel: [0.40, 0.60]
+  max_decel: [0.30, 0.80]
   length: 0.682
   width: 0.532
   smooth_weight: 0.05

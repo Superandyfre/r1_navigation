@@ -318,7 +318,7 @@ class neupan(torch.nn.Module):
         return (feasible, escaping, float(np.min(initial)),
                 float(penetration[0]), float(penetration[-1]))
 
-    def _candidate_cost(self, state, rollout, controls, ref, ref_speed, points, velocities):
+    def _candidate_cost(self, state, rollout, controls, ref, ref_speed, points, velocities, measured_velocity=None):
         # Evaluate between optimizer knots too, so small obstacles are not
         # skipped when the robot translates or rotates over one solver step.
         subdivisions = 3
@@ -351,7 +351,25 @@ class neupan(torch.nn.Module):
         tracking = np.square(q[0] * along).sum() + np.square(q[1] * across).sum() + np.square(q[2] * delta[2]).sum()
         p = float(self.pan.nrmp_layer.p_u.detach().cpu().item())
         speed = np.square(p * (controls[0] - ref_speed)).sum()
-        return (float(tracking + speed + obstacle_cost), minimum, float(obstacle_cost),
+        # Rank candidates using the same control continuity objective as the
+        # optimizer, including the transition from actual measured velocity.
+        previous = (controls[:, :1] if measured_velocity is None else
+                    np.asarray(measured_velocity, dtype=float).reshape(2, 1))
+        changes = np.diff(np.hstack((previous, controls)), axis=1)
+        continuity = self.robot.smooth_weight * float(np.square(changes).sum())
+        # When essentially stationary, avoid initiating a small motion away
+        # from the route merely because two bypass solutions have similar
+        # costs. This is a soft optimization cost, scaled by the configured
+        # obstacle objective; retreat remains possible when it is useful.
+        direction_cost = 0.0
+        if measured_velocity is not None:
+            reference = float(np.asarray(ref_speed).reshape(-1)[0])
+            step = float(np.asarray(self.robot.acce_bound).reshape(-1)[0])
+            if abs(reference) > 1e-9 and np.isfinite(step) and step > 0:
+                stillness = max(0.0, 1.0 - abs(float(previous[0, 0])) / step)
+                opposite = max(0.0, -np.sign(reference) * float(controls[0, 0])) / step
+                direction_cost = float(self.pan.nrmp_layer.ro_obs) * d_min * d_min * stillness * opposite
+        return (float(tracking + speed + obstacle_cost + continuity + direction_cost), minimum, float(obstacle_cost),
                 feasible, escaping, initial_minimum, initial_penetration, final_penetration)
 
     def _avoidance_seed(self, state, original_ref, ref_speed, side, reverse_first=True, retreat_only=False, turn_first=False):
@@ -360,18 +378,22 @@ class neupan(torch.nn.Module):
         extent = float(np.ptp(np.asarray(self.robot.vertices)[1, :]))
         d_max = float(self.pan.nrmp_layer.d_max.detach().cpu().item())
         amplitude = extent + d_max
-        phase = np.linspace(0.0, np.pi, self.T + 1)
-        ref = original_ref.copy()
-        ref[0] -= side * amplitude * np.sin(phase) * np.sin(original_ref[2])
-        ref[1] += side * amplitude * np.sin(phase) * np.cos(original_ref[2])
-        ref[2] += side * amplitude * np.sin(phase)
-        ref[2, 0] = original_ref[2, 0]
-        # Gear changes rewrite path metadata; infer goal direction from path
-        # geometry so a temporary reverse does not invert the bypass itself.
         route = original_ref[:2, -1] - np.asarray(state[:2, 0])
         heading = np.array([np.cos(state[2, 0]), np.sin(state[2, 0])])
         alignment = float(np.dot(route, heading))
         reference_sign = (-1.0 if alignment < 0.0 else 1.0)
+        # Keep reverse bypass seeds offset through the shorter horizon:
+        # returning to the center before clearing the obstacle causes stalling.
+        phase = np.linspace(0.0, np.pi / 2.0 if reference_sign < 0 else np.pi, self.T + 1)
+        ref = original_ref.copy()
+        ref[0] -= side * amplitude * np.sin(phase) * np.sin(original_ref[2])
+        ref[1] += side * amplitude * np.sin(phase) * np.cos(original_ref[2])
+        ref[2, 0] = original_ref[2, 0]
+        # Gear changes rewrite path metadata; infer goal direction from path
+        # geometry so a temporary reverse does not invert the bypass itself.
+        # Reversing with the same yaw sign moves laterally in the opposite
+        # direction. Match the seed heading and controls to the chosen side.
+        ref[2] += reference_sign * side * amplitude * np.sin(phase)
         direction_limit = (float(self.robot.max_speed[0, 0]) if reference_sign > 0.0 else
                            -float(self.robot.speed_lower_bound[0, 0]))
         linear = min(abs(float(self.ref_speed)), direction_limit)
@@ -380,11 +402,11 @@ class neupan(torch.nn.Module):
         controls[0, :] = reference_sign * linear * 0.7
         if reverse_first or retreat_only:
             controls[0, :max(1, self.T // 5)] = -reference_sign * linear * 0.4
-        controls[1, :] = side * angular
+        controls[1, :] = reference_sign * side * angular
         candidate_speed = np.full_like(ref_speed, reference_sign * linear)
         if retreat_only:
             controls[0, :] = -reference_sign * linear * 0.4
-            controls[1, :] = side * angular * 0.4
+            controls[1, :] = reference_sign * side * angular * 0.4
             ref = self._rollout_controls(state, controls)
             candidate_speed = np.full_like(ref_speed, -reference_sign * linear * 0.4)
         elif turn_first:
@@ -458,7 +480,7 @@ class neupan(torch.nn.Module):
                     rollout = self._rollout_controls(state, control_np)
                     (cost, minimum, obstacle_cost, feasible, escaping, initial_minimum,
                      initial_penetration, final_penetration) = self._candidate_cost(
-                        state, rollout, control_np, ref_s, ref_us, points, velocities)
+                        state, rollout, control_np, ref_s, ref_us, points, velocities, measured_velocity)
                     if np.isfinite(cost) and np.isfinite(minimum):
                         linearization_error = float(np.max(np.linalg.norm(
                             rollout[:2] - planned_np[:2], axis=0)))
@@ -481,6 +503,19 @@ class neupan(torch.nn.Module):
                             nom_values=self.pan.current_nom_values))
             except SolverError as error:
                 last_error = error
+            # If the nominal solution already meets the configured desired
+            # clearance and advances, extra seed solves cannot improve basic
+            # feasibility. Avoid spending the freshness budget on redundant
+            # candidates; a later scan can request alternatives again.
+            if index == 1 and candidates:
+                nominal_candidate = candidates[-1]
+                desired = float(self.pan.nrmp_layer.d_min.detach().cpu().item())
+                if (nominal_candidate["feasible"] and
+                        nominal_candidate["minimum"] >= desired and
+                        nominal_candidate["progress"] >= useful_progress and
+                        nominal_candidate["first_effort"] > 0.05):
+                    queue = queue[:1]
+                    explore = False
             # A reference may appear clear while its dynamically feasible
             # rollout approaches an obstacle. Also try alternate seeds after
             # a failed nominal solve instead of immediately aborting.
@@ -513,8 +548,10 @@ class neupan(torch.nn.Module):
         moving = [candidate for candidate in nonoverlap if candidate["first_effort"] > 0.05]
         pool = progressing or moving or nonoverlap or candidates
         best = min(pool, key=lambda candidate: candidate["cost"])
-        previous = next((candidate for candidate in pool
-                         if candidate["side"] == previous_side and candidate["side"] != 0), None)
+        previous_matches = [candidate for candidate in pool
+                            if candidate["side"] == previous_side and candidate["side"] != 0
+                            and candidate["mode"] == self.preferred_avoidance_mode]
+        previous = min(previous_matches, key=lambda candidate: candidate["cost"], default=None)
         if previous is not None and previous["cost"] <= best["cost"] + abs(best["cost"]) * 0.1:
             best = previous
         if best["side"]:

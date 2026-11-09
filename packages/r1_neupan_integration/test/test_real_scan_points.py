@@ -35,6 +35,19 @@ class RealScanPoints(unittest.TestCase):
         node.scan_angle_range = (-np.pi,np.pi)
         node.flip_angle = False
         node.lidar_frame = 'base_link'
+        node.map_frame = 'map'
+        node.base_frame = 'base_link'
+        # The scan-time pose intentionally differs from the latest pose.
+        # Projection must follow the observation time, never the stale cache.
+        from geometry_msgs.msg import TransformStamped
+        transform = TransformStamped()
+        transform.transform.translation.x = 2.
+        transform.transform.translation.y = -1.
+        transform.transform.rotation.z = np.sin(.7 / 2.)
+        transform.transform.rotation.w = np.cos(.7 / 2.)
+        node.tf_buffer = Mock()
+        node.tf_buffer.lookup_transform.return_value = transform
+        node.robot_state = np.array([[3.], [-2.], [.2]])
         node.self_filter_enabled = True
         node.self_filter_polygon = np.array([[-.341,-.266],[.341,-.266],[.341,.266],[-.341,.266]])
         node.self_filter_polygon_margin_m = 0.
@@ -54,10 +67,26 @@ class RealScanPoints(unittest.TestCase):
         np.testing.assert_allclose(node.latest_local_scan_points,points,atol=1e-7)
         self.assertEqual(node.latest_local_scan_counter,node.processed_scan_counter)
         self.assertEqual(node.obstacle_points.shape,(2,2))
+        args = node.tf_buffer.lookup_transform.call_args
+        self.assertEqual(args.args[2].nanoseconds, 1_000_000_000)
         self.assertEqual(node.latest_scan_filter['self_rejected_points'],1)
         self.assertEqual(node.latest_scan_filter['dynamic_obstacle_mapping'],'none')
         self.assertEqual(node.latest_scan_filter['dynamic_obstacle_max_displacement_m'],0.)
         node._planner_input_updated.assert_called_once()
+        # Missing scan-time TF does not promote the old map observation to a
+        # new scan or publish an artificial stop.
+        import tf2_ros
+        old_points = node.obstacle_points.copy()
+        old_processed = node.processed_scan_counter
+        scan.header.stamp.nanosec = 1
+        node.tf_buffer.lookup_transform.side_effect = tf2_ros.LookupException("not yet available")
+        node.get_logger = Mock(return_value=Mock())
+        node.scan_callback(scan)
+        self.assertEqual(node.processed_scan_counter, old_processed)
+        np.testing.assert_array_equal(node.obstacle_points, old_points)
+        node._planner_input_updated.assert_called_once()
+        node.tf_buffer.lookup_transform.side_effect = None
+        scan.header.stamp.nanosec = 0
         # A rear wall survives self-filtering without point relocation, and
         # diagnostics identify how many rear points reached the planner.
         scan.header.stamp.sec=2
