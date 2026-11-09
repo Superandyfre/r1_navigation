@@ -35,16 +35,17 @@ n1_16_production_bridge:
     # Rectangle fallback for earlier profiles. HW1 uses the measured polygon
     # below because the forward-right chassis and bracket are not rectangular.
     self_filter_front_m: 0.371
-    self_filter_rear_m: 0.371
+    self_filter_rear_m: 0.341
     self_filter_left_m: 0.296
     self_filter_right_m: 0.296
-    # Surveyed base_link chassis/bracket exclusion outline. It covers the
+    # Rear edge matches the base_link mesh x=-0.341 m, preserving real
+    # returns immediately behind the body. The forward bracket outline covers the
     # repeated empty-scene self returns around (+0.22, -0.30) m without
     # enlarging the complete right-side rectangle. Review it against the
     # 1,000-frame stationary capture before each mechanical alteration.
-    self_filter_polygon_xy: [-0.371, -0.296, 0.150, -0.296, 0.150, -0.340,
+    self_filter_polygon_xy: [-0.341, -0.296, 0.150, -0.296, 0.150, -0.340,
                              0.450, -0.360, 0.450, -0.296, 0.371, -0.296,
-                             0.371, 0.296, -0.371, 0.296]
+                             0.371, 0.296, -0.341, 0.296]
     self_filter_polygon_margin_m: 0.0
     include_initial_path_direction: true
     # SMAC replans every second and advances only the path prefix as the R1

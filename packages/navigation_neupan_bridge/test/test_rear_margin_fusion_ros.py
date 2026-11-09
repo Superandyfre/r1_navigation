@@ -23,7 +23,7 @@ class RearMarginFusion(unittest.TestCase):
                '-p', 'status_topic:=/rear_margin_test/status']
         proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         def index(point): return round((math.atan2(point[1],point[0])+math.pi)/(math.pi/360))
-        rear_wall=(-.381,-.18); rear_body=(-.36,-.10); front_margin=(-.381,.10); front_clear=(-.65,.22)
+        rear_wall=(-.36,-.18); rear_body=(-.33,-.10); front_margin=(-.351,.10); front_clear=(-.65,.22)
         def scan(points):
             msg=LaserScan();msg.header.stamp=node.get_clock().now().to_msg();msg.header.frame_id='base_link'
             msg.angle_min=-math.pi;msg.angle_increment=math.pi/360;msg.angle_max=math.pi

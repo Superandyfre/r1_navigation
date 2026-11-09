@@ -24,12 +24,14 @@
     livox_history_size: 16
     rear_history_size: 16
 
-    # Current approved R1 chassis and rear bracket outline in base_link. Removing
+    # Rear edge matches the base_link mesh x=-0.341 m. The forward bracket
+    # remains separately represented; do not erase near-wall rear returns.
+    # Current R1 chassis and forward bracket outline in base_link. Removing
     # these points is required because the rear-mounted 2D scanner sees the
     # chassis directly.
-    self_filter_polygon_xy: [-0.371, -0.296, 0.150, -0.296, 0.150, -0.340,
+    self_filter_polygon_xy: [-0.341, -0.296, 0.150, -0.296, 0.150, -0.340,
                              0.450, -0.360, 0.450, -0.296, 0.371, -0.296,
-                             0.371, 0.296, -0.371, 0.296]
+                             0.371, 0.296, -0.341, 0.296]
     # Keep the existing Livox self-return margin. Rear returns just outside
     # the measured body outline can be real walls and must remain visible.
     self_filter_margin_m: 0.02

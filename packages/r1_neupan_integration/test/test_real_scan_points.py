@@ -68,5 +68,17 @@ class RealScanPoints(unittest.TestCase):
         nearest=node.latest_scan_filter['nearest_rear_base_link']
         self.assertLess(nearest[0],-.49)
         self.assertAlmostEqual(abs(nearest[1]),.5*np.sin(.1),places=6)
+        # Rear returns between x=-.341 and -.371 are outside the actual
+        # base_link mesh and must survive both configured self-filter stages.
+        import yaml
+        from pathlib import Path
+        root=Path(__file__).resolve().parents[3]
+        cfg=yaml.safe_load((root/'packages/navigation_neupan_bridge/config/robot_r1_hw1.yaml').read_text())
+        polygon=cfg['n1_16_production_bridge']['ros__parameters']['self_filter_polygon_xy']
+        node.self_filter_polygon=np.asarray(polygon).reshape(-1,2)
+        scan.header.stamp.sec=3;scan.ranges=[.36,.2,.36]
+        node.scan_callback(scan)
+        self.assertEqual(node.latest_scan_filter['rear_retained_points'],2)
+        self.assertGreater(node.latest_scan_filter['nearest_rear_base_link'][0],-.371)
 
 if __name__ == '__main__': unittest.main()
