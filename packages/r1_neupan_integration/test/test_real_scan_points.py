@@ -3,7 +3,7 @@ from collections import deque
 import threading
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 from sensor_msgs.msg import LaserScan
@@ -87,5 +87,55 @@ class RealScanPoints(unittest.TestCase):
         node.scan_callback(scan)
         self.assertEqual(node.latest_scan_filter['rear_input_points'],2)
         self.assertEqual(node.latest_scan_filter['rear_retained_points'],2)
+        # Reentrant callbacks can finish out of order. The old callback must
+        # not overwrite a newer scan or claim its counter and timestamp.
+        from r1_neupan_integration import n1_15_node as module
+        original=module.outside_polygon_footprint
+        entered=threading.Event();release=threading.Event();errors=[]
+        def delayed(*args,**kwargs):
+            if threading.current_thread().name=='old-scan':
+                entered.set()
+                if not release.wait(2.):raise RuntimeError('old scan wait expired')
+            return original(*args,**kwargs)
+        def old_callback():
+            try:node.scan_callback(old_scan)
+            except Exception as exc:errors.append(exc)
+        old_scan=LaserScan();old_scan.header.frame_id='base_link';old_scan.header.stamp.sec=5
+        old_scan.angle_min=-.1;old_scan.angle_max=.1;old_scan.angle_increment=.2
+        old_scan.range_min=.15;old_scan.range_max=8.;old_scan.ranges=[.5,.5]
+        new_scan=LaserScan();new_scan.header.frame_id='base_link';new_scan.header.stamp.sec=6
+        new_scan.angle_min=-.1;new_scan.angle_max=.1;new_scan.angle_increment=.2
+        new_scan.range_min=.15;new_scan.range_max=8.;new_scan.ranges=[.9,.9]
+        with patch.object(module,'outside_polygon_footprint',side_effect=delayed):
+            worker=threading.Thread(target=old_callback,name='old-scan');worker.start()
+            self.assertTrue(entered.wait(2.));node.scan_callback(new_scan)
+            expected_new=node.obstacle_points.copy();new_counter=node.scan_counter
+            release.set();worker.join(2.)
+        self.assertFalse(worker.is_alive());self.assertEqual(errors,[])
+        self.assertEqual(node.processed_scan_counter,new_counter)
+        self.assertEqual(node.latest_scan_stamp_sec,6.)
+        np.testing.assert_array_equal(node.obstacle_points,expected_new)
+        # Also interleave immediately after the first acceptance lock, before
+        # the old callback has copied its raw ranges and receive time.
+        accepted=threading.Event();resume=threading.Event()
+        class InterleavedLock:
+            def __init__(self):self.lock=threading.Lock();self.blocked=False
+            def __enter__(self):self.lock.acquire();return self
+            def __exit__(self,*args):
+                self.lock.release()
+                if threading.current_thread().name=='early-old' and not self.blocked:
+                    self.blocked=True;accepted.set()
+                    if not resume.wait(2.):raise RuntimeError('early interleave timed out')
+        node.state_lock=InterleavedLock()
+        old_scan.header.stamp.sec=7;new_scan.header.stamp.sec=8
+        worker=threading.Thread(target=old_callback,name='early-old');worker.start()
+        self.assertTrue(accepted.wait(2.));node.scan_callback(new_scan)
+        expected_new=node.obstacle_points.copy();new_counter=node.scan_counter
+        resume.set();worker.join(2.)
+        self.assertFalse(worker.is_alive());self.assertEqual(errors,[])
+        self.assertEqual(node.processed_scan_counter,new_counter)
+        self.assertEqual(node.latest_scan_stamp_sec,8.)
+        np.testing.assert_allclose(node.latest_scan_ranges,[.9,.9])
+        np.testing.assert_array_equal(node.obstacle_points,expected_new)
 
 if __name__ == '__main__': unittest.main()

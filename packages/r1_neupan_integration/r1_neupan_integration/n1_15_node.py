@@ -479,6 +479,7 @@ class N115Node(Node):
                     self._recent_scan_stamp_set.discard(self._recent_scan_stamps.popleft())
                 self._last_accepted_scan_stamp_ns = stamp_ns
                 self.scan_counter += 1
+                accepted_counter = self.scan_counter
                 self.latest_scan_stamp_sec = float(stamp_sec) + float(stamp_nanosec) * 1e-9
         if rejected_reason is not None:
             self.get_logger().warning(
@@ -489,6 +490,9 @@ class N115Node(Node):
             )
             return
         with self.state_lock:
+            # A newer callback may have been accepted since the stamp check.
+            if self.scan_counter != accepted_counter:
+                return
             self.latest_scan_receive_monotonic = receive
             self.latest_scan_ranges = ranges.copy()
             self.latest_scan_frame_id = str(message.header.frame_id)
@@ -678,9 +682,13 @@ class N115Node(Node):
                 tf_lookup_ms = (time.perf_counter() - tf_started) * 1000.0
             transform_ms = (time.perf_counter() - transform_started) * 1000.0
         with self.state_lock:
+            # A newer callback may have completed while this frame was being
+            # transformed. Never attach its counter/time to these older points.
+            if self.scan_counter != accepted_counter:
+                return
             self.obstacle_points = None if points is None else points.copy()
             self.raw_environment_points = None if raw_points is None else raw_points.copy()
-            self.processed_scan_counter = self.scan_counter
+            self.processed_scan_counter = accepted_counter
             self.latest_scan_update_monotonic = time.monotonic()
             self.latest_scan_metrics = {
                 "scan_processing_ms": (time.perf_counter() - started) * 1000.0,
