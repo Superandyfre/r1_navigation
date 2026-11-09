@@ -37,6 +37,62 @@ public:
   void prepared() {gate.health(health(),100.); gate.source(source(),100.); gate.authorization(grant(),100.);}
   void armed() {prepared(); gate.authorization(grant("COMMIT",100.,2),100.);}
 };
+Json trajectorySource() {
+ auto j=source();j["trajectory"]={{"step_sec",.25},{"controls",{{.1,.2},{.15,-.1},{.2,0.},{.25,0.}}}};return j;
+}
+Json continuationProof(bool valid=true) {
+ auto j=context();j.update(Json{{"schema",kTrajectoryProofSchema},{"parent_request_id",1},{"parent_cycle_id",1},
+ {"parent_scan_counter",1},{"sequence",1},{"scan_counter",2},{"plan_started_monotonic",100.},
+ {"scan_receive_monotonic",100.52},{"pose_receive_monotonic",100.52},
+ {"validation_started_monotonic",100.53},{"validated_monotonic",100.54},
+ {"published_monotonic",100.55},{"valid",valid},{"command",{{"linear_x",.2},{"angular_z",0.}}}});return j;
+}
+TEST(ContinuationAuthorization, FreshProofContinuesAndNewWallRevokes) {
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.3,2),100.3);gate.authorization(grant("COMMIT",100.3,3),100.3);
+ gate.health(health(100.55,3),100.55);gate.authorization(grant("COMMIT",100.55,4),100.55);
+ EXPECT_EQ(gate.evaluate(100.56).reason,"planner_result_stale");
+ // The rejection above records staleness but does not retire the attempt.
+ gate.continuation(continuationProof(),100.56);
+ ASSERT_TRUE(gate.evaluate(100.56).allowed);
+ ASSERT_TRUE(gate.continuationAction(100.56).has_value());
+ EXPECT_DOUBLE_EQ(gate.continuationAction(100.56)->at(0),.2);
+ auto deny=continuationProof(false);deny["sequence"]=2;deny["scan_counter"]=3;
+ deny["scan_receive_monotonic"]=100.57;deny["pose_receive_monotonic"]=100.57;
+ deny["validation_started_monotonic"]=100.58;deny["validated_monotonic"]=100.59;
+ deny["published_monotonic"]=100.60;gate.continuation(deny,100.61);
+ EXPECT_FALSE(gate.evaluate(100.61).allowed);EXPECT_FALSE(gate.continuationAction(100.61));
+}
+TEST(ContinuationAuthorization, NewWallRevokesEvenIfOriginalSourceIsStillFresh) {
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.3,2),100.3);gate.authorization(grant("COMMIT",100.3,3),100.3);
+ auto deny=continuationProof(false);deny["scan_receive_monotonic"]=100.31;
+ deny["pose_receive_monotonic"]=100.31;deny["validation_started_monotonic"]=100.32;
+ deny["validated_monotonic"]=100.33;deny["published_monotonic"]=100.34;
+ gate.continuation(deny,100.35);EXPECT_FALSE(gate.evaluate(100.35).allowed);
+ // Only a new source may replace the original; an unrelated proof cannot.
+}
+TEST(ContinuationAuthorization, DisabledOrCancelledNeverAllowsProof) {
+ MotionAuthorization gate("guard-a");gate.health(health(),100.);gate.source(trajectorySource(),100.);
+ gate.authorization(grant(),100.);gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.55,2),100.55);gate.authorization(grant("COMMIT",100.55,3),100.55);
+ gate.continuation(continuationProof(),100.56);EXPECT_FALSE(gate.evaluate(100.56).allowed);
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization cancelled("guard-a",c);
+ cancelled.health(health(),100.);cancelled.source(trajectorySource(),100.);cancelled.authorization(grant(),100.);
+ cancelled.authorization(grant("COMMIT",100.,2),100.);cancelled.authorization(grant("REVOKE",100.1,3),100.1);
+ cancelled.continuation(continuationProof(),100.56);EXPECT_FALSE(cancelled.continuationAction(100.56));
+}
+TEST(ContinuationAuthorization, ProofCannotReplaceWorkerHeartbeat) {
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);gate.authorization(grant("COMMIT",100.4,3),100.4);
+ gate.continuation(continuationProof(),100.56);
+ EXPECT_EQ(gate.evaluate(100.56).reason,"worker_health_stale");
+}
 TEST_F(Gate, StartupIsDisarmedAndHealthySourceAloneNeverArms) {
   EXPECT_FALSE(gate.evaluate(100.).fault);
   gate.health(health(),100.); gate.source(source(),100.);
