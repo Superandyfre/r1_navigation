@@ -70,6 +70,12 @@ target_include_directories(r1_localization_monitor PRIVATE include)
 ament_target_dependencies(r1_localization_monitor
   geometry_msgs nav2_msgs nav_msgs rclcpp std_msgs std_srvs tf2 tf2_geometry_msgs tf2_ros)
 
+# Exact multi-component distance kernel used by NeuPAN's dynamic robot model.
+add_library(r1_neupan_dynamic_geometry SHARED src/r1_neupan_dynamic_geometry.cpp)
+target_compile_features(r1_neupan_dynamic_geometry PRIVATE cxx_std_17)
+target_compile_options(r1_neupan_dynamic_geometry PRIVATE -O3)
+install(TARGETS r1_neupan_dynamic_geometry LIBRARY DESTINATION lib)
+
 add_executable(r1_arm_footprint src/r1_arm_footprint_node.cpp)
 target_compile_features(r1_arm_footprint PUBLIC cxx_std_17)
 target_include_directories(r1_arm_footprint PRIVATE include)

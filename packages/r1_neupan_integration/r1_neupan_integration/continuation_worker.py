@@ -42,6 +42,14 @@ def _run(conn, config_path, checkpoint_path):
                     engine.install(**plan)
                     installed = key
                 scene = dict(job["scene"])
+                geometry = scene.pop("geometry", None)
+                if geometry is not None:
+                    from .arm_geometry_snapshot import ArmGeometrySnapshot
+                    snapshot = ArmGeometrySnapshot.decode(
+                        geometry["snapshot"], geometry["received_monotonic"])
+                    previous_data = geometry.get("previous_snapshot")
+                    previous_snapshot = (None if previous_data is None else ArmGeometrySnapshot.decode(previous_data, geometry["received_monotonic"]))
+                    planner.set_dynamic_geometry(snapshot.planner_components(previous_snapshot), source_age_sec=geometry.get("source_age_sec", 0.) + max(0., time.monotonic() - geometry.get("created_monotonic", time.monotonic())))
                 scene["now"] = time.monotonic()
                 result, outcome = engine.validate_detailed(**scene)
                 finished = time.monotonic()
@@ -51,7 +59,8 @@ def _run(conn, config_path, checkpoint_path):
                            "scan_receive_monotonic": scene["scan_received_monotonic"],
                            "pose_receive_monotonic": scene["pose_received_monotonic"],
                            "validation_started_monotonic": scene["now"],
-                           "validated_monotonic": finished})
+                           "validated_monotonic": finished,
+                           "geometry": geometry})
             except Exception as exc:
                 conn.send({"type": "error", "epoch": job["epoch"], "sequence": job["sequence"],
                            "error": type(exc).__name__ + ": " + str(exc)})
@@ -87,7 +96,7 @@ class ContinuationWorker:
             self._epoch+=1;self._plan=None;self._pending=None;self._result=None;self._event=None
 
     def submit(self, *, context, scan_counter, scan_received_monotonic, pose_received_monotonic,
-               input_timeout, state, points):
+               input_timeout, state, points, geometry=None, point_heights=None, point_scope=None):
         with self._lock:
             if self._closed or self._failure or self._plan is None or tuple(context)!=self._plan["context"]:
                 return False
@@ -95,7 +104,10 @@ class ContinuationWorker:
             scene=dict(context=tuple(context),scan_counter=scan_counter,
                 scan_received_monotonic=scan_received_monotonic,pose_received_monotonic=pose_received_monotonic,
                 input_timeout=input_timeout,state=np.asarray(state,dtype=float).copy(),
-                points=None if points is None else np.asarray(points,dtype=float).copy())
+                points=None if points is None else np.asarray(points,dtype=float).copy(),
+                geometry=copy.deepcopy(geometry),
+                point_heights=None if point_heights is None else np.asarray(point_heights,dtype=float).copy(),
+                point_scope=None if point_scope is None else np.asarray(point_scope,dtype=np.uint8).copy())
             self._pending=dict(epoch=self._epoch,sequence=self._sequence,plan=self._plan,scene=scene)
             # Keep an unconsumed obstacle denial until the consumer sees it;
             # submitting a newer scan must not erase that evidence.

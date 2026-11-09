@@ -460,6 +460,9 @@ class _ExactCaptureRecorder:
             "input": {
                 "state": _exact_clone(state),
                 "obstacle_points": _exact_clone(points),
+                "dynamic_geometry": _exact_clone(request.get("dynamic_geometry")),
+                "point_heights": _exact_clone(_unpack_array(request["point_heights"])) if request.get("point_heights") is not None else None,
+                "point_scope": _exact_clone(_unpack_array(request["point_scope"])) if request.get("point_scope") is not None else None,
                 "effective_path": _exact_clone(_planner_path_matrix(planner)),
                 "goal": _exact_clone(_unpack_array(request.get("goal", _pack_array(None)))),
             },
@@ -1118,6 +1121,30 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                 points = None
             measured_record = request.get("measured_velocity")
             measured_velocity = _unpack_array(measured_record) if measured_record is not None else None
+            heights_record = request.get("point_heights")
+            point_heights = _unpack_array(heights_record) if heights_record is not None else None
+            scopes_record = request.get("point_scope")
+            point_scope = _unpack_array(scopes_record) if scopes_record is not None else None
+            geometry_record = request.get("dynamic_geometry")
+            if geometry_record is not None:
+                from .arm_geometry_snapshot import ArmGeometrySnapshot
+                snapshot = ArmGeometrySnapshot.decode(
+                    geometry_record["snapshot"], geometry_record["received_monotonic"])
+                previous_dune = planner.pan.dune_layer
+                previous_data = geometry_record.get("previous_snapshot")
+                previous_snapshot = (None if previous_data is None else ArmGeometrySnapshot.decode(previous_data, geometry_record["received_monotonic"]))
+                planner.set_dynamic_geometry(snapshot.planner_components(previous_snapshot), source_age_sec=geometry_record.get("source_age_sec", 0.) + max(0., time.monotonic() - geometry_record.get("created_monotonic", time.monotonic())))
+                if planner.pan.dune_layer is not previous_dune:
+                    timing._wrap(planner.pan.dune_layer, "forward", "worker_dune_ms")
+                    if recorder.hook_enabled:
+                        original_dynamic_dune = planner.pan.dune_layer.forward
+                        def recorded_dynamic_dune(*args, _forward=original_dynamic_dune, **kwargs):
+                            result = _forward(*args, **kwargs)
+                            recorder.dune_call(args, kwargs, result)
+                            return result
+                        planner.pan.dune_layer.forward = recorded_dynamic_dune
+            elif getattr(planner.pan, "dynamic_geometry", None) is not None:
+                planner.clear_dynamic_geometry()
             decode_finished = time.perf_counter_ns()
             timing.reset()
             core_wall_started = time.perf_counter_ns()
@@ -1136,6 +1163,7 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                     action, info = planner(
                         state, points,
                         measured_velocity=measured_velocity,
+                        point_heights=point_heights, point_scope=point_scope,
                     )
             except Exception as exc:
                 status = "exception"
@@ -1172,6 +1200,8 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                     "stop": bool(getattr(planner, "info", {}).get("stop", False)),
                     "arrive": bool(getattr(planner, "info", {}).get("arrive", False)),
                     "stop_reason": str(getattr(planner, "info", {}).get("stop_reason", "none")),
+                    "dynamic_input_points": int(getattr(planner, "info", {}).get("dynamic_input_points", 0)),
+                    "dynamic_selected_points": int(getattr(planner, "info", {}).get("dynamic_selected_points", 0)),
                     "avoidance_side": int(getattr(planner, "info", {}).get("avoidance_side", 0)),
                     "avoidance_candidates": getattr(planner, "info", {}).get("avoidance_candidates", []),
                 },

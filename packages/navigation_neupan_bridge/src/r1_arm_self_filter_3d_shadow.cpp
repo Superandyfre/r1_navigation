@@ -13,6 +13,8 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -70,13 +72,15 @@ public:
     reuse_after_=declare_parameter<double>("reuse_after_sec", .04);
     stable_fallback_after_=declare_parameter<double>("stable_fallback_after_sec", .08);
     stable_fallback_span_=declare_parameter<double>("stable_fallback_span_sec", .10);
+    pose_hold_sec_=declare_parameter<double>("last_valid_pose_hold_sec", 1.50);
     if (!std::isfinite(tolerance) || tolerance<=0 || tolerance>.10 ||
       bin_ns_<=0 || span_ns_<=0 || bin_ns_>span_ns_ ||
       !std::isfinite(tf_wait_) || tf_wait_<=0 || tf_wait_>2. ||
       !std::isfinite(max_reuse_age_) || max_reuse_age_<=0 || max_reuse_age_>.5 ||
       !std::isfinite(reuse_after_) || reuse_after_<0 || reuse_after_>=tf_wait_ ||
       !std::isfinite(stable_fallback_after_) || stable_fallback_after_<0 || stable_fallback_after_>=tf_wait_ ||
-      !std::isfinite(stable_fallback_span_) || stable_fallback_span_<=0 || stable_fallback_span_>.5)
+      !std::isfinite(stable_fallback_span_) || stable_fallback_span_<=0 || stable_fallback_span_>.5 ||
+      !std::isfinite(pose_hold_sec_) || pose_hold_sec_<=0.)
     {throw std::invalid_argument("invalid shadow filter parameters");}
     auto resources=armMeshResources();
     const auto extra_frames=declare_parameter<std::vector<std::string>>("additional_mesh_frames",std::vector<std::string>{});
@@ -180,57 +184,84 @@ private:
     q.push_back({std::move(msg),Steady::now(),++sequence_});
   }
 
-  using Poses=std::vector<fcl::Transform3d>;
+  using Poses=std::vector<std::optional<fcl::Transform3d>>;
   using PoseMap=std::map<std::uint32_t,Poses>;
   bool posesFor(const std::string & frame,std::int64_t ns,Poses & result)
   {
     if (frame.empty() || ns<=0) {return false;}
     const rclcpp::Time time(ns,get_clock()->get_clock_type());
+    std::size_t valid=0;
     for (const auto & mesh : meshes_) {
-      try {
-        geometry_msgs::msg::TransformStamped t;
-        try {t=tf_.lookupTransform(mesh.frame,frame,time);}
-        catch (const tf2::TransformException &) {
-          if (!allow_stable_fallback_) {return false;}
-          t=tf_.lookupTransform(mesh.frame,frame,rclcpp::Time(0,0,get_clock()->get_clock_type()));
-          const std::int64_t latest_ns=static_cast<std::int64_t>(t.header.stamp.sec)*1000000000LL+
-            static_cast<std::int64_t>(t.header.stamp.nanosec);
-          // Never substitute a future pose for an older sensor sample.
-          // Only the latest earlier pose may bridge a short missing update.
-          if (latest_ns<=50000000LL || latest_ns>ns ||
-            ns-latest_ns>static_cast<std::int64_t>(stable_fallback_span_*1e9)) {return false;}
-          const auto previous=tf_.lookupTransform(mesh.frame,frame,
-            rclcpp::Time(latest_ns-50000000LL,get_clock()->get_clock_type()));
-          const auto & a=t.transform;const auto & b=previous.transform;
-          Eigen::Quaterniond qa(a.rotation.w,a.rotation.x,a.rotation.y,a.rotation.z);
-          Eigen::Quaterniond qb(b.rotation.w,b.rotation.x,b.rotation.y,b.rotation.z);
-          if (!qa.coeffs().allFinite() || !qb.coeffs().allFinite() || qa.norm()<1e-9 || qb.norm()<1e-9) {return false;}
-          qa.normalize();qb.normalize();
-          const double angle=2.*std::acos(std::clamp(std::abs(qa.dot(qb)),0.,1.));
-          const double dx=a.translation.x-b.translation.x,dy=a.translation.y-b.translation.y,
-            dz=a.translation.z-b.translation.z;
-          if (!std::isfinite(dx)||!std::isfinite(dy)||!std::isfinite(dz)||
-            std::sqrt(dx*dx+dy*dy+dz*dz)>.01 || angle>.02) {return false;}
-          used_stable_fallback_=true;
-          max_pose_time_error_sec_=std::max(max_pose_time_error_sec_,
-            static_cast<double>(ns-latest_ns)/1e9+static_cast<double>(bin_ns_)/2e9);
-        }
-        const auto & q=t.transform.rotation;const auto & p=t.transform.translation;
-        Eigen::Quaterniond rotation(q.w,q.x,q.y,q.z);
-        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
-          !rotation.coeffs().allFinite() || rotation.norm()<1e-9) {return false;}
-        rotation.normalize();
-        fcl::Transform3d v=fcl::Transform3d::Identity();
-        v.linear()=rotation.toRotationMatrix();v.translation()=fcl::Vector3d(p.x,p.y,p.z);
-        result.push_back(v);
-      } catch (const tf2::TransformException &) {return false;}
+      auto lookup=[&]() -> std::optional<fcl::Transform3d> {
+        try {
+          geometry_msgs::msg::TransformStamped t;
+          std::int64_t source_ns=ns;
+          const auto cache_key=mesh.frame+"\n"+frame;
+          try {t=tf_.lookupTransform(mesh.frame,frame,time);}
+          catch (const tf2::TransformException &) {
+            // A brief TF gap uses this link's last *actual* observation,
+            // without pretending its timestamp was renewed. Never use a
+            // cached future pose for an older sensor point.
+            const auto cached=last_valid_poses_.find(cache_key);
+            if (allow_pose_hold_ && cached!=last_valid_poses_.end() &&
+                cached->second.stamp_ns<=ns &&
+                ns-cached->second.stamp_ns<=static_cast<std::int64_t>(pose_hold_sec_*1e9)) {
+              held_mesh_frames_.insert(mesh.frame);
+              max_pose_time_error_sec_=std::max(max_pose_time_error_sec_,
+                  static_cast<double>(ns-cached->second.stamp_ns)/1e9+static_cast<double>(bin_ns_)/2e9);
+              return cached->second.transform;
+            }
+            if (!allow_stable_fallback_) {return std::nullopt;}
+            t=tf_.lookupTransform(mesh.frame,frame,rclcpp::Time(0,0,get_clock()->get_clock_type()));
+            const std::int64_t latest_ns=static_cast<std::int64_t>(t.header.stamp.sec)*1000000000LL+
+              static_cast<std::int64_t>(t.header.stamp.nanosec);
+            // Never substitute a future pose for an older sensor sample.
+            if (latest_ns<=50000000LL || latest_ns>ns ||
+              ns-latest_ns>static_cast<std::int64_t>(stable_fallback_span_*1e9)) {return std::nullopt;}
+            const auto previous=tf_.lookupTransform(mesh.frame,frame,
+              rclcpp::Time(latest_ns-50000000LL,get_clock()->get_clock_type()));
+            const auto & a=t.transform;const auto & b=previous.transform;
+            Eigen::Quaterniond qa(a.rotation.w,a.rotation.x,a.rotation.y,a.rotation.z);
+            Eigen::Quaterniond qb(b.rotation.w,b.rotation.x,b.rotation.y,b.rotation.z);
+            if (!qa.coeffs().allFinite() || !qb.coeffs().allFinite() || qa.norm()<1e-9 || qb.norm()<1e-9) {return std::nullopt;}
+            qa.normalize();qb.normalize();
+            const double angle=2.*std::acos(std::clamp(std::abs(qa.dot(qb)),0.,1.));
+            const double dx=a.translation.x-b.translation.x,dy=a.translation.y-b.translation.y,
+              dz=a.translation.z-b.translation.z;
+            if (!std::isfinite(dx)||!std::isfinite(dy)||!std::isfinite(dz)||
+              std::sqrt(dx*dx+dy*dy+dz*dz)>.01 || angle>.02) {return std::nullopt;}
+            source_ns=latest_ns;
+            used_stable_fallback_=true;
+            max_pose_time_error_sec_=std::max(max_pose_time_error_sec_,
+              static_cast<double>(ns-latest_ns)/1e9+static_cast<double>(bin_ns_)/2e9);
+          }
+          const auto & q=t.transform.rotation;const auto & p=t.transform.translation;
+          Eigen::Quaterniond rotation(q.w,q.x,q.y,q.z);
+          if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+            !rotation.coeffs().allFinite() || rotation.norm()<1e-9) {return std::nullopt;}
+          rotation.normalize();
+          fcl::Transform3d v=fcl::Transform3d::Identity();
+          v.linear()=rotation.toRotationMatrix();v.translation()=fcl::Vector3d(p.x,p.y,p.z);
+          auto old=last_valid_poses_.find(cache_key);
+          if (old==last_valid_poses_.end() || source_ns>old->second.stamp_ns) {
+            last_valid_poses_[cache_key]=CachedPose{v,source_ns};
+          }
+          return v;
+        } catch (const tf2::TransformException &) {return std::nullopt;}
+      };
+      auto value=lookup();
+      if (!value) {
+        if (!allow_partial_) {return false;}
+        missing_mesh_frames_.insert(mesh.frame);
+      } else {++valid;}
+      result.push_back(value);
     }
-    return true;
+    return valid>0;
   }
   bool nearAnySurface(const fcl::Vector3d & point,const Poses & poses, std::string & matched_frame)
   {
     for (std::size_t i=0;i<meshes_.size();++i) {
-      if (meshes_[i].mesh->nearSurface(poses[i]*point)) {matched_frame=meshes_[i].frame;++removed_by_mesh_[matched_frame];return true;}
+      if (poses[i] && meshes_[i].mesh->nearSurface(*poses[i]*point)) {matched_frame=meshes_[i].frame;++removed_by_mesh_[matched_frame];return true;}
     }
     return false;
   }
@@ -239,7 +270,8 @@ private:
   {
     for (const auto & model:echo_templates_) {
       if (model.sensor_frame!=sensor_frame) {continue;}
-      const auto local=poses[model.mesh_index]*point;
+      if (!poses[model.mesh_index]) {continue;}
+      const auto local=*poses[model.mesh_index]*point;
       if ((local.array()<model.lower.array()).any() || (local.array()>model.upper.array()).any()) {continue;}
       for (const auto & sample:model.points) {
         if ((local-sample).squaredNorm()<=model.radius_sq) {
@@ -264,7 +296,7 @@ private:
       {"dropped_frames",dropped},{"output_published",published},
       {"input_stamp_ns",input_stamp},{"output_stamp_ns",output_stamp},
       {"max_pose_time_error_sec",pose_error},{"mesh_parts",meshes_.size()},{"closed_meshes",closed_meshes_},
-      {"open_mesh_frames",open_mesh_frames_},{"additional_meshes",additional_meshes_},
+      {"open_mesh_frames",open_mesh_frames_},{"missing_mesh_frames",missing_mesh_frames_},{"held_mesh_frames",held_mesh_frames_},{"additional_meshes",additional_meshes_},
       {"motion_authorized",false}}.dump();
     status_pub_->publish(m);
   }
@@ -340,7 +372,10 @@ private:
       }
     }
     output.is_dense=false;
-    last_cloud_=std::make_shared<Cloud>(output);cloud_pub_->publish(output);return Outcome::OK;
+    if (!allow_partial_ || missing_mesh_frames_.empty()) {
+      last_cloud_=std::make_shared<Cloud>(output);
+    }
+    cloud_pub_->publish(output);return Outcome::OK;
   }
   Outcome scan(const Scan & input,std::size_t & removed,std::size_t & samples)
   {
@@ -381,7 +416,10 @@ private:
         output.ranges[i]=std::numeric_limits<float>::infinity();++removed;
       }
     }
-    last_scan_=std::make_shared<Scan>(output);scan_pub_->publish(output);return Outcome::OK;
+    if (!allow_partial_ || missing_mesh_frames_.empty()) {
+      last_scan_=std::make_shared<Scan>(output);
+    }
+    scan_pub_->publish(output);return Outcome::OK;
   }
 
   template<class M,class Function> void processOne(
@@ -395,11 +433,32 @@ private:
     const auto start=Steady::now();std::size_t removed=0,samples=0;
     removed_by_mesh_.clear();
     removed_sample_.clear();
+    missing_mesh_frames_.clear();
+    held_mesh_frames_.clear();
+    allow_partial_=false;
+    allow_pose_hold_=std::chrono::duration<double>(start-item.received).count() >= reuse_after_;
     allow_stable_fallback_=std::chrono::duration<double>(start-item.received).count() >= stable_fallback_after_;
     used_stable_fallback_=false;
     max_pose_time_error_sec_=static_cast<double>(bin_ns_)/2e9;
-    const Outcome result=(this->*function)(*item.msg,removed,samples);
-    const double age=std::chrono::duration<double>(Steady::now()-item.received).count();
+    Outcome result=(this->*function)(*item.msg,removed,samples);
+    double age=std::chrono::duration<double>(Steady::now()-item.received).count();
+    if (result==Outcome::WAIT_TF && age>=tf_wait_) {
+      // A missing TF for one link must not disable filtering of all other
+      // links. Unknown-link points remain untouched; only current verified
+      // transforms classify points. Never refresh an old sensor stamp.
+      allow_partial_=true;
+      removed=0;samples=0;removed_by_mesh_.clear();removed_sample_.clear();
+      result=(this->*function)(*item.msg,removed,samples);
+      age=std::chrono::duration<double>(Steady::now()-item.received).count();
+      if (result==Outcome::OK && !missing_mesh_frames_.empty()) {
+        status(sensor,"DEGRADED","partial_tf_filtered",samples,removed,
+          std::chrono::duration<double,std::milli>(Steady::now()-start).count(),age,lost,true,
+          ns(item.msg->header.stamp),ns(item.msg->header.stamp),-1.);
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!queue.empty() && queue.front().sequence==item.sequence) queue.pop_front();
+        return;
+      }
+    }
     if (result==Outcome::WAIT_TF && age<tf_wait_) {
       // Preserve the original sensor stamp and bytes. Never restamp or
       // prolong the lifetime of cached observations while TF catches up.
@@ -428,8 +487,9 @@ private:
     }
     const double ms=std::chrono::duration<double,std::milli>(Steady::now()-start).count();
     if (result==Outcome::OK) {last_pose_error=max_pose_time_error_sec_;}
-    status(sensor,result==Outcome::OK&&!used_stable_fallback_?"READY":"DEGRADED",
-      result==Outcome::OK?(used_stable_fallback_?"stable_tf_fallback":"filtered"):
+    status(sensor,result==Outcome::OK&&!used_stable_fallback_&&held_mesh_frames_.empty()?"READY":"DEGRADED",
+      result==Outcome::OK?(!held_mesh_frames_.empty()?"held_previous_pose":
+                           used_stable_fallback_?"stable_tf_fallback":"filtered"):
       result==Outcome::WAIT_TF?"tf_wait_expired":"invalid_sensor_data",
       samples,removed,ms,age,lost,result==Outcome::OK,ns(item.msg->header.stamp),
       result==Outcome::OK?ns(item.msg->header.stamp):0,max_pose_time_error_sec_);
@@ -451,7 +511,11 @@ private:
   std::shared_ptr<Cloud> last_cloud_;std::shared_ptr<Scan> last_scan_;
   std::uint64_t cloud_reused_sequence_{0},scan_reused_sequence_{0};
   double stable_fallback_after_{},stable_fallback_span_{};
-  bool allow_stable_fallback_{false},used_stable_fallback_{false};
+  struct CachedPose {fcl::Transform3d transform; std::int64_t stamp_ns;};
+  std::map<std::string,CachedPose> last_valid_poses_;
+  double pose_hold_sec_{};
+  bool allow_stable_fallback_{false},used_stable_fallback_{false},allow_partial_{false},allow_pose_hold_{false};
+  std::set<std::string> missing_mesh_frames_,held_mesh_frames_;
   double max_pose_time_error_sec_{0.},last_cloud_pose_error_{0.},last_scan_pose_error_{0.};
   std::mutex mutex_;std::uint64_t sequence_{0},cloud_drops_{0},scan_drops_{0};
   std::deque<Pending<Cloud>> clouds_;std::deque<Pending<Scan>> scans_;

@@ -367,6 +367,9 @@ def _build(context):
                 "dynamic_footprint_clearance_m": 0.04,
                 "dynamic_mesh_components_enabled": True,
                 "dynamic_mesh_components_topic": "/r1_arm_mesh_components",
+                # Feed independently transformed links and real 3-D returns
+                # directly into NeuPAN when the mesh filter is in use.
+                "dynamic_neupan_geometry_enabled": use_3d,
                 "planner_base_front_m": 0.341,
                 "planner_base_rear_m": 0.341,
                 "planner_base_left_m": 0.266,

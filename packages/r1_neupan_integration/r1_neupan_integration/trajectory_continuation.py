@@ -53,7 +53,8 @@ class TrajectoryContinuation:
         return self.validate_detailed(**kwargs)[0]
 
     def validate_detailed(self, *, context, scan_counter, scan_received_monotonic,
-                          pose_received_monotonic, now, input_timeout, state, points):
+                          pose_received_monotonic, now, input_timeout, state, points,
+                          point_heights=None, point_scope=None):
         with self._lock:
             plan = self._plan
             if plan is None or context != plan[0]:
@@ -76,7 +77,9 @@ class TrajectoryContinuation:
         if duration <= 0.:
             return None, "unavailable"
         result, reason = self.planner.validate_remaining_trajectory(
-            state, plan[3], now - plan[2], points, with_reason=True, duration_sec=duration)
+            state, plan[3], now - plan[2], points, with_reason=True, duration_sec=duration,
+            **({"point_heights": point_heights} if point_heights is not None else {}),
+            **({"point_scope": point_scope} if point_scope is not None else {}))
         finished = now + max(0.0, self.clock() - started)
         with self._lock:
             # Cancellation, replacement or a newer scan invalidates in-flight

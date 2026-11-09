@@ -19,6 +19,7 @@ along with NeuPAN planner. If not, see <https://www.gnu.org/licenses/>.
 """
 
 import torch
+import numpy as np
 from neupan.blocks import NRMP, DUNE
 from math import inf
 from typing import Optional
@@ -107,7 +108,7 @@ class PAN(torch.nn.Module):
         self.last_sample_indices = None
 
     @staticmethod
-    def select_obstacle_indices(nom_s, obs_points, point_velocities, max_num, dt, robot_geometry=None):
+    def select_obstacle_indices(nom_s, obs_points, point_velocities, max_num, dt, robot_geometry=None, point_heights=None, point_scope=None):
         """Keep high-impact points near the nominal horizon and spatial coverage.
 
         The same indices are used for obstacle velocities. Ranking is based on
@@ -118,6 +119,34 @@ class PAN(torch.nn.Module):
         count = obs_points.shape[1]
         if count <= max_num:
             return torch.arange(count, device=obs_points.device)
+        if hasattr(robot_geometry, "box_lower_bound") and count > 4 * max_num:
+            # A conservative broad phase keeps points near every component
+            # along the entire nominal horizon before exact geometry ranking.
+            # It chooses existing samples and never relocates observations.
+            times = torch.arange(nom_s.shape[1],device=obs_points.device,dtype=obs_points.dtype)*dt
+            predicted = obs_points.unsqueeze(0)+times[:,None,None]*point_velocities.unsqueeze(0)
+            delta = predicted-nom_s[:2,:].T.unsqueeze(2)
+            c=torch.cos(nom_s[2,:])[:,None];sn=torch.sin(nom_s[2,:])[:,None]
+            local=torch.stack((c*delta[:,0,:]+sn*delta[:,1,:],
+                               -sn*delta[:,0,:]+c*delta[:,1,:]),dim=1)
+            flat=local.permute(1,0,2).reshape(2,-1).detach().cpu().numpy()
+            heights=(None if point_heights is None else
+                     np.tile(point_heights.detach().cpu().numpy().reshape(-1),nom_s.shape[1]))
+            scopes=(None if point_scope is None else
+                    np.tile(point_scope.detach().cpu().numpy().reshape(-1),nom_s.shape[1]))
+            sample_times=np.repeat(np.arange(nom_s.shape[1],dtype=float)*dt,count)
+            lower=robot_geometry.box_lower_bound(flat,heights,scopes,sample_times).reshape(nom_s.shape[1],count).min(axis=0)
+            keep=4*max_num
+            coverage=np.unique(np.linspace(0,count-1,max(1,max_num//4),dtype=np.int64))
+            lower[coverage]=np.inf
+            important=np.argsort(lower,kind="stable")[:keep-len(coverage)]
+            selected=np.sort(np.concatenate((coverage,important)))
+            index=torch.as_tensor(selected,device=obs_points.device,dtype=torch.long)
+            sub=PAN.select_obstacle_indices(nom_s,obs_points[:,index],point_velocities[:,index],
+                max_num,dt,robot_geometry=robot_geometry,
+                point_heights=None if point_heights is None else point_heights[index],
+                point_scope=None if point_scope is None else point_scope[index])
+            return index[sub]
         coverage_count = max(1, max_num // 4)
         coverage = torch.linspace(0, count - 1, coverage_count,
                                   device=obs_points.device).long().unique()
@@ -129,6 +158,23 @@ class PAN(torch.nn.Module):
         if robot_geometry is None:
             # Compatibility for geometry-free callers.
             risk = torch.sum(delta * delta, dim=1).amin(dim=0)
+        elif hasattr(robot_geometry, "distance_and_normal"):
+            c = torch.cos(nom_s[2, :])[:, None]
+            s = torch.sin(nom_s[2, :])[:, None]
+            local_x = c * delta[:, 0, :] + s * delta[:, 1, :]
+            local_y = -s * delta[:, 0, :] + c * delta[:, 1, :]
+            local = torch.stack((local_x, local_y), dim=1)
+            flat = local.permute(1, 0, 2).reshape(2, -1).detach().cpu().numpy()
+            heights = (None if point_heights is None else
+                       point_heights.detach().cpu().numpy().reshape(-1).repeat(nom_s.shape[1])
+                       .reshape(count, nom_s.shape[1]).T.reshape(-1))
+            point_scope = (None if point_scope is None else
+                         point_scope.detach().cpu().numpy().reshape(-1).repeat(nom_s.shape[1])
+                         .reshape(count, nom_s.shape[1]).T.reshape(-1))
+            sample_times = np.repeat(np.arange(nom_s.shape[1],dtype=float)*dt,count)
+            distance, _, _ = robot_geometry.distance_and_normal(flat, heights, point_scope, sample_times)
+            risk = torch.as_tensor(distance, dtype=obs_points.dtype,
+                                   device=obs_points.device).reshape(nom_s.shape[1], count).amin(dim=0)
         else:
             # G x <= h is the same convex body used by NeuPAN, not a
             # separate obstacle cage. Normalize edge normals before ranking.
@@ -154,7 +200,8 @@ class PAN(torch.nn.Module):
     def forward(
         self, nom_s: torch.Tensor, nom_u: torch.Tensor, ref_s: torch.Tensor, ref_us: torch.Tensor,
         obs_points: torch.Tensor = None, point_velocities: torch.Tensor = None,
-        measured_velocity: torch.Tensor = None,
+        measured_velocity: torch.Tensor = None, point_heights: torch.Tensor = None,
+        point_scope: torch.Tensor = None,
     ):
         """
         input:
@@ -179,15 +226,24 @@ class PAN(torch.nn.Module):
 
         # Convergence history belongs to this solve, not a previous scan.
         self.current_nom_values = [None, None, None, None]
+        selected_for_candidate = None
         for i in range(self.iter_num):
 
             if has_obstacles and not self.no_obs:
                 point_flow_list, R_list, obs_points_list = self.generate_point_flow(
-                    nom_s, obs_points, point_velocities
-                )
-                mu_list, lam_list, sort_point_list = self.dune_layer(
-                    point_flow_list, R_list, obs_points_list
-                )
+                    nom_s, obs_points, point_velocities, point_heights, point_scope,
+                    selected_for_candidate)
+                if getattr(self, "dynamic_geometry", None) is not None and selected_for_candidate is None:
+                    # Reuse this candidate's risk sample across its refinement
+                    # iterations; final candidate checks still use all inputs.
+                    selected_for_candidate = self.last_sample_indices.to(obs_points.device)
+                if getattr(self, "dynamic_geometry", None) is not None:
+                    mu_list, lam_list, sort_point_list = self.dune_layer(
+                        point_flow_list, R_list, obs_points_list, self.current_selected_heights,
+                        self.current_selected_point_scope)
+                else:
+                    mu_list, lam_list, sort_point_list = self.dune_layer(
+                        point_flow_list, R_list, obs_points_list)
             else:
                 mu_list, lam_list, sort_point_list = [], [], []
                 
@@ -202,7 +258,7 @@ class PAN(torch.nn.Module):
         return nom_s, nom_u, nom_distance
 
 
-    def generate_point_flow(self, nom_s: torch.Tensor, obs_points: torch.Tensor, point_velocities: Optional[torch.Tensor]=None):
+    def generate_point_flow(self, nom_s: torch.Tensor, obs_points: torch.Tensor, point_velocities: Optional[torch.Tensor]=None, point_heights: Optional[torch.Tensor]=None, point_scope: Optional[torch.Tensor]=None, selected_indices: Optional[torch.Tensor]=None):
 
         '''
         generate the point flow (robot coordinate), rotation matrix and obs points (global coordinate) list in each receding step
@@ -223,9 +279,14 @@ class PAN(torch.nn.Module):
         if point_velocities is None:
             point_velocities = torch.zeros_like(obs_points)
 
-        indices = self.select_obstacle_indices(
-            nom_s, obs_points, point_velocities, self.dune_max_num, self.dt,
-            robot_geometry=(self.robot.G, self.robot.h))
+        indices = selected_indices
+        if indices is None:
+            indices = self.select_obstacle_indices(
+                nom_s, obs_points, point_velocities, self.dune_max_num, self.dt,
+                robot_geometry=getattr(self, 'dynamic_geometry', None) or (self.robot.G, self.robot.h),
+                point_heights=point_heights, point_scope=point_scope)
+        self.current_selected_point_scope = None if point_scope is None else point_scope[indices]
+        self.current_selected_heights = None if point_heights is None else point_heights[indices]
         self.last_sample_indices = indices.detach().cpu()
         obs_points = obs_points[:, indices]
         point_velocities = point_velocities[:, indices]

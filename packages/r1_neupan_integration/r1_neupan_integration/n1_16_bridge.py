@@ -343,6 +343,9 @@ class ProductionWholeCoreClient:
         scan_update_monotonic: float = -1.0,
         measured_velocity: np.ndarray | None = None,
         execution_key: tuple | None = None,
+        dynamic_geometry: dict | None = None,
+        point_heights: np.ndarray | None = None,
+        point_scope: np.ndarray | None = None,
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         if self.health.fault is not None:
             raise BridgeProtocolError("worker_fault_latched", "full controlled restart required")
@@ -374,6 +377,12 @@ class ProductionWholeCoreClient:
         }
         if measured_velocity is not None:
             request["measured_velocity"] = _pack_array(measured_velocity)
+        if dynamic_geometry is not None:
+            request["dynamic_geometry"] = dynamic_geometry
+        if point_heights is not None:
+            request["point_heights"] = _pack_array(point_heights)
+        if point_scope is not None:
+            request["point_scope"] = _pack_array(point_scope)
         request["request_created_monotonic"] = time.monotonic()
         prep_started = time.perf_counter_ns()
         request["main_send_started_monotonic"] = time.monotonic()

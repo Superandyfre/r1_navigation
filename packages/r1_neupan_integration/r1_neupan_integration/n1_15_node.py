@@ -308,6 +308,8 @@ class N115Node(Node):
         self.latest_scan_only = bool(self.get_parameter("latest_scan_only").value)
 
         self.robot_state = None
+        self.base_height_map = 0.0
+        self.base_pose_world = None
         self.obstacle_points = None
         self.raw_environment_points = None
         self.processed_scan_counter = 0
@@ -424,6 +426,9 @@ class N115Node(Node):
                 [quat_to_yaw(trans.transform.rotation)],
             ], dtype=np.float64)
             self.tf_stamp_sec = float(trans.header.stamp.sec) + float(trans.header.stamp.nanosec) * 1e-9
+            self.base_height_map = float(trans.transform.translation.z)
+            from .obstacle_cloud import transform_matrix
+            self.base_pose_world = transform_matrix(trans.transform)
         return True
 
     def dynamic_footprint_callback(self, message: PolygonStamped) -> None:

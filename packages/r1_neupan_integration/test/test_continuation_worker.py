@@ -16,6 +16,36 @@ class ContinuationWorkerTest(unittest.TestCase):
         self.assertFalse(_result_is_relevant(event,4,9,7))
         self.assertFalse(_result_is_relevant(event,3,9,8))
 
+    def test_fresh_arm_geometry_revalidates_old_trajectory(self):
+        worker=ContinuationWorker(ROOT/'packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml',
+            ROOT/'packages/r1_neupan_integration/config/models/dune_model_5000.pth')
+        self.addCleanup(worker.close)
+        deadline=time.monotonic()+25
+        while time.monotonic()<deadline and not worker.snapshot()['ready'] and not worker.snapshot()['failure']:
+            time.sleep(.02)
+        self.assertTrue(worker.snapshot()['ready'],worker.snapshot())
+        context=('authority','controller','attempt',1,0,'worker',1)
+        worker.install(context=context,request_id=1,scan_counter=1,
+            started_monotonic=time.monotonic()-.1,controls=np.vstack((np.full(20,.2),np.zeros(20))))
+        now=time.monotonic()
+        snapshot=dict(schema="r1_arm_geometry_v1",stamp_ns=1000000000,sequence=1,geometry_version=1,
+            components=[dict(frame="left_link7",polygon_xy=[[.4,.4],[.8,.4],[.8,.6],[.4,.6]],
+                             z_min=0.,z_max=1.)])
+        self.assertTrue(worker.submit(context=context,scan_counter=2,
+            scan_received_monotonic=now-.01,pose_received_monotonic=now-.01,input_timeout=.75,
+            state=np.zeros((3,1)),points=np.array([[.9],[.5]]),
+            geometry=dict(snapshot=snapshot,received_monotonic=now)))
+        sequence=worker.snapshot()['sequence'];deadline=time.monotonic()+4
+        while time.monotonic()<deadline:
+            result=worker.snapshot()
+            self.assertIsNone(result['failure'],result)
+            if result['completed_sequence']==sequence: break
+            time.sleep(.01)
+        self.assertEqual(result['completed_sequence'],sequence,result)
+        self.assertIsNone(result['result'])
+        self.assertEqual(result['event']['outcome'],'obstacle_conflict')
+        self.assertEqual(result['event']['geometry']['snapshot']['sequence'],1)
+
     def test_new_wall_and_cancel_do_not_reuse_previous_result(self):
         worker=ContinuationWorker(ROOT/'packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml',
             ROOT/'packages/r1_neupan_integration/config/models/dune_model_5000.pth')

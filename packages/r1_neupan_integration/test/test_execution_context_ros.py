@@ -46,7 +46,8 @@ class ExecutionContextROS(unittest.TestCase):
                     '-p', 'cmd_vel_topic:=/test_wp3_worker/observed_cmd',
                     '-p', 'forward_only_enabled:=false',
                     '-p', 'command_stabilizer_enabled:=false',
-                    '-p', 'auto_gear_transition_enabled:=false'])
+                    '-p', 'auto_gear_transition_enabled:=false',
+                    '-p', 'dynamic_neupan_geometry_enabled:=' + ('true' if mutation in ('dynamic-geometry','arm-changed-during-solve','arm-changed-clear') else 'false')])
                 node = None
                 executor = MultiThreadedExecutor(num_threads=3)
                 try:
@@ -66,6 +67,13 @@ class ExecutionContextROS(unittest.TestCase):
                     old_scan_update = node.latest_scan_update_monotonic
                     node.obstacle_points = np.empty((2, 0))
                     node.observed_odom_received_monotonic = time.monotonic()
+                    if mutation in ('dynamic-geometry','arm-changed-during-solve','arm-changed-clear'):
+                        arm=dict(schema='r1_arm_geometry_v1',stamp_ns=node.get_clock().now().nanoseconds,
+                            sequence=1,geometry_version=1,components=[dict(frame='left_link7',
+                            polygon_xy=[[.2,.4],[.6,.4],[.6,.6],[.2,.6]],z_min=.2,z_max=1.)])
+                        node.arm_geometry_snapshot_callback(String(data=json.dumps(arm)))
+                        if mutation == 'arm-changed-during-solve':
+                            node.obstacle_points=np.array([[.96],[.5]])
                     node.client.startup = lambda *a, **k: node.client.health.ready(node.client.worker_generation)
                     node.client.mark_stale_response = Mock()
                     rows = []
@@ -95,6 +103,13 @@ class ExecutionContextROS(unittest.TestCase):
                             node.scan_counter += 1
                             if mutation == 'path-changed-during-solve':
                                 node.path_version += 1
+                        if mutation in ('arm-changed-during-solve','arm-changed-clear'):
+                            new_arm=dict(arm,sequence=2,geometry_version=2,
+                                stamp_ns=max(node.get_clock().now().nanoseconds,arm['stamp_ns']+1),
+                                components=[dict(frame='left_link7',
+                                    polygon_xy=[[.4,.4],[.9,.4],[.9,.6],[.4,.6]],
+                                    z_min=.2,z_max=1.)])
+                            node.arm_geometry_snapshot_callback(String(data=json.dumps(new_arm)))
                         if mutation == 'retry-during-solve':
                             raise RecoverableSolveError('injected iteration limit', 1)
                         now = time.monotonic()
@@ -124,7 +139,11 @@ class ExecutionContextROS(unittest.TestCase):
                     self.assertIsNone(node.client.health.fault)
                     self.assertEqual(captured['scan_callback_receive_monotonic'], old_scan_time)
                     self.assertEqual(captured['scan_update_monotonic'], old_scan_update)
-                    if mutation in ('end-during-postprocessing', 'path-changed-during-solve', 'retry-during-solve'):
+                    if mutation == 'dynamic-geometry':
+                        self.assertEqual(captured['dynamic_geometry']['snapshot']['sequence'],1)
+                        self.assertEqual(captured['point_heights'].shape,(0,))
+                        self.assertEqual(captured['point_scope'].shape,(0,))
+                    if mutation in ('end-during-postprocessing', 'path-changed-during-solve', 'retry-during-solve', 'arm-changed-during-solve'):
                         self.assertFalse(rows)
                         node._publish_failsafe_stop.assert_not_called()
                     else:
@@ -149,6 +168,15 @@ class ExecutionContextROS(unittest.TestCase):
 
     def test_real_node_publishes_v2_with_immutable_input_snapshot(self):
         self.exercise('new-scan-during-solve')
+
+    def test_timestamped_dynamic_geometry_reaches_the_solver(self):
+        self.exercise('dynamic-geometry')
+
+    def test_arm_change_rejects_obsolete_trajectory_without_zero(self):
+        self.exercise('arm-changed-during-solve')
+
+    def test_arm_change_with_clear_scene_keeps_navigation_moving(self):
+        self.exercise('arm-changed-clear')
 
     def test_end_during_postprocessing_prevents_old_source_publication(self):
         self.exercise('end-during-postprocessing')

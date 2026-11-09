@@ -193,6 +193,7 @@ N116_TIMING_EXTENSION_FIELDS = [
     'relay_source_receive_monotonic', 'relay_publish_monotonic',
     'gate_relay_receive_monotonic', 'gate_output_publish_monotonic',
     'pose_prediction_sec', 'solve_latency_estimate_sec', 'tf_age_sec',
+    'arm_geometry_stamp_sec', 'arm_geometry_age_sec', 'dynamic_scene_complete',
 ]
 N116_STAGE_FIELDS = [field for field in N116_TIMING_FIELDS if field.endswith('_ms')]
 ALL_STAGE_FIELDS = list(dict.fromkeys(STAGE_FIELDS + N115_STAGE_FIELDS + N116_STAGE_FIELDS))

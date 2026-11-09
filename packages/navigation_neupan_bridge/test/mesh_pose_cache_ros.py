@@ -20,9 +20,11 @@ class MeshPoseCache(unittest.TestCase):
         left=node.create_publisher(JointState,"/left_arm/joint_states",20)
         right=node.create_publisher(JointState,"/right_arm/joint_states",20)
         scan_pub=node.create_publisher(LaserScan,"/scan_neupan",qos_profile_sensor_data)
-        components=[];states=[];scans=[];footprints=[];footprint_states=[]
+        components=[];states=[];scans=[];footprints=[];footprint_states=[];snapshots=[]
         node.create_subscription(Float64MultiArray,"/r1_arm_mesh_components",
             lambda m:components.append((time.monotonic(),list(m.data))),20)
+        node.create_subscription(String,"/r1_arm_geometry_snapshot",
+            lambda m:snapshots.append((time.monotonic(),json.loads(m.data))),20)
         node.create_subscription(String,"/r1_arm_footprint/status",
             lambda m:footprint_states.append((time.monotonic(),json.loads(m.data))),20)
         node.create_subscription(PolygonStamped,"/r1_arm_footprint",
@@ -48,7 +50,7 @@ class MeshPoseCache(unittest.TestCase):
             "-p","additional_mesh_frames:=[held_object]",
             "-p","additional_mesh_uris:=["+uri+"]","-p","additional_mesh_scales:=[1.0]"],
             stdout=log,stderr=subprocess.STDOUT)
-        gripper=0.; missing=False; stale_joints=False; duplicate_joint=False; next_pulse=0.
+        gripper=0.; missing=False; missing_tcp=False; stale_joints=False; duplicate_joint=False; next_pulse=0.
         def tick():
             nonlocal next_pulse
             self.assertIsNone(proc.poll(),"mesh node exited")
@@ -63,7 +65,7 @@ class MeshPoseCache(unittest.TestCase):
                     pub.publish(msg)
                 transforms=[]
                 for name in frames:
-                    if missing and name==target:continue
+                    if (missing and name==target) or (missing_tcp and name=='left_tcp'):continue
                     msg=TransformStamped();msg.header.stamp=stamp;msg.header.frame_id="base_link"
                     msg.child_frame_id=name;msg.transform.rotation.w=1.
                     if name==target:msg.transform.translation.x=gripper
@@ -91,6 +93,15 @@ class MeshPoseCache(unittest.TestCase):
             until(lambda:footprint_states and footprint_states[-1][1].get("geometry_version",0)>0 and
                 footprint_states[-1][1].get("left_gripper_tf_age_sec",-1)>=0 and
                 footprint_states[-1][1].get("right_gripper_tf_age_sec",-1)>=0,5.)
+            until(lambda:len(snapshots)>0,5.)
+            snapshot=snapshots[-1][1]
+            self.assertEqual(snapshot["schema"],"r1_arm_geometry_v1")
+            self.assertGreater(snapshot["stamp_ns"],0)
+            frames_in_snapshot={p["frame"] for p in snapshot["components"]}
+            self.assertIn("L_omniPicker_hand_narrow1_Link",frames_in_snapshot)
+            self.assertIn("R_omniPicker_hand_narrow1_Link",frames_in_snapshot)
+            self.assertTrue(all(p["z_min"]<=p["z_max"] and len(p["polygon_xy"])>=3
+                                for p in snapshot["components"]))
             status=footprint_states[-1][1]
             self.assertGreaterEqual(status["left_joint_stamp_age_sec"],0.)
             self.assertGreaterEqual(status["right_joint_stamp_age_sec"],0.)
@@ -102,6 +113,23 @@ class MeshPoseCache(unittest.TestCase):
             until(lambda:any(t>marker and s.get("geometry_version",0)>old_version
                 for t,s in footprint_states),5.)
             # Arm joints never changed; only a gripper TF changed.
+            until(lambda:any(t>marker and next(
+                part for part in row["components"] if part["frame"]==target
+                )["polygon_xy"] != next(part for part in snapshot["components"]
+                                         if part["frame"]==target)["polygon_xy"]
+                for t,row in snapshots),5.)
+            # A brief missing TF holds the last measured footprint instead of
+            # replacing it with the large fallback, preserving its timestamp.
+            missing_tcp=True;marker=time.monotonic()
+            until(lambda:any(t>marker and s.get("reason")=="holding_last_valid_arm_pose:arm_tf_fallback"
+                for t,s in footprint_states),3.)
+            held_marker=time.monotonic()
+            until(lambda:sum(t>held_marker for t,_ in footprints)>=2,2.)
+            held=[m for t,m in footprints if t>held_marker]
+            self.assertEqual(held[-1].header.stamp,held[-2].header.stamp)
+            self.assertLess(max(p.x for p in held[-1].polygon.points),3.)
+            missing_tcp=False;marker=time.monotonic()
+            until(lambda:any(t>marker and s.get("state")=="READY" for t,s in footprint_states),3.)
             missing=True;start=time.monotonic()
             until(lambda:any(t>start and s.get("reason")=="tf_gap_using_compatible_cache" for t,s in states),3.)
             until(lambda:any(t>start+.5 for t in scans),1.)

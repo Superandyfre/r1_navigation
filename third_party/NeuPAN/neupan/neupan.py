@@ -26,7 +26,7 @@ from neupan import configuration
 from neupan.util import time_it, file_check, get_transform
 import numpy as np
 import torch
-from neupan.configuration import np_to_tensor, tensor_to_np
+from neupan.configuration import np_to_tensor, tensor_to_np, to_device
 from math import cos, sin
 
 class neupan(torch.nn.Module):
@@ -82,11 +82,38 @@ class neupan(torch.nn.Module):
         self.dune_train_kwargs = train_kwargs
 
         self.pan = PAN(receding, step_time, self.robot, **pan_kwargs)
+        self._fixed_dune_layer = self.pan.dune_layer
         self.candidate_avoidance_enabled = bool(pan_kwargs.get("candidate_avoidance_enabled", False))
         self.preferred_avoidance_side = 0
         self.preferred_avoidance_mode = None
         self.candidate_search_cursor = 0
         self.info = {"stop": False, "arrive": False, "collision": False}
+
+    def set_dynamic_geometry(self, components, source_age_sec=0.):
+        """Install one immutable robot geometry snapshot for the next solve.
+
+        The fixed-body DUNE remains available for an explicitly requested
+        reset. The fixed chassis is always included with the supplied arm components.
+        """
+        from neupan.dynamic_geometry import DynamicGeometry
+        from neupan.blocks.dynamic_dune import DynamicDUNE
+        if self.pan.no_obs:
+            raise ValueError("dynamic geometry requires obstacle optimization")
+        chassis = np.asarray(self.robot.vertices, dtype=np.float64).T
+        geometry = DynamicGeometry([chassis, *components],source_age_sec=source_age_sec)
+        if isinstance(self.pan.dune_layer, DynamicDUNE):
+            self.pan.dune_layer.geometry = geometry
+            self.pan.dune_layer.inactive_distance = float(self.pan.nrmp_layer.d_max.detach().cpu().item()) + 1.
+        else:
+            self.pan.dune_layer = DynamicDUNE(geometry,self.dt,
+                float(self.pan.nrmp_layer.d_max.detach().cpu().item())+1.)
+        self.pan.dynamic_geometry = geometry
+        return geometry
+
+    def clear_dynamic_geometry(self):
+        """Explicitly restore the original fixed-body distance model."""
+        self.pan.dune_layer = self._fixed_dune_layer
+        self.pan.dynamic_geometry = None
 
     @classmethod
     def init_from_yaml(cls, yaml_file, **kwargs):
@@ -106,7 +133,7 @@ class neupan(torch.nn.Module):
 
     @time_it("neupan forward")
     def forward(self, state, points, velocities=None,
-                measured_velocity=None):
+                measured_velocity=None, point_heights=None, point_scope=None):
         """
         state: current state of the robot, matrix (3, 1), x, y, theta
         points: current input obstacle point positions, matrix (2, N), N is the number of obstacle points.
@@ -114,6 +141,14 @@ class neupan(torch.nn.Module):
         """
 
         assert state.shape[0] >= 3
+        if point_heights is not None:
+            point_heights = np.asarray(point_heights, dtype=np.float64).reshape(-1)
+            if points is None or point_heights.shape != (points.shape[1],) or np.isinf(point_heights).any():
+                raise ValueError("point heights must match obstacle points")
+        if point_scope is not None:
+            point_scope = np.asarray(point_scope, dtype=np.uint8).reshape(-1)
+            if points is None or point_scope.shape != (points.shape[1],) or np.any(point_scope > 2):
+                raise ValueError("point scopes must match obstacle points")
         self.info["stop_reason"] = "none"
         self.info.pop("avoidance_candidates", None)
         self.info.pop("avoidance_side", None)
@@ -125,6 +160,44 @@ class neupan(torch.nn.Module):
         self.info["arrive"] = False
         nom_input_np = self.ipath.generate_nom_ref_state(
             state, self.cur_vel_array, self.ref_speed)
+
+        # The 3-D observation can contain tens of thousands of returns. Limit
+        # repeated candidate solves to real samples selected against the whole
+        # initial horizon; retain spatial coverage and rank by live geometry.
+        # The unabridged observation remains available to continuation checks.
+        max_preselected = self.pan.dune_max_num * 2
+        full_points, full_heights, full_scope = points, point_heights, point_scope
+        self.info["dynamic_input_points"] = 0 if points is None else int(points.shape[1])
+        if (getattr(self.pan, "dynamic_geometry", None) is not None and points is not None and
+                max_preselected > 0 and points.shape[1] > max_preselected and velocities is None):
+            # Cull only points whose component AABBs stay outside the nominal
+            # horizon and configured soft influence range. Keep a coverage
+            # sample; all original points are still checked against the final
+            # candidate trajectories below.
+            influence=float(self.pan.nrmp_layer.d_max.detach().cpu().item())
+            near=self.pan.dynamic_geometry.trajectory_collision_candidates(
+                nom_input_np[2][:3,:],points,point_heights,point_scope,padding=influence,
+                sample_times=np.arange(nom_input_np[2].shape[1])*self.dt)
+            coverage=np.linspace(0,points.shape[1]-1,self.pan.dune_max_num,dtype=np.int64)
+            near[coverage]=True
+            selected=np.flatnonzero(near)
+            points=points[:,selected]
+            if point_heights is not None: point_heights=point_heights[selected]
+            if point_scope is not None: point_scope=point_scope[selected]
+        if (getattr(self.pan, "dynamic_geometry", None) is not None and points is not None and
+                max_preselected > 0 and points.shape[1] > max_preselected):
+            point_tensor=np_to_tensor(points)
+            point_velocity=(torch.zeros_like(point_tensor) if velocities is None else np_to_tensor(velocities))
+            selected=self.pan.select_obstacle_indices(
+                np_to_tensor(nom_input_np[2]),point_tensor,point_velocity,max_preselected,self.dt,
+                robot_geometry=self.pan.dynamic_geometry,
+                point_heights=None if point_heights is None else np_to_tensor(point_heights),
+                point_scope=None if point_scope is None else to_device(torch.as_tensor(point_scope))).cpu().numpy()
+            points=points[:,selected]
+            if velocities is not None: velocities=velocities[:,selected]
+            if point_heights is not None: point_heights=point_heights[selected]
+            if point_scope is not None: point_scope=point_scope[selected]
+        self.info["dynamic_selected_points"] = 0 if points is None else int(points.shape[1])
 
         # convert to tensor
         nom_input_tensor = [np_to_tensor(n) for n in nom_input_np]
@@ -139,11 +212,14 @@ class neupan(torch.nn.Module):
         if (self.candidate_avoidance_enabled and self.robot.kinematics == "diff" and
                 points is not None and points.shape[1] and not self.pan.no_obs):
             opt_state_tensor, opt_vel_tensor, opt_distance_tensor = self._solve_candidates(
-                state, nom_input_np, points, velocities, measured_velocity)
+                state, nom_input_np, points, velocities, measured_velocity, point_heights, point_scope,
+                full_points, full_heights, full_scope)
         else:
             opt_state_tensor, opt_vel_tensor, opt_distance_tensor = self.pan(
                 *nom_input_tensor, obstacle_points_tensor, point_velocities_tensor,
                 measured_velocity_tensor,
+                None if point_heights is None else np_to_tensor(point_heights),
+                None if point_scope is None else to_device(torch.as_tensor(point_scope)),
             )
 
         opt_state_np, opt_vel_np = tensor_to_np(opt_state_tensor), tensor_to_np(
@@ -202,7 +278,7 @@ class neupan(torch.nn.Module):
                     states[-1], controls[:, t:t+1], self.robot.L, self.dt / subdivisions))
         return np.hstack(states)
 
-    def validate_remaining_trajectory(self, state, controls, elapsed, points, velocities=None, with_reason=False, duration_sec=None):
+    def validate_remaining_trajectory(self, state, controls, elapsed, points, velocities=None, with_reason=False, duration_sec=None, point_heights=None, point_scope=None):
         """Re-evaluate a previously optimized control horizon with current observations.
 
         This is a NeuPAN geometry check, not a separate collision-distance policy.
@@ -254,14 +330,30 @@ class neupan(torch.nn.Module):
                     trajectory[-1], remaining[:, k:k+1], self.robot.L, interval / subdivisions))
                 times.append(times[-1] + interval / subdivisions)
         states = np.hstack(trajectory)
-        # Evaluate every observed point, not only the DUNE sampling budget.
-        distances = self._candidate_distances(states, points, velocities, sample_times=np.asarray(times))
+        # Every point is considered. A swept component AABB can prove
+        # distant stationary points cannot intersect at the sampled poses;
+        # points inside any box still get the exact geometric check.
+        geometry = getattr(self.pan, "dynamic_geometry", None)
+        all_points_evaluated = True
+        if geometry is not None and velocities is None:
+            possible = geometry.trajectory_collision_candidates(
+                states, points, point_heights=point_heights, point_scope=point_scope,
+                sample_times=np.asarray(times))
+            if not np.any(possible):
+                return outcome((remaining[:, 0].copy(), None), "validated")
+            all_points_evaluated = bool(np.all(possible))
+            points = points[:,possible]
+            if point_heights is not None: point_heights = np.asarray(point_heights)[possible]
+            if point_scope is not None: point_scope = np.asarray(point_scope)[possible]
+        distances = self._candidate_distances(states, points, velocities, sample_times=np.asarray(times),
+                                              point_heights=point_heights, point_scope=point_scope)
         feasible = self._candidate_feasibility(distances)[0]
         if not feasible:
             return outcome(None, "obstacle_conflict")
-        return outcome((remaining[:, 0].copy(), float(np.min(distances))), "validated")
+        minimum = float(np.min(distances)) if all_points_evaluated else None
+        return outcome((remaining[:, 0].copy(), minimum), "validated")
 
-    def _candidate_distances(self, states, points, velocities=None, sample_dt=None, sample_times=None):
+    def _candidate_distances(self, states, points, velocities=None, sample_dt=None, sample_times=None, point_heights=None, point_scope=None):
         """Evaluate DUNE's dual distances along an actual dynamics rollout."""
         from neupan.configuration import to_device
         samples = np.asarray(points, dtype=np.float64)
@@ -279,6 +371,17 @@ class neupan(torch.nn.Module):
         local = np.stack((c * dx + s * dy, -s * dx + c * dy), axis=1)
         local = to_device(torch.as_tensor(local.transpose(1, 0, 2).reshape(2, -1), dtype=torch.float32))
         dune = self.pan.dune_layer
+        if getattr(self.pan, "dynamic_geometry", None) is not None:
+            heights = (None if point_heights is None else
+                       np.tile(np.asarray(point_heights, dtype=np.float64).reshape(-1), states.shape[1]))
+            scopes = (None if point_scope is None else
+                      np.tile(np.asarray(point_scope,dtype=np.uint8).reshape(-1),states.shape[1]))
+            distance, _, _ = self.pan.dynamic_geometry.distance_and_normal(
+                local.detach().cpu().numpy(), heights, scopes,
+                np.repeat(times, samples.shape[1]))
+            inactive=float(self.pan.nrmp_layer.d_max.detach().cpu().item())+1.
+            distance[np.isposinf(distance)]=inactive
+            return distance.reshape(states.shape[1], -1)
         with torch.no_grad():
             mu = dune.model(local.T).T
             mu = dune.project_dual_feasible(mu)
@@ -318,7 +421,7 @@ class neupan(torch.nn.Module):
         return (feasible, escaping, float(np.min(initial)),
                 float(penetration[0]), float(penetration[-1]))
 
-    def _candidate_cost(self, state, rollout, controls, ref, ref_speed, points, velocities, measured_velocity=None):
+    def _candidate_cost(self, state, rollout, controls, ref, ref_speed, points, velocities, measured_velocity=None, point_heights=None, point_scope=None):
         # Evaluate between optimizer knots too, so small obstacles are not
         # skipped when the robot translates or rotates over one solver step.
         subdivisions = 3
@@ -328,10 +431,14 @@ class neupan(torch.nn.Module):
                            else np_to_tensor(velocities))
         indices = self.pan.select_obstacle_indices(np_to_tensor(dense), point_tensor,
                     velocity_tensor, self.pan.dune_max_num, self.dt / subdivisions,
-                    robot_geometry=(self.robot.G, self.robot.h)).cpu().numpy()
+                    robot_geometry=getattr(self.pan, 'dynamic_geometry', None) or (self.robot.G, self.robot.h),
+                    point_heights=None if point_heights is None else np_to_tensor(point_heights),
+                    point_scope=None if point_scope is None else to_device(torch.as_tensor(point_scope))).cpu().numpy()
         sampled_velocities = None if velocities is None else velocities[:, indices]
         distances = self._candidate_distances(dense, points[:, indices], sampled_velocities,
-                                               sample_dt=self.dt / subdivisions)
+                                               sample_dt=self.dt / subdivisions,
+                                               point_heights=None if point_heights is None else point_heights[indices],
+                                               point_scope=None if point_scope is None else point_scope[indices])
         k = min(self.pan.nrmp_max_num, distances.shape[1])
         nearest = np.partition(distances, k - 1, axis=1)[:, :k]
         feasible, escaping, initial_minimum, initial_penetration, final_penetration = (
@@ -415,13 +522,14 @@ class neupan(torch.nn.Module):
             candidate_speed = controls[0].copy()
         return self._rollout_controls(state, controls), controls, ref, candidate_speed
 
-    def _solve_candidates(self, state, nominal, points, velocities, measured_velocity):
+    def _solve_candidates(self, state, nominal, points, velocities, measured_velocity, point_heights=None,
+                          point_scope=None, full_points=None, full_heights=None, full_scope=None):
         from diffcp.cone_program import SolverError
         nom_s, nom_u, ref_s, ref_us = nominal
         measured = None if measured_velocity is None else np_to_tensor(measured_velocity)
         obstacle = np_to_tensor(points)
         velocity = None if velocities is None else np_to_tensor(velocities)
-        ref_dist = self._candidate_distances(ref_s, points, velocities)
+        ref_dist = self._candidate_distances(ref_s, points, velocities, point_heights=point_heights, point_scope=point_scope)
         d_max = float(self.pan.nrmp_layer.d_max.detach().cpu().item())
         explore = float(np.min(ref_dist)) < d_max
         observed_v = 0.0 if measured_velocity is None else float(np.asarray(measured_velocity).reshape(-1)[0])
@@ -445,7 +553,23 @@ class neupan(torch.nn.Module):
         if explore:
             # Compare both initial longitudinal directions in the same solve.
             # The execution gear is not evidence that a direction is blocked.
-            sides = ((previous_side,) if previous_side in (-1, 1) else (1, -1))
+            if getattr(self.pan, "dynamic_geometry", None) is not None:
+                # Explore one side per cycle for the larger articulated
+                # geometry. Choose the side away from the most relevant
+                # observed return; the rotating fallback explores the other
+                # side if progress is not achieved.
+                if previous_side in (-1,1):
+                    side = previous_side
+                else:
+                    row,col = np.unravel_index(np.argmin(ref_dist),ref_dist.shape)
+                    dx=points[0,col]-ref_s[0,row]
+                    dy=points[1,col]-ref_s[1,row]
+                    lateral=-np.sin(ref_s[2,row])*dx+np.cos(ref_s[2,row])*dy
+                    side = (-1 if lateral > 0. else 1) if abs(lateral)>1.e-9 else (
+                        1 if self.candidate_search_cursor % 2 == 0 else -1)
+                sides=(side,)
+            else:
+                sides = ((previous_side,) if previous_side in (-1, 1) else (1, -1))
             for side in sides:
                 enqueue(side, "forward")
                 enqueue(side, "reverse")
@@ -472,7 +596,9 @@ class neupan(torch.nn.Module):
             try:
                 result = self.pan(np_to_tensor(seed_s), np_to_tensor(seed_u),
                                   np_to_tensor(seed_ref), np_to_tensor(seed_speed),
-                                  obstacle, velocity, measured)
+                                  obstacle, velocity, measured,
+                                  None if point_heights is None else np_to_tensor(point_heights),
+                                  None if point_scope is None else to_device(torch.as_tensor(point_scope)))
                 planned, controls, _ = result
                 control_np = tensor_to_np(controls)
                 planned_np = tensor_to_np(planned)
@@ -480,7 +606,21 @@ class neupan(torch.nn.Module):
                     rollout = self._rollout_controls(state, control_np)
                     (cost, minimum, obstacle_cost, feasible, escaping, initial_minimum,
                      initial_penetration, final_penetration) = self._candidate_cost(
-                        state, rollout, control_np, ref_s, ref_us, points, velocities, measured_velocity)
+                        state, rollout, control_np, ref_s, ref_us, points, velocities, measured_velocity, point_heights, point_scope)
+                    geometry = getattr(self.pan, "dynamic_geometry", None)
+                    if (geometry is not None and feasible and velocities is None and
+                            full_points is not None and full_points.shape[1] > points.shape[1]):
+                        dense = self._rollout_controls(state, control_np, subdivisions=3)
+                        possible = geometry.trajectory_collision_candidates(
+                            dense, full_points, point_heights=full_heights, point_scope=full_scope,
+                            sample_times=np.arange(dense.shape[1])*self.dt/3)
+                        if np.any(possible):
+                            exact = self._candidate_distances(
+                                dense,full_points[:,possible],sample_dt=self.dt/3,
+                                point_heights=None if full_heights is None else full_heights[possible],
+                                point_scope=None if full_scope is None else full_scope[possible])
+                            feasible = bool(self._candidate_feasibility(exact)[0])
+                            minimum = min(minimum,float(np.min(exact)))
                     if np.isfinite(cost) and np.isfinite(minimum):
                         linearization_error = float(np.max(np.linalg.norm(
                             rollout[:2] - planned_np[:2], axis=0)))

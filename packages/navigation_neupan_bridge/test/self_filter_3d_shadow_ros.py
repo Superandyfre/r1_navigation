@@ -187,33 +187,44 @@ class ShadowFilter(unittest.TestCase):
             x=1.5+vx;ts=float(captured.nanoseconds)
             msg.data=struct.pack("<fffdfffd",x,y,0.,ts,x,y,.40,ts)
             cp.publish(msg)
-            until(lambda:bool(clouds) and any(json.loads(x).get("reason")=="stable_tf_fallback"
+            until(lambda:bool(clouds) and any(json.loads(x).get("reason")=="held_previous_pose"
                 for x in states),4.)
             self.assertTrue(math.isnan(struct.unpack_from("<f",clouds[-1].data,0)[0]))
             self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,20)[0]))
+            held=[json.loads(x) for x in states if json.loads(x).get("reason")=="held_previous_pose"]
+            self.assertIn(target,held[-1]["held_mesh_frames"])
+            self.assertGreater(held[-1]["max_pose_time_error_sec"],0.)
+            self.assertEqual(held[-1]["input_stamp_ns"],held[-1]["output_stamp_ns"])
             previous_stamp=clouds[-1].header.stamp
             clouds.clear();states.clear()
             captured=node.get_clock().now();msg.header.stamp=captured.to_msg();ts=float(captured.nanoseconds)
             msg.data=struct.pack("<fffdfffd",x,y,0.,ts,x,y,.40,ts);cp.publish(msg)
-            until(lambda:bool(clouds) and any(json.loads(x).get("reason")==
-                "reused_last_filtered_original_stamp" for x in states),2.)
-            self.assertEqual(clouds[0].header.stamp,previous_stamp)
+            until(lambda:any(c.header.stamp==captured.to_msg() for c in clouds) and
+                  any(json.loads(x).get("reason")=="held_previous_pose" for x in states),2.)
+            held=[json.loads(x) for x in states if json.loads(x).get("reason")=="held_previous_pose"]
+            self.assertGreater(held[-1]["max_pose_time_error_sec"],0.)
+            self.assertEqual(held[-1]["input_stamp_ns"],held[-1]["output_stamp_ns"])
             # A much older transform cannot be used as an indefinitely
             # renewable cache, even if the part appears stationary.
             start=time.monotonic()
-            while time.monotonic()<start+.20:tick()
+            while time.monotonic()<start+1.60:tick()
             clouds.clear();states.clear()
             captured=node.get_clock().now();msg.header.stamp=captured.to_msg();ts=float(captured.nanoseconds)
-            msg.data=struct.pack("<fffdfffd",x,y,0.,ts,x,y,.40,ts);cp.publish(msg)
-            until(lambda:bool(clouds) and any(json.loads(x).get("reason")=="pose_unavailable_raw_passthrough" for x in states),3.)
+            msg.width=3;msg.row_step=60
+            msg.data=struct.pack("<"+"fffd"*3,x,y,0.,ts,x,y,.40,ts,2.1+vx,y,0.,ts);cp.publish(msg)
+            until(lambda:bool(clouds) and any(json.loads(x).get("reason")=="partial_tf_filtered" for x in states),3.)
             self.assertEqual(clouds[-1].header.stamp,captured.to_msg())
-            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,0)[0]), "unknown pose must preserve raw point")
-            passthrough=[json.loads(x) for x in states if json.loads(x).get("reason")=="pose_unavailable_raw_passthrough"]
-            self.assertEqual(passthrough[-1]["max_pose_time_error_sec"],-1.)
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,0)[0]), "unknown link pose must preserve its point")
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,20)[0]), "real obstacle remains")
+            self.assertTrue(math.isnan(struct.unpack_from("<f",clouds[-1].data,40)[0]), "known right link is still filtered")
+            partial=[json.loads(x) for x in states if json.loads(x).get("reason")=="partial_tf_filtered"]
+            self.assertIn(target,partial[-1]["missing_mesh_frames"])
+            self.assertEqual(partial[-1]["max_pose_time_error_sec"],-1.)
+            msg.width=2;msg.row_step=40
             scans.clear(); states.clear()
             captured=node.get_clock().now();scan.header.stamp=captured.to_msg()
             scan.ranges=[math.hypot(x,y)];sp.publish(scan)
-            until(lambda:bool(scans) and any(json.loads(x).get("reason")=="pose_unavailable_raw_passthrough" for x in states),3.)
+            until(lambda:bool(scans) and any(json.loads(x).get("reason")=="partial_tf_filtered" for x in states),3.)
             self.assertEqual(scans[-1].header.stamp,captured.to_msg())
             self.assertAlmostEqual(scans[-1].ranges[0],scan.ranges[0],places=6)
             missing=False
@@ -224,8 +235,8 @@ class ShadowFilter(unittest.TestCase):
             msg.data=struct.pack("<fffdfffd",x,y,0.,ts,x,y,.40,ts);cp.publish(msg)
             until(lambda:any(c.header.stamp==captured.to_msg() for c in clouds),4.)
             last_good_stamp=captured.to_msg()
-            # If the most recent history contains material movement, it is
-            # not safe to reuse that last pose for a newer unknown instant.
+            # During a short TF gap retain the last observed pose, without
+            # claiming the new physical position was seen.
             position=2.;last_before=last
             until(lambda:last>last_before,1.)
             missing=True;start=time.monotonic()
@@ -233,7 +244,7 @@ class ShadowFilter(unittest.TestCase):
             clouds.clear();states.clear()
             captured=node.get_clock().now();msg.header.stamp=captured.to_msg();ts=float(captured.nanoseconds)
             x=2.+vx;msg.data=struct.pack("<fffdfffd",x,y,0.,ts,x,y,.40,ts);cp.publish(msg)
-            until(lambda:any(json.loads(x).get("reason")=="pose_unavailable_raw_passthrough" for x in states),3.)
+            until(lambda:any(json.loads(x).get("reason")=="held_previous_pose" for x in states),3.)
             current=[c for c in clouds if c.header.stamp==captured.to_msg()]
             self.assertTrue(current, "unknown pose must forward the original scan")
             self.assertTrue(math.isfinite(struct.unpack_from("<f",current[-1].data,0)[0]))

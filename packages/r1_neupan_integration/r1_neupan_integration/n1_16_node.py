@@ -15,6 +15,8 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Path
+from sensor_msgs.msg import PointCloud2, LaserScan
+from rclpy.qos import qos_profile_sensor_data
 from neupan_ros2.utils import quat_to_yaw, yaw_to_quat
 from r1_neupan_integration.execution_protocol import (
     ExecutionContextStore, ContextError, make_source,
@@ -104,6 +106,7 @@ N116_TIMING_FIELDS = [
     "relay_source_receive_monotonic", "relay_publish_monotonic",
     "gate_relay_receive_monotonic", "gate_output_publish_monotonic",
     "pose_prediction_sec", "solve_latency_estimate_sec", "tf_age_sec",
+    "arm_geometry_stamp_sec", "arm_geometry_age_sec", "dynamic_scene_complete",
 ]
 
 
@@ -120,6 +123,11 @@ class N116Node(N115Node):
         self.declare_parameter("bridge_status_topic", "/neupan_bridge_status")
         self.declare_parameter("semantic_topic", "/neupan_semantics")
         self.declare_parameter("planner_result_topic", "/neupan_planner_result")
+        self.declare_parameter("dynamic_neupan_geometry_enabled", False)
+        self.declare_parameter("dynamic_neupan_geometry_topic", "/r1_arm_geometry_snapshot")
+        self.declare_parameter("dynamic_front_cloud_topic", "/r1_arm_self_filter_3d/cloud")
+        self.declare_parameter("dynamic_rear_scan_topic", "/r1_arm_self_filter_3d/rear_scan")
+        self.declare_parameter("dynamic_scene_max_skew_sec", 0.15)
         self.declare_parameter("continuation_enabled", False)
         self.declare_parameter("continuation_proof_topic", "/neupan_trajectory_proof")
         self.declare_parameter("continuation_input_timeout_sec", 0.75)
@@ -308,6 +316,38 @@ class N116Node(N115Node):
                 "auto_gear_opposite_direction_commit_cycles").value),
         ))
         self._forward_blocked_reported_context: tuple[int, int] | None = None
+        self._dynamic_neupan_geometry_enabled = bool(
+            self.get_parameter("dynamic_neupan_geometry_enabled").value)
+        self._arm_geometry_snapshot = None
+        self._arm_geometry_previous = None
+        self._arm_obstacle_scenes = None
+        if getattr(self, "_dynamic_neupan_geometry_enabled", False):
+            import yaml
+            with open(self.client.config_path, encoding="utf-8") as config_file:
+                config = yaml.safe_load(config_file)
+            receding = int(self.get_parameter("planner_receding_override").value) or int(config["receding"])
+            self._dynamic_horizon_sec = receding * float(config["step_time"])
+            if not math.isfinite(self._dynamic_horizon_sec) or self._dynamic_horizon_sec <= 0.:
+                raise ValueError("invalid dynamic geometry horizon")
+            from .arm_obstacle_scenes import LatestArmObstacleScenes
+            from .obstacle_cloud import transform_matrix
+            def lookup_sensor(frame, stamp_ns):
+                tf = self.tf_buffer.lookup_transform(
+                    self.map_frame, frame, rclpy.time.Time(nanoseconds=stamp_ns))
+                return transform_matrix(tf.transform)
+            self._arm_obstacle_scenes = LatestArmObstacleScenes(lookup_sensor)
+            self._arm_geometry_sub = self.create_subscription(
+                String, str(self.get_parameter("dynamic_neupan_geometry_topic").value),
+                self.arm_geometry_snapshot_callback, 1,
+                callback_group=self.callback_group)
+            self._arm_front_sub = self.create_subscription(
+                PointCloud2, str(self.get_parameter("dynamic_front_cloud_topic").value),
+                lambda m: self._arm_obstacle_scenes.submit("front",m),
+                qos_profile_sensor_data, callback_group=self.callback_group)
+            self._arm_rear_sub = self.create_subscription(
+                LaserScan, str(self.get_parameter("dynamic_rear_scan_topic").value),
+                lambda m: self._arm_obstacle_scenes.submit("rear",m),
+                qos_profile_sensor_data, callback_group=self.callback_group)
         self._continuation_worker = None
         self._continuation_parent = None
         self._continuation_last_scan = 0
@@ -340,6 +380,94 @@ class N116Node(N115Node):
         self.get_logger().info(
             "N1.16 planner scheduling is scan-driven with a one-slot latest-input queue"
         )
+
+    def arm_geometry_snapshot_callback(self, message):
+        from .arm_geometry_snapshot import ArmGeometrySnapshot
+        try:
+            snapshot = ArmGeometrySnapshot.decode(message.data, time.monotonic())
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return  # malformed update is never a new geometry
+        with self.state_lock:
+            previous = self._arm_geometry_snapshot
+            if previous is not None and snapshot.stamp_ns <= previous.stamp_ns:
+                return
+            self._arm_geometry_previous = previous
+            self._arm_geometry_snapshot = snapshot
+        self._planner_input_updated()
+
+    def _make_arm_obstacle_scene(self, points, scan_stamp, snapshot, base_z, base_pose=None):
+        from .obstacle_scene import assemble_scene, select_sensor_scenes
+        from neupan.dynamic_geometry import DynamicGeometry
+        # Geometry snapshot contains arms; the first component is always the
+        # actual configured chassis, whose vertical range remains unknown.
+        ext=self.planner_base_extents
+        base = [[-ext["base_rear_m"],-ext["base_right_m"]],
+                [ext["base_front_m"],-ext["base_right_m"]],
+                [ext["base_front_m"],ext["base_left_m"]],
+                [-ext["base_rear_m"],ext["base_left_m"]]]
+        ros_now=self.get_clock().now().nanoseconds
+        with self.state_lock:
+            previous = self._arm_geometry_previous if self._arm_geometry_snapshot is snapshot else None
+        age = snapshot.age(ros_now)
+        geometry=DynamicGeometry([base,*snapshot.planner_components(previous)],
+                                 source_age_sec=0. if age is None else age)
+        mono_now=time.monotonic()
+        front,rear=select_sensor_scenes(
+            self._arm_obstacle_scenes.snapshot(),int(round(scan_stamp*1e9)),
+            ros_now,float(self.get_parameter("dynamic_scene_max_skew_sec").value),
+            self._continuation_timeout,return_records=True)
+        result=assemble_scene(points,None if front is None else front["points"],
+                              None if rear is None else rear["points"],
+                              base_z_world=base_z,arm_geometry=geometry,base_pose_world=base_pose,
+                              horizon_sec=getattr(self,"_dynamic_horizon_sec",None))
+        oldest = min((mono_now-(ros_now-r["stamp_ns"])*1e-9 for r in (front,rear) if r is not None),
+                     default=mono_now)
+        return (*result,oldest)
+
+    def _dynamic_result_is_valid(self, solved_snapshot, outputs, record, scan_points, scan_stamp):
+        """Use NeuPAN's own geometry to recheck a plan when arms moved in flight."""
+        from neupan.dynamic_validation import validate_dynamic_candidate
+        with self.state_lock:
+            current = self._arm_geometry_snapshot
+            previous = self._arm_geometry_previous
+        if current is None:
+            return False
+        age=current.age(self.get_clock().now().nanoseconds)
+        if age is None or age > self.dynamic_mesh_components_timeout_sec:
+            return False
+        if current.components == solved_snapshot.components or record.get("info",{}).get("arrive"):
+            return True
+        if not self._robot_transform():
+            return False
+        with self.state_lock:
+            state=None if self.robot_state is None else self.robot_state.copy()
+            pose=getattr(self,"base_pose_world",None)
+            pose=None if pose is None else pose.copy()
+            base_z=float(getattr(self,"base_height_map",0.))
+            current=self._arm_geometry_snapshot
+            previous=self._arm_geometry_previous
+        if state is None or current is None:
+            return False
+        age=current.age(self.get_clock().now().nanoseconds)
+        if age is None or age > self.dynamic_mesh_components_timeout_sec:
+            return False
+        scene,heights,scope,_,_=self._make_arm_obstacle_scene(
+            scan_points,scan_stamp,current,base_z,pose)
+        ext=self.planner_base_extents
+        base=[[-ext["base_rear_m"],-ext["base_right_m"]],
+              [ext["base_front_m"],-ext["base_right_m"]],
+              [ext["base_front_m"],ext["base_left_m"]],
+              [-ext["base_rear_m"],ext["base_left_m"]]]
+        controls=outputs.get("optimized_velocity")
+        step=record.get("semantic",{}).get("planner_step_time_sec",0.)
+        try:
+            valid=validate_dynamic_candidate([base,*current.planner_components(previous)],
+                state,controls,step,scene,heights,scope,source_age_sec=age)
+        except (ValueError,TypeError,OverflowError):
+            return False
+        with self.state_lock:
+            latest=self._arm_geometry_snapshot
+            return bool(valid and latest is not None and latest.components==current.components)
 
     @staticmethod
     def _continuation_context(source):
@@ -392,7 +520,15 @@ class N116Node(N115Node):
                              make_trajectory_proof(parent, Continuation(**result), sequence, now))
                 with self.state_lock:
                     current = self._execution_store.active
-                    if (proof is not None and self._continuation_parent is parent and
+                    geometry_compatible = True
+                    if getattr(self, "_dynamic_neupan_geometry_enabled", False):
+                        from .arm_geometry_snapshot import ArmGeometrySnapshot
+                        supplied = event.get("geometry")
+                        latest = self._arm_geometry_snapshot
+                        geometry_compatible = bool(supplied and latest and
+                            ArmGeometrySnapshot.decode(supplied["snapshot"],
+                                supplied["received_monotonic"]).components == latest.components)
+                    if (proof is not None and geometry_compatible and self._continuation_parent is parent and
                             self._continuation_context_is_live(parent, current) and
                             (event.get("outcome") == "obstacle_conflict" or
                              self.scan_counter == event["scan_counter"])):
@@ -407,10 +543,24 @@ class N116Node(N115Node):
                     self.scan_counter <= self._continuation_last_scan or
                     getattr(self, "latest_local_scan_points", None) is None):
                 return
+            geometry = None
+            if getattr(self, "_dynamic_neupan_geometry_enabled", False):
+                snapshot = self._arm_geometry_snapshot
+                geometry_age = None if snapshot is None else snapshot.age(self.get_clock().now().nanoseconds)
+                if geometry_age is None or geometry_age > self.dynamic_mesh_components_timeout_sec:
+                    return
+                geometry = {"snapshot": snapshot.to_dict(),
+                            "previous_snapshot": None if self._arm_geometry_previous is None else self._arm_geometry_previous.to_dict(),
+                            "source_age_sec": snapshot.age(self.get_clock().now().nanoseconds),
+                            "created_monotonic": time.monotonic(),
+                            "received_monotonic": snapshot.received_monotonic}
             scan = self.scan_counter
             local = self.latest_local_scan_points.copy()
             stamp = self.latest_scan_stamp_sec
             received = self.latest_scan_receive_monotonic
+            base_z = float(getattr(self, "base_height_map", 0.0))
+            base_pose = getattr(self, "base_pose_world", None)
+            base_pose = None if base_pose is None else base_pose.copy()
             # A scan received while the solve was in flight predates the
             # published trajectory and cannot validate its later controls.
             if received <= parent["planner_result_monotonic"]:
@@ -429,6 +579,13 @@ class N116Node(N115Node):
         if scene is None:
             self._trace_wait_state("continuation_scene_tf")
             return
+        scene_extras = {}
+        if geometry is not None:
+            combined,heights,scope,_,oldest = self._make_arm_obstacle_scene(
+                scene["points"],stamp,snapshot,base_z,base_pose)
+            scene["points"] = combined
+            scene["scan_received_monotonic"] = min(scene["scan_received_monotonic"],oldest)
+            scene_extras = {"geometry": geometry,"point_heights": heights,"point_scope": scope}
         with self.state_lock:
             current = self._execution_store.active
             if (self._continuation_parent is not parent or self.scan_counter != scan or
@@ -437,7 +594,8 @@ class N116Node(N115Node):
             if worker.submit(context=self._continuation_context(parent),scan_counter=scan,
                     scan_received_monotonic=scene["scan_received_monotonic"],
                     pose_received_monotonic=scene["pose_received_monotonic"],
-                    input_timeout=self._continuation_timeout,state=scene["state"],points=scene["points"]):
+                    input_timeout=self._continuation_timeout,state=scene["state"],points=scene["points"],
+                    **scene_extras):
                 self._continuation_last_scan = scan
 
     def _planner_input_updated(self) -> None:
@@ -891,6 +1049,15 @@ class N116Node(N115Node):
                 if self.path_matrix is None:
                     self._trace_wait_state("global_path", path_version=self.path_version)
                     return
+                geometry_snapshot = self._arm_geometry_snapshot
+                geometry_previous = self._arm_geometry_previous
+                if getattr(self, "_dynamic_neupan_geometry_enabled", False):
+                    geometry_age = (None if geometry_snapshot is None else
+                        geometry_snapshot.age(self.get_clock().now().nanoseconds))
+                    if (geometry_age is None or
+                            geometry_age > self.dynamic_mesh_components_timeout_sec):
+                        self._trace_wait_state("timestamped_arm_geometry")
+                        return
                 if self.robot_state is None:
                     self._trace_wait_state("robot_state")
                     return
@@ -932,11 +1099,21 @@ class N116Node(N115Node):
                     <= self.auto_gear_odom_timeout_sec else None
                 )
                 tf_stamp = float(getattr(self, "tf_stamp_sec", -1.0))
+                base_z = float(getattr(self, "base_height_map", 0.0))
+                base_pose = getattr(self, "base_pose_world", None)
+                base_pose = None if base_pose is None else base_pose.copy()
                 active_gear = int(self.active_gear)
                 requested_gear = int(self.requested_gear)
                 gear_transition_pending = self.pending_gear is not None
                 previous_scan = int(self.last_processed_scan)
                 self.last_processed_scan = scan_counter
+            original_scan_points = points
+            point_heights = point_scope = None
+            dynamic_scene_complete = False
+            if getattr(self, "_dynamic_neupan_geometry_enabled", False):
+                points, point_heights, point_scope, dynamic_scene_complete, oldest_sensor = self._make_arm_obstacle_scene(
+                    points, scan_stamp, geometry_snapshot, base_z, base_pose)
+                scan_receive = min(scan_receive, oldest_sensor)
             # Predict the pose at command availability from stamped TF and
             # measured twist; the world obstacle observation is unchanged.
             ros_now = self.get_clock().now().nanoseconds * 1e-9
@@ -980,6 +1157,14 @@ class N116Node(N115Node):
                 )
                 cycle_start = time.monotonic()
                 input_finished = time.perf_counter()
+                geometry_args = ({"dynamic_geometry": {
+                    "snapshot": geometry_snapshot.to_dict(),
+                    "previous_snapshot": None if geometry_previous is None else geometry_previous.to_dict(),
+                    "source_age_sec": geometry_snapshot.age(self.get_clock().now().nanoseconds),
+                    "created_monotonic": time.monotonic(),
+                    "received_monotonic": geometry_snapshot.received_monotonic},
+                    "point_heights": point_heights, "point_scope": point_scope}
+                    if self._dynamic_neupan_geometry_enabled else {})
                 outputs, record = self.client.solve(
                     state, points, path, path_version, scan_counter, scan_stamp,
                     goal=goal, goal_version=goal_version, cycle_id=cycle_id,
@@ -989,6 +1174,7 @@ class N116Node(N115Node):
                     scan_update_monotonic=scan_update,
                     measured_velocity=measured_velocity,
                     execution_key=execution_context.identity if execution_context is not None else None,
+                    **geometry_args,
                 )
             except RecoverableSolveError as exc:
                 with self.state_lock:
@@ -1024,6 +1210,11 @@ class N116Node(N115Node):
             record.setdefault("timings", {})["pose_prediction_sec"] = float(prediction_sec)
             record["timings"]["solve_latency_estimate_sec"] = float(estimated_solve)
             record["timings"]["tf_age_sec"] = float(tf_age)
+            record["timings"]["dynamic_scene_complete"] = float(dynamic_scene_complete)
+            if getattr(self,"_dynamic_neupan_geometry_enabled",False):
+                record["timings"]["arm_geometry_stamp_sec"] = geometry_snapshot.stamp_ns * 1e-9
+                record["timings"]["arm_geometry_age_sec"] = max(
+                    0.0,(self.get_clock().now().nanoseconds - geometry_snapshot.stamp_ns) * 1e-9)
             fresh, reason = self._fresh_for_publish(record, scan_counter, path_version, goal_version, execution_context)
             main_validation_complete_monotonic = time.monotonic()
             if not fresh:
@@ -1032,6 +1223,15 @@ class N116Node(N115Node):
                              cycle_id=cycle_id, scan_counter=scan_counter)
                 # Do not publish either the old result or a zero from an old
                 # context. The active grant owns command handover and revoke.
+                return
+
+            if (getattr(self,"_dynamic_neupan_geometry_enabled",False) and
+                    not self._dynamic_result_is_valid(
+                        geometry_snapshot,outputs,record,original_scan_points,scan_stamp)):
+                # A stale/invalid candidate does not become a new zero command.
+                # The existing verified source retains its original validity.
+                self._trace_wait_state("arm_geometry_changed_during_solve")
+                self._planner_input_updated()
                 return
 
             self._solve_budget.success()
@@ -1438,6 +1638,9 @@ class N116Node(N115Node):
             return
         self._finalized = True
         self._shutdown_requested = True
+        scenes = getattr(self, "_arm_obstacle_scenes", None)
+        if scenes is not None:
+            scenes.close()
         continuation = getattr(self, "_continuation_worker", None)
         if continuation is not None:
             self._continuation_timer.cancel()

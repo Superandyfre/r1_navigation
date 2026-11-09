@@ -254,7 +254,9 @@ class NRMP(torch.nn.Module):
                         torch.bmm(lam.T.unsqueeze(1), point.T.unsqueeze(2))
                     ).squeeze(1)
 
-                    fb = temp + mu.T @ self.h
+                    # DynamicDUNE supplies one support value per point
+                    # instead of a dual vector for the fixed chassis.
+                    fb = temp + (mu.T if mu.shape[0] == 1 else mu.T @ self.h)
 
                     # lamb = mu.T @ self.h + torch.matmul(fa.unsqueeze(1), point.T.unsqueeze(2)).squeeze(1)
 

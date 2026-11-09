@@ -7,6 +7,8 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <limits>
+#include <optional>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -15,6 +17,7 @@
 #include <vector>
 
 #include "geometric_shapes/mesh_operations.h"
+#include "nlohmann/json.hpp"
 #include "navigation_neupan_bridge/mesh_pose_snapshot.hpp"
 #include "navigation_neupan_bridge/arm_mesh_resources.hpp"
 #include "geometry_msgs/msg/polygon.hpp"
@@ -164,6 +167,7 @@ public:
   {
     base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
     state_timeout_sec_ = declare_parameter<double>("joint_state_timeout_sec", 0.50);
+    last_pose_hold_sec_ = declare_parameter<double>("last_valid_pose_hold_sec", 1.50);
     update_frequency_ = declare_parameter<double>("update_frequency", 10.0);
     link_radius_m_ = declare_parameter<double>("link_radius_m", 0.12);
     tool_radius_m_ = declare_parameter<double>("tool_radius_m", 0.16);
@@ -190,7 +194,7 @@ public:
     fallback_footprint_ = declare_parameter<std::vector<double>>(
       "fallback_footprint_points", std::vector<double>{
         1.05, 1.30, 1.05, -1.30, -1.05, -1.30, -1.05, 1.30});
-    if (state_timeout_sec_ <= 0.0 || update_frequency_ <= 0.0 || link_radius_m_ <= 0.0 ||
+    if (state_timeout_sec_ <= 0.0 || !std::isfinite(last_pose_hold_sec_) || last_pose_hold_sec_ <= 0.0 || update_frequency_ <= 0.0 || link_radius_m_ <= 0.0 ||
       tool_radius_m_ <= 0.0 || projection_margin_m_ < 0.0 || mesh_projection_margin_m_ < 0.0 ||
       planner_footprint_margin_m_ < 0.0 ||
       mesh_filter_frequency_ <= 0.0 || mesh_projection_frequency_ <= 0.0 ||
@@ -265,6 +269,8 @@ public:
       "/r1_arm_mesh_components", rclcpp::QoS(10));
     guard_mesh_components_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(
       "/r1_arm_guard_mesh_components", rclcpp::QoS(10));
+    timestamped_geometry_pub_ = create_publisher<std_msgs::msg::String>(
+      "/r1_arm_geometry_snapshot", rclcpp::QoS(1));
     mesh_shadow_scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>(
       "/scan_neupan_mesh_shadow", rclcpp::SensorDataQoS());
     mesh_filter_status_pub_ = create_publisher<std_msgs::msg::String>(
@@ -367,7 +373,7 @@ private:
     status_pub_->publish(message);
   }
 
-  void publishPolygon(const std::vector<Point2D> & points)
+  void publishPolygon(const std::vector<Point2D> & points, const std::optional<rclcpp::Time> & source_stamp = std::nullopt)
   {
     geometry_msgs::msg::Polygon polygon;
     for (const auto & point : points) {
@@ -378,7 +384,7 @@ private:
       polygon.points.push_back(output);
     }
     geometry_msgs::msg::PolygonStamped stamped;
-    stamped.header.stamp = now();
+    stamped.header.stamp = source_stamp ? *source_stamp : now();
     stamped.header.frame_id = base_frame_;
     stamped.polygon = polygon;
     footprint_pub_->publish(stamped);
@@ -523,7 +529,7 @@ private:
     }
   }
 
-  bool readMeshPoses(std::vector<MeshPose> & poses, std::array<double,3> & ages)
+  bool readMeshPoses(std::vector<MeshPose> & poses, std::array<double,3> & ages, std::int64_t & oldest_tf_ns)
   {
     if (!mesh_model_ready_) {return false;}
     const auto now = get_clock()->now();
@@ -537,6 +543,7 @@ private:
         if (stamp.nanoseconds() != 0 && (!std::isfinite(age) || age < -0.05 ||
           age > mesh_tf_max_age_sec_)) {return false;}
         if (stamp.nanoseconds() != 0) {
+          oldest_tf_ns = std::min(oldest_tf_ns,stamp.nanoseconds());
           ages[0] = std::max(ages[0], age);
           if (part.frame.rfind("L_omniPicker_", 0) == 0) {ages[1] = std::max(ages[1], age);}
           if (part.frame.rfind("R_omniPicker_", 0) == 0) {ages[2] = std::max(ages[2], age);}
@@ -550,6 +557,63 @@ private:
       } catch (const tf2::TransformException &) {return false;}
     }
     return true;
+  }
+
+  // Independent, timestamp-aligned snapshot for the NeuPAN worker. A failed
+  // lookup emits nothing: it must not relabel old geometry as a fresh sample.
+  void publishTimestampedGeometry(const std::int64_t stamp_ns)
+  {
+    if (stamp_ns <= 0 || !mesh_model_ready_) {return;}
+    const auto now = get_clock()->now();
+    if (now.nanoseconds()+50000000LL < last_timestamped_geometry_stamp_ns_) {
+      last_timestamped_geometry_stamp_ns_=0;  // ROS clock moved backwards.
+    }
+    if (stamp_ns<=last_timestamped_geometry_stamp_ns_) {return;}
+    const rclcpp::Time stamp(stamp_ns, now.get_clock_type());
+    const double age = (now - stamp).seconds();
+    if (!std::isfinite(age) || age < 0. || age > state_timeout_sec_) {return;}
+    nlohmann::json components=nlohmann::json::array();
+    for (const auto & part : mesh_parts_) {
+      geometry_msgs::msg::TransformStamped transform;
+      try {transform=tf_buffer_.lookupTransform(base_frame_,part.frame,stamp);}
+      catch (const tf2::TransformException &) {return;}
+      const auto & t=transform.transform.translation;
+      const auto & q=transform.transform.rotation;
+      tf2::Quaternion rotation_q(q.x,q.y,q.z,q.w);
+      if (!std::isfinite(rotation_q.length2()) || rotation_q.length2()<1.e-18) {return;}
+      rotation_q.normalize();
+      const tf2::Matrix3x3 rotation(rotation_q);
+      const tf2::Vector3 translation(t.x,t.y,t.z);
+      std::vector<Point2D> points;
+      double z_min=std::numeric_limits<double>::infinity();
+      double z_max=-std::numeric_limits<double>::infinity();
+      double local_radius=0.;
+      for (const auto & vertex : part.vertices) {
+        const auto point=rotation*tf2::Vector3(vertex.x,vertex.y,vertex.z)+translation;
+        if (!std::isfinite(point.x()) || !std::isfinite(point.y()) ||
+            !std::isfinite(point.z())) {return;}
+        points.push_back({point.x(),point.y()});
+        local_radius=std::max(local_radius,std::sqrt(vertex.x*vertex.x+vertex.y*vertex.y+vertex.z*vertex.z));
+        z_min=std::min(z_min,point.z()); z_max=std::max(z_max,point.z());
+      }
+      const auto hull=convexHull(std::move(points));
+      if (hull.size()<3) {return;}
+      nlohmann::json polygon=nlohmann::json::array();
+      for (const auto & point : hull) {polygon.push_back({point.x,point.y});}
+      components.push_back({{"frame",part.frame},{"polygon_xy",polygon},
+                            {"z_min",z_min},{"z_max",z_max},
+                            {"position_xyz",{t.x,t.y,t.z}},
+                            {"orientation_xyzw",{q.x,q.y,q.z,q.w}},
+                            {"local_radius_m",local_radius}});
+    }
+    if (components.empty()) {return;}
+    ++timestamped_geometry_sequence_;
+    last_timestamped_geometry_stamp_ns_=stamp_ns;
+    nlohmann::json payload={{"schema","r1_arm_geometry_v1"},
+      {"stamp_ns",stamp_ns},{"sequence",timestamped_geometry_sequence_},
+      {"geometry_version",timestamped_geometry_sequence_},{"components",components}};
+    std_msgs::msg::String message; message.data=payload.dump();
+    timestamped_geometry_pub_->publish(message);
   }
 
   bool projectCollisionMeshes(
@@ -651,6 +715,25 @@ private:
 
   void publishFallback(const std::string & reason)
   {
+    std::vector<Point2D> previous;
+    std::optional<rclcpp::Time> previous_stamp;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const double source_age=last_good_footprint_stamp_ns_>0 ?
+        (get_clock()->now()-rclcpp::Time(last_good_footprint_stamp_ns_,get_clock()->get_clock_type())).seconds() : -1.;
+      if (!last_good_footprint_.empty() && last_good_footprint_time_ != SteadyTime{} &&
+          std::isfinite(source_age) && source_age>=0. && source_age<=last_pose_hold_sec_ &&
+          std::chrono::duration<double>(std::chrono::steady_clock::now()-last_good_footprint_time_).count() <= last_pose_hold_sec_) {
+        previous=last_good_footprint_;
+        previous_stamp=rclcpp::Time(last_good_footprint_stamp_ns_,get_clock()->get_clock_type());
+      }
+    }
+    if (!previous.empty() && previous_stamp) {
+      // Preserve the true source time; this is not a newly measured pose.
+      publishPolygon(previous,previous_stamp);
+      publishStatus("DEGRADED","holding_last_valid_arm_pose:"+reason,previous.size());
+      return;
+    }
     std::vector<Point2D> points;
     for (size_t index = 0; index < fallback_footprint_.size(); index += 2) {
       points.push_back({fallback_footprint_[index], fallback_footprint_[index + 1]});
@@ -669,6 +752,7 @@ private:
     const auto steady_now = std::chrono::steady_clock::now();
     bool states_ready = false;
     bool geometry_changed = true;
+    std::int64_t common_stamp_ns = 0;
     std::unordered_map<std::string, double> current_joint_positions;
     std::vector<std::vector<Point2D>> cached_components;
     std::vector<std::vector<Point2D>> cached_raw_components;
@@ -681,6 +765,7 @@ private:
         std::chrono::duration<double>(steady_now - right_state_received_).count() <=
         state_timeout_sec_;
       if (states_ready) {
+        common_stamp_ns = std::min(left_state_stamp_ns_, right_state_stamp_ns_);
         current_joint_positions = latest_mesh_joint_positions_;
         geometry_changed = current_joint_positions.size() != mesh_projected_joint_positions_.size();
         if (!geometry_changed) {
@@ -703,7 +788,11 @@ private:
     }
     if (!states_ready) {
       std::lock_guard<std::mutex> lock(mutex_);
-      mesh_filter_state_ = "FAULT"; mesh_filter_reason_ = "arm_state_stale";
+      const bool can_hold = !mesh_cached_components_.empty() && last_mesh_verified_ != SteadyTime{} &&
+        std::chrono::duration<double>(steady_now-last_mesh_verified_).count() <= last_pose_hold_sec_;
+      mesh_filter_state_ = can_hold ? "DEGRADED" : "FAULT";
+      mesh_filter_reason_ = can_hold ? "arm_state_holding_last_pose" : "arm_state_stale";
+      if (can_hold) {return;}
       if (!mesh_self_filter_polygons_.empty()) {
         mesh_self_filter_polygons_.clear();
         mesh_cached_components_.clear();
@@ -721,10 +810,11 @@ private:
     // gripper articulation can change while all 14 arm joints remain still.
     std::vector<MeshPose> poses;
     std::array<double,3> tf_ages{{-1.0,-1.0,-1.0}};
-    if (!readMeshPoses(poses, tf_ages)) {
+    std::int64_t oldest_tf_ns=std::numeric_limits<std::int64_t>::max();
+    if (!readMeshPoses(poses, tf_ages, oldest_tf_ns)) {
       std::lock_guard<std::mutex> lock(mutex_);
-      const bool compatible = !geometry_changed && last_mesh_verified_ != SteadyTime{} &&
-        std::chrono::duration<double>(steady_now - last_mesh_verified_).count() <= mesh_cache_grace_sec_;
+      const bool compatible = !mesh_cached_components_.empty() && last_mesh_verified_ != SteadyTime{} &&
+        std::chrono::duration<double>(steady_now - last_mesh_verified_).count() <= last_pose_hold_sec_;
       mesh_filter_state_ = compatible ? "DEGRADED" : "FAULT";
       mesh_filter_reason_ = compatible ? "tf_gap_using_compatible_cache" : "tf_or_cache_invalid";
       if (!compatible) {
@@ -740,6 +830,10 @@ private:
       geometry_changed = geometry_changed || meshPosesDiffer(
         poses, mesh_projected_poses_, mesh_translation_delta_m_, mesh_reprojection_joint_delta_rad_);
     }
+    if (oldest_tf_ns != std::numeric_limits<std::int64_t>::max()) {
+      common_stamp_ns = std::min(common_stamp_ns,oldest_tf_ns);
+    }
+    publishTimestampedGeometry(common_stamp_ns);
     // Stable validated transforms can reuse the expensive projected meshes.
     if (!geometry_changed && !cached_components.empty() && !cached_shadow.empty()) {
       publishMeshShadowPolygon(cached_shadow);
@@ -787,8 +881,10 @@ private:
   {
     const auto steady_now = std::chrono::steady_clock::now();
     bool states_ready = false;
+    std::int64_t pose_stamp_ns = 0;
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      pose_stamp_ns=std::min(left_state_stamp_ns_,right_state_stamp_ns_);
       states_ready = left_state_valid_ && right_state_valid_ &&
         std::chrono::duration<double>(steady_now - left_state_received_).count() <=
         state_timeout_sec_ &&
@@ -821,6 +917,16 @@ private:
     try {
       for (const auto & [frame, radius] : frames) {
         const auto transform = tf_buffer_.lookupTransform(base_frame_, frame, tf2::TimePointZero);
+        const std::int64_t tf_stamp = static_cast<std::int64_t>(transform.header.stamp.sec)*1000000000LL+
+          static_cast<std::int64_t>(transform.header.stamp.nanosec);
+        if (tf_stamp>0) {
+          const double tf_age=(get_clock()->now()-rclcpp::Time(tf_stamp,get_clock()->get_clock_type())).seconds();
+          if (!std::isfinite(tf_age) || tf_age < -0.05 || tf_age > state_timeout_sec_) {
+            publishFallback("arm_tf_fallback");
+            return;
+          }
+          pose_stamp_ns=std::min(pose_stamp_ns,tf_stamp);
+        }
         addDisc(
           points, {transform.transform.translation.x, transform.transform.translation.y},
           radius + projection_margin_m_);
@@ -853,12 +959,23 @@ private:
       publishStatus("FAULT", "arm_projection_invalid", 0);
       return;
     }
-    publishPolygon(hull);
+    if (pose_stamp_ns<=0) {publishFallback("arm_pose_stamp_invalid");return;}
+    publishPolygon(hull,rclcpp::Time(pose_stamp_ns,get_clock()->get_clock_type()));
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      last_good_footprint_=hull;
+      last_good_footprint_stamp_ns_=pose_stamp_ns;
+      last_good_footprint_time_=std::chrono::steady_clock::now();
+    }
     publishStatus("READY", "dynamic_projection_ready", hull.size());
   }
 
   std::string base_frame_;
   double state_timeout_sec_{0.5};
+  double last_pose_hold_sec_{1.5};
+  std::vector<Point2D> last_good_footprint_;
+  std::int64_t last_good_footprint_stamp_ns_{0};
+  SteadyTime last_good_footprint_time_{};
   double update_frequency_{10.0};
   double link_radius_m_{0.12};
   double tool_radius_m_{0.16};
@@ -912,6 +1029,9 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr footprint_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PolygonStamped>::SharedPtr mesh_footprint_pub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr mesh_components_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr timestamped_geometry_pub_;
+  std::uint64_t timestamped_geometry_sequence_{0};
+  std::int64_t last_timestamped_geometry_stamp_ns_{0};
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr guard_mesh_components_pub_;
   rclcpp::CallbackGroup::SharedPtr scan_callback_group_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr mesh_shadow_scan_sub_;
