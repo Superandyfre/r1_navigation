@@ -15,7 +15,7 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist, PoseStamped
 from nav_msgs.msg import Path
-from neupan_ros2.utils import yaw_to_quat
+from neupan_ros2.utils import quat_to_yaw, yaw_to_quat
 from r1_neupan_integration.execution_protocol import (
     ExecutionContextStore, ContextError, make_source,
 )
@@ -118,6 +118,9 @@ class N116Node(N115Node):
         self.declare_parameter("bridge_status_topic", "/neupan_bridge_status")
         self.declare_parameter("semantic_topic", "/neupan_semantics")
         self.declare_parameter("planner_result_topic", "/neupan_planner_result")
+        self.declare_parameter("continuation_enabled", False)
+        self.declare_parameter("continuation_proof_topic", "/neupan_trajectory_proof")
+        self.declare_parameter("continuation_input_timeout_sec", 0.75)
         self.declare_parameter("planner_context_topic", "/neupan_planner_context")
         self.declare_parameter("forward_only_status_topic", "/neupan_forward_only_status")
         self.declare_parameter("forward_only_enabled", True)
@@ -303,6 +306,24 @@ class N116Node(N115Node):
                 "auto_gear_opposite_direction_commit_cycles").value),
         ))
         self._forward_blocked_reported_context: tuple[int, int] | None = None
+        self._continuation_worker = None
+        self._continuation_parent = None
+        self._continuation_last_scan = 0
+        self._continuation_handled = 0
+        self._continuation_proof_sequence = 0
+        self._continuation_timeout = float(self.get_parameter("continuation_input_timeout_sec").value)
+        if not math.isfinite(self._continuation_timeout) or self._continuation_timeout <= 0.:
+            raise ValueError("invalid_continuation_input_timeout")
+        if bool(self.get_parameter("continuation_enabled").value):
+            if not self._require_execution_context or self.auto_gear_transition_enabled or self.forward_only_enabled:
+                raise ValueError("continuation requires task identity and direct NeuPAN commands")
+            from .continuation_worker import ContinuationWorker
+            self._continuation_worker = ContinuationWorker(self.client.config_path, self.client.checkpoint_path)
+            self._continuation_pub = self.create_publisher(
+                String, str(self.get_parameter("continuation_proof_topic").value), 20)
+            self._continuation_callback_group = MutuallyExclusiveCallbackGroup()
+            self._continuation_timer = self.create_timer(
+                .05, self._continuation_tick, callback_group=self._continuation_callback_group)
         self.add_on_set_parameters_callback(self._shadow_fault_parameter_callback)
         self.get_logger().info(
             "N1.16 production bridge ready; forward-only=%s; planner exists only in one clean spawn worker"
@@ -316,6 +337,80 @@ class N116Node(N115Node):
         self.get_logger().info(
             "N1.16 planner scheduling is scan-driven with a one-slot latest-input queue"
         )
+
+    @staticmethod
+    def _continuation_context(source):
+        return tuple(source[key] for key in ("authority_boot_id", "controller_boot_id",
+            "navigation_attempt_id", "worker_boot_id", "worker_generation", "path_version", "goal_version"))
+
+    def _continuation_tick(self) -> None:
+        """Prepare evidence only; authority and motion remain downstream."""
+        worker = self._continuation_worker
+        if worker is None or self._shutdown_requested or self._freeze_planner_result:
+            return
+        from .trajectory_continuation import Continuation, make_trajectory_proof, make_trajectory_rejection
+        from .trajectory_scene import make_time_aligned_scene
+        with self.state_lock:
+            parent = self._continuation_parent
+            active = self._execution_store.active
+            if parent is None or active is None or any(parent[k] != v for k,v in active.fields().items()):
+                return
+        snapshot = worker.snapshot()
+        if snapshot["failure"]:
+            self._trace_wait_state("continuation_worker", error=snapshot["failure"])
+            return
+        event = snapshot.get("event")
+        if event is not None and snapshot["completed_sequence"] > self._continuation_handled:
+            self._continuation_handled = snapshot["completed_sequence"]
+            now = time.monotonic()
+            try:
+                sequence = self._continuation_proof_sequence + 1
+                result = event.get("result")
+                proof = (make_trajectory_rejection(parent, event, sequence, now) if result is None else
+                         make_trajectory_proof(parent, Continuation(**result), sequence, now))
+                with self.state_lock:
+                    current = self._execution_store.active
+                    if (self._continuation_parent is parent and current is not None and
+                            all(parent[k] == v for k,v in current.fields().items()) and
+                            self.scan_counter == event["scan_counter"]):
+                        message = String();message.data = json.dumps(proof,allow_nan=False,sort_keys=True)
+                        self._continuation_pub.publish(message)
+                        self._continuation_proof_sequence = sequence
+            except (ValueError,KeyError,TypeError,OverflowError) as exc:
+                self._trace_wait_state("continuation_proof", error=str(exc))
+        with self.state_lock:
+            if (self._continuation_parent is not parent or
+                    getattr(self, "latest_local_scan_counter", -1) != self.scan_counter or
+                    self.scan_counter <= self._continuation_last_scan or
+                    getattr(self, "latest_local_scan_points", None) is None):
+                return
+            scan = self.scan_counter
+            local = self.latest_local_scan_points.copy()
+            stamp = self.latest_scan_stamp_sec
+            received = self.latest_scan_receive_monotonic
+        def lookup_pose(stamp_sec):
+            when = (rclpy.time.Time() if stamp_sec is None else
+                    rclpy.time.Time(nanoseconds=int(round(stamp_sec * 1e9))))
+            transform = self.tf_buffer.lookup_transform(self.map_frame,self.base_frame,when)
+            t = transform.transform.translation
+            stamp = transform.header.stamp
+            return (t.x,t.y,quat_to_yaw(transform.transform.rotation),
+                    float(stamp.sec) + float(stamp.nanosec)*1e-9)
+        scene = make_time_aligned_scene(local,stamp,received,
+            self.get_clock().now().nanoseconds * 1e-9,time.monotonic(),self._continuation_timeout,lookup_pose)
+        if scene is None:
+            self._trace_wait_state("continuation_scene_tf")
+            return
+        with self.state_lock:
+            current = self._execution_store.active
+            if (self._continuation_parent is not parent or current is None or self.scan_counter != scan or
+                    any(parent[k] != v for k,v in current.fields().items())):
+                return
+            if worker.submit(context=self._continuation_context(parent),scan_counter=scan,
+                    scan_received_monotonic=scene["scan_received_monotonic"],
+                    pose_received_monotonic=scene["pose_received_monotonic"],
+                    input_timeout=self._continuation_timeout,state=scene["state"],points=scene["points"]):
+                self._continuation_last_scan = scan
 
     def _planner_input_updated(self) -> None:
         """Wake one planner cycle; concurrent updates are deliberately coalesced."""
@@ -447,6 +542,7 @@ class N116Node(N115Node):
         # Validate the entire batch before the shadow fault hook has side effects.
         immutable = {
             "worker_recovery_enabled", "worker_recovery_budget", "worker_recovery_wait_sec",
+            "continuation_enabled", "continuation_input_timeout_sec",
             "require_execution_context", "worker_health_period_sec", "n115_timeout_sec",
             "use_sim_time", "control_frequency", "map_frame", "base_frame", "lidar_frame",
             "shadow_tf_fault_injection_allowed",
@@ -1097,6 +1193,22 @@ class N116Node(N115Node):
                 if not self._freeze_planner_result:
                     self.planner_result_pub.publish(planner_result_message)
                     planner_result_publish_monotonic = time.monotonic()
+                    if self._continuation_worker is not None:
+                        if "trajectory" in planner_result:
+                            trajectory = planner_result["trajectory"]
+                            self._continuation_worker.install(
+                                context=self._continuation_context(planner_result),
+                                request_id=planner_result["request_id"],
+                                scan_counter=planner_result["scan_counter"],
+                                started_monotonic=planner_result["planner_result_monotonic"],
+                                controls=np.asarray(trajectory["controls"],dtype=np.float64).T)
+                            self._continuation_parent = planner_result
+                            self._continuation_last_scan = planner_result["scan_counter"]
+                            self._continuation_handled = 0
+                            self._continuation_proof_sequence = 0
+                        else:
+                            self._continuation_parent = None
+                            self._continuation_worker.clear()
                 else:
                     planner_result_publish_monotonic = -1.0
             record["planner_result"] = planner_result
@@ -1286,6 +1398,10 @@ class N116Node(N115Node):
             return
         self._finalized = True
         self._shutdown_requested = True
+        continuation = getattr(self, "_continuation_worker", None)
+        if continuation is not None:
+            self._continuation_timer.cancel()
+            continuation.close()
         self.client.health.shutting_down()
         self._publish_worker_health()
         scheduler = getattr(self, "_planner_scheduler", None)
