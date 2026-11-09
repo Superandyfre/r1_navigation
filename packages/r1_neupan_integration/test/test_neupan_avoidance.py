@@ -215,6 +215,23 @@ def test_continuation_scene_uses_scan_time_pose_without_warping_points():
     with pytest.raises(ValueError):project_scan_to_map(local,scan_pose,[np.nan,0.,0.])
 
 
+def test_time_aligned_scene_rejects_stale_or_mismatched_transforms():
+    from r1_neupan_integration.trajectory_scene import make_time_aligned_scene
+    points=np.array([[-.5],[0.]])
+    def tf(stamp):return (1.,2.,0.,10.) if stamp is not None else (1.2,2.,0.,10.1)
+    args=dict(local_points=points,scan_stamp_sec=10.,scan_received_monotonic=99.9,
+              ros_now_sec=10.12,monotonic_now=100.,input_timeout=.5,lookup_pose=tf)
+    scene=make_time_aligned_scene(**args)
+    assert scene is not None
+    np.testing.assert_allclose(scene['points'],[[.5],[2.]])
+    np.testing.assert_allclose(scene['state'][:,0],[1.2,2.,0.])
+    assert scene['pose_received_monotonic']==pytest.approx(99.98)
+    assert make_time_aligned_scene(**dict(args,scan_stamp_sec=9.)) is None
+    assert make_time_aligned_scene(**dict(args,lookup_pose=lambda stamp:(1.,2.,0.,9.))) is None
+    assert make_time_aligned_scene(**dict(args,lookup_pose=lambda stamp:(1.,2.,0.,10. if stamp else 9.))) is None
+    assert make_time_aligned_scene(**dict(args,scan_received_monotonic=99.)) is None
+
+
 def test_continuation_rechecks_new_rear_wall_and_does_not_renew_horizon():
     core=planner();state=np.zeros((3,1))
     controls=np.vstack((np.full(4,-.2),np.zeros(4)))
