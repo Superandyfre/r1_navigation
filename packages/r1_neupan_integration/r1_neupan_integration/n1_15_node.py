@@ -41,9 +41,6 @@ from r1_neupan_integration.n2_pre_semantics import (
 from r1_neupan_integration.scan_self_filter import (
     outside_polygon_footprint,
     outside_rectangular_footprint,
-    inflate_obstacles_for_dynamic_footprint,
-    inflate_obstacles_for_mesh_components,
-    combine_environment_and_projection,
     mesh_component_overlap_mask,
     mesh_components_from_flat,
     polygon_vertices_from_flat_xy,
@@ -621,65 +618,33 @@ class N115Node(Node):
                         nearest_environment[0], nearest_environment[1]))
                     nearest_environment_xy = [
                         float(nearest_environment[0]), float(nearest_environment[1])]
-                dynamic_displacement = np.empty(0, dtype=np.float64)
-                if dynamic_ready and self.dynamic_mesh_components_enabled:
-                    # Assess raw scan geometry first. This distinguishes a
-                    # physical overlap from a conservative planner-space
-                    # projection introduced below.
-                    # Exact mesh point-overlap statistics are observability
-                    # only. Evaluating every high-vertex arm mesh twice per
-                    # scan can exceed the control period; the actual mesh
-                    # self-filter, configuration-space projection, dynamic
-                    # footprint, and final collision guard remain active.
-                    if self.mesh_overlap_diagnostics_enabled:
-                        mesh_overlap = mesh_component_overlap_mask(
-                            local_points, dynamic_mesh_components, margin_m=0.0)
-                        mesh_proximity = mesh_component_overlap_mask(
-                            local_points, dynamic_mesh_components,
-                            margin_m=self.dynamic_footprint_clearance_m,
-                        ) & ~mesh_overlap
-                        current_pose_mesh_overlap_points = int(np.count_nonzero(mesh_overlap))
-                        current_pose_mesh_proximity_points = int(np.count_nonzero(mesh_proximity))
-                        if current_pose_mesh_overlap_points:
-                            current_pose_mesh_overlap_nearest_distance = float(np.min(
-                                np.hypot(local_points[0, mesh_overlap], local_points[1, mesh_overlap])
-                            ))
-                    local_points, dynamic_displacement = inflate_obstacles_for_mesh_components(
+                # Mesh overlap metrics are diagnostic only. Planner input
+                # remains the real, self-filtered environment scan; never
+                # displace or duplicate obstacle points for arm clearance.
+                if (dynamic_ready and self.dynamic_mesh_components_enabled and
+                        self.mesh_overlap_diagnostics_enabled):
+                    mesh_overlap = mesh_component_overlap_mask(
+                        local_points, dynamic_mesh_components, margin_m=0.0)
+                    mesh_proximity = mesh_component_overlap_mask(
                         local_points, dynamic_mesh_components,
-                        clearance_m=self.dynamic_footprint_clearance_m,
-                        path_tangent=path_tangent_base,
-                        **self.planner_base_extents,
-                    )
-                elif dynamic_ready and self.dynamic_footprint_enabled:
-                    local_points, dynamic_displacement = inflate_obstacles_for_dynamic_footprint(
-                        local_points, dynamic_footprint,
-                        clearance_m=self.dynamic_footprint_clearance_m,
-                        **self.planner_base_extents,
-                    )
+                        margin_m=self.dynamic_footprint_clearance_m,
+                    ) & ~mesh_overlap
+                    current_pose_mesh_overlap_points = int(np.count_nonzero(mesh_overlap))
+                    current_pose_mesh_proximity_points = int(np.count_nonzero(mesh_proximity))
+                    if current_pose_mesh_overlap_points:
+                        current_pose_mesh_overlap_nearest_distance = float(np.min(
+                            np.hypot(local_points[0, mesh_overlap], local_points[1, mesh_overlap])
+                        ))
                 retained_count = int(local_points.shape[1])
                 if retained_count:
                     nearest_index = int(np.argmin(np.hypot(local_points[0], local_points[1])))
                     nearest_point = local_points[:, nearest_index]
                     nearest_distance = float(np.hypot(nearest_point[0], nearest_point[1]))
                     nearest_xy = [float(nearest_point[0]), float(nearest_point[1])]
-                    if dynamic_displacement.size:
-                        arm_extension = max(
-                            0.0,
-                            float(dynamic_displacement[nearest_index]) -
-                            self.dynamic_footprint_clearance_m,
-                        )
-                        nearest_obstacle_reason = (
-                            "mesh_arm_clearance" if arm_extension > 1.0e-6
-                            else "base_or_environment_clearance"
-                        )
-                    else:
-                        nearest_obstacle_reason = "base_or_environment_clearance"
+                    nearest_obstacle_reason = "base_or_environment_clearance"
                 else:
                     nearest_distance = None
                     nearest_xy = None
-                # Projection is useful for arm clearance but may move a real
-                # return outside the chassis after a turn. Retain both.
-                local_points = combine_environment_and_projection(raw_local_points, local_points)
                 planner_input_count = int(local_points.shape[1])
                 # ``state`` was obtained from the current map->base_link
                 # transform before this scan callback. A second lookup here
@@ -728,13 +693,8 @@ class N115Node(Node):
                 "mesh_overlap_diagnostics_enabled": bool(self.mesh_overlap_diagnostics_enabled),
                 "dynamic_mesh_component_count": (
                     len(dynamic_mesh_components) if dynamic_mesh_components is not None else 0),
-                "dynamic_obstacle_max_displacement_m": (
-                    float(np.max(dynamic_displacement)) if valid_ranges.size and dynamic_displacement.size else 0.0
-                ),
-                "dynamic_obstacle_mapping": (
-                    "path_frame_lateral_mesh" if self.dynamic_mesh_components_enabled
-                    else "radial_convex_footprint"
-                ),
+                "dynamic_obstacle_max_displacement_m": 0.0,
+                "dynamic_obstacle_mapping": "none",
                 "path_tangent_base_link": [
                     float(path_tangent_base[0]), float(path_tangent_base[1])
                 ],
