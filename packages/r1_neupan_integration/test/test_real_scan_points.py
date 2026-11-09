@@ -80,5 +80,12 @@ class RealScanPoints(unittest.TestCase):
         node.scan_callback(scan)
         self.assertEqual(node.latest_scan_filter['rear_retained_points'],2)
         self.assertGreater(node.latest_scan_filter['nearest_rear_base_link'][0],-.371)
+        # LaserScan stores +/-pi as float32, slightly outside float64 +/-pi.
+        # Both endpoint beams point behind the robot and must be retained.
+        scan.header.stamp.sec=4;scan.angle_min=-np.pi;scan.angle_max=np.pi
+        scan.angle_increment=np.pi;scan.ranges=[.5,float('inf'),.6]
+        node.scan_callback(scan)
+        self.assertEqual(node.latest_scan_filter['rear_input_points'],2)
+        self.assertEqual(node.latest_scan_filter['rear_retained_points'],2)
 
 if __name__ == '__main__': unittest.main()

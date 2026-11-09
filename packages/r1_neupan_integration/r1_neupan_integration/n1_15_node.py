@@ -535,12 +535,18 @@ class N115Node(Node):
         conversion_ms = (time.perf_counter() - conversion_started) * 1000.0
         filter_started = time.perf_counter()
         indices = np.arange(len(ranges))
+        # LaserScan angle bounds are float32; a nominal +/-pi can round just
+        # outside the double-precision configured bound. Keep endpoint beams,
+        # including the beam pointing straight backwards.
+        angle_epsilon = (2.0 * np.finfo(np.float32).eps *
+                         max(1.0, abs(float(self.scan_angle_range[0])),
+                             abs(float(self.scan_angle_range[1]))))
         mask = (
             (indices % self.scan_downsample == 0)
             & (ranges >= self.scan_range[0])
             & (ranges <= self.scan_range[1])
-            & (angles > self.scan_angle_range[0])
-            & (angles < self.scan_angle_range[1])
+            & (angles >= self.scan_angle_range[0] - angle_epsilon)
+            & (angles <= self.scan_angle_range[1] + angle_epsilon)
         )
         valid_ranges, valid_angles = ranges[mask], angles[mask]
         filter_ms = (time.perf_counter() - filter_started) * 1000.0
