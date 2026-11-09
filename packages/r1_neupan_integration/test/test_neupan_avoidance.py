@@ -259,6 +259,21 @@ def test_continuation_rollout_uses_remaining_fraction_of_first_knot():
     assert states[0,-1]==pytest.approx(-.02)
 
 
+def test_continuation_checks_only_the_certified_freshness_period():
+    from unittest.mock import patch
+    core=planner();state=np.zeros((3,1))
+    controls=np.array([[.2,-.2,-.2],[0.,0.,0.]])
+    points=np.array([[2.],[2.]])
+    def distances(states, points, velocities, **kwargs):
+        times=kwargs["sample_times"]
+        # A later hypothetical obstacle must not veto this shorter grant.
+        return np.where(times[:,None] > .30, -.1, 1.)
+    with patch.object(core,"_candidate_distances",side_effect=distances) as checked:
+        assert core.validate_remaining_trajectory(state,controls,.1,points,duration_sec=.2) is not None
+        assert checked.call_args.kwargs["sample_times"][-1] == pytest.approx(.2)
+        assert core.validate_remaining_trajectory(state,controls,.1,points) is None
+
+
 def test_continuation_requires_new_fresh_scan_and_live_task_identity():
     from r1_neupan_integration.trajectory_continuation import TrajectoryContinuation
     core=planner();clock=lambda:100.0
@@ -296,7 +311,7 @@ def test_continuation_does_not_launder_slow_validation_or_cross_knot():
                           pose_received_monotonic=scan_received,now=100.,input_timeout=input_timeout,
                           state=np.zeros((3,1)),points=np.empty((2,0)))
     # Crossing a knot during successful validation is not a failure: the
-    # proof covers the entire remaining trajectory.
+    # proof covers the remaining certified freshness period.
     assert attempt(plan_started=99.76,scan_received=99.99,input_timeout=.5,duration=.02) is not None
     assert attempt(plan_started=99.9,scan_received=99.85,input_timeout=.2,duration=.06) is None
     accepted=attempt(plan_started=99.9,scan_received=99.95,input_timeout=.2,duration=.02)

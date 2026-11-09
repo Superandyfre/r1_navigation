@@ -69,8 +69,14 @@ class TrajectoryContinuation:
             # Failed revalidation cannot be replayed under the same scan identity.
             self._last_scan = scan_counter
         started = self.clock()
+        # A certificate cannot outlive its oldest observation. Checking past
+        # that instant rejects future motion which the certificate can never
+        # authorize and causes unnecessary stops while the solver replans.
+        duration = min(scan_received_monotonic, pose_received_monotonic) + input_timeout - now
+        if duration <= 0.:
+            return None, "unavailable"
         result, reason = self.planner.validate_remaining_trajectory(
-            state, plan[3], now - plan[2], points, with_reason=True)
+            state, plan[3], now - plan[2], points, with_reason=True, duration_sec=duration)
         finished = now + max(0.0, self.clock() - started)
         with self._lock:
             # Cancellation, replacement or a newer scan invalidates in-flight
@@ -78,7 +84,7 @@ class TrajectoryContinuation:
             if self._plan is not plan or self._last_scan != scan_counter:
                 return None, "unavailable"
         # Validation time cannot refresh input timestamps or extend the
-        # original trajectory horizon; proofs cover all remaining knots.
+        # original trajectory horizon; proofs cover their entire freshness period.
         if result is None:
             return None, reason
         if (finished - scan_received_monotonic > input_timeout or

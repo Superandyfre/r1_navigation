@@ -202,7 +202,7 @@ class neupan(torch.nn.Module):
                     states[-1], controls[:, t:t+1], self.robot.L, self.dt / subdivisions))
         return np.hstack(states)
 
-    def validate_remaining_trajectory(self, state, controls, elapsed, points, velocities=None, with_reason=False):
+    def validate_remaining_trajectory(self, state, controls, elapsed, points, velocities=None, with_reason=False, duration_sec=None):
         """Re-evaluate a previously optimized control horizon with current observations.
 
         This is a NeuPAN geometry check, not a separate collision-distance policy.
@@ -226,6 +226,8 @@ class neupan(torch.nn.Module):
             velocities = np.asarray(velocities, dtype=np.float64)
             if velocities.shape != points.shape or not np.isfinite(velocities).all():
                 raise ValueError("invalid_trajectory_obstacle_velocity")
+        if duration_sec is not None and (not np.isfinite(duration_sec) or duration_sec <= 0.):
+            raise ValueError("invalid_continuation_duration")
         index = int(elapsed / self.dt)
         if index >= controls.shape[1]:
             return outcome(None, "horizon_expired")  # heartbeat cannot renew a horizon
@@ -243,6 +245,10 @@ class neupan(torch.nn.Module):
         times = [0.0]
         for k in range(remaining.shape[1]):
             interval = first_duration if k == 0 else self.dt
+            if duration_sec is not None:
+                interval = min(interval, duration_sec - times[-1])
+                if interval <= 1e-12:
+                    break
             for _ in range(subdivisions):
                 trajectory.append(self.ipath.motion_predict_model(
                     trajectory[-1], remaining[:, k:k+1], self.robot.L, interval / subdivisions))
