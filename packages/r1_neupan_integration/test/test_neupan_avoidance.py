@@ -258,6 +258,26 @@ def test_continuation_does_not_launder_slow_validation_or_cross_knot():
     assert accepted is not None and accepted.validated_monotonic==pytest.approx(100.02)
 
 
+def test_continuation_cancelled_during_validation_cannot_publish():
+    import threading
+    from r1_neupan_integration.trajectory_continuation import TrajectoryContinuation
+    from types import SimpleNamespace
+    entered=threading.Event();release=threading.Event();results=[]
+    def validate(*args):
+        entered.set();assert release.wait(2.)
+        return np.array([.2,0.]),.1
+    gate=TrajectoryContinuation(SimpleNamespace(dt=.25,validate_remaining_trajectory=validate),clock=lambda:100.)
+    gate.install(context=('old',),request_id=1,scan_counter=1,started_monotonic=99.9,
+                 controls=np.vstack((np.full(4,.2),np.zeros(4))))
+    def run():
+        results.append(gate.validate(context=('old',),scan_counter=2,scan_received_monotonic=99.99,
+            pose_received_monotonic=99.99,now=100.,input_timeout=.5,
+            state=np.zeros((3,1)),points=np.empty((2,0))))
+    thread=threading.Thread(target=run);thread.start();assert entered.wait(2.)
+    gate.clear();release.set();thread.join(2.)
+    assert not thread.is_alive() and results==[None]
+
+
 def test_reverse_motion_near_rear_wall_recovers_without_body_crossing():
     # The current rearward velocity cannot reverse instantaneously. Verify
     # the actual optimized rollout, not merely its first command.
