@@ -561,6 +561,7 @@ class N115Node(Node):
         rear_input_count = 0
         rear_retained_count = 0
         nearest_rear_xy = None
+        local_scan_snapshot = None
         nearest_distance = None
         nearest_xy = None
         nearest_environment_distance = None
@@ -625,6 +626,9 @@ class N115Node(Node):
                 else:
                     filter_shape = "disabled"
                 raw_local_points = local_points.copy()
+                # Preserve the unwarped base-frame observation and original
+                # frame identity for timestamp-aligned revalidation.
+                local_scan_snapshot = local_points.copy()
                 rear_points = local_points[:, local_points[0] < 0.0]
                 rear_retained_count = int(rear_points.shape[1])
                 if rear_retained_count:
@@ -688,6 +692,8 @@ class N115Node(Node):
                 return
             self.obstacle_points = None if points is None else points.copy()
             self.raw_environment_points = None if raw_points is None else raw_points.copy()
+            self.latest_local_scan_points = local_scan_snapshot
+            self.latest_local_scan_counter = accepted_counter
             self.processed_scan_counter = accepted_counter
             self.latest_scan_update_monotonic = time.monotonic()
             self.latest_scan_metrics = {

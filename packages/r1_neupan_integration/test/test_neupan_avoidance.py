@@ -204,6 +204,17 @@ def test_reverse_path_bypasses_obstacle_without_intersection():
         assert not np.any((np.abs(local_x)<.341) & (np.abs(local_y)<.266))
 
 
+def test_continuation_scene_uses_scan_time_pose_without_warping_points():
+    from r1_neupan_integration.trajectory_scene import project_scan_to_map
+    local=np.array([[-.5,-.5],[0.,.2]])
+    scan_pose=np.array([1.,2.,np.pi/2]);current_pose=np.array([1.3,2.1,np.pi/2])
+    state,world=project_scan_to_map(local,scan_pose,current_pose)
+    np.testing.assert_allclose(world,np.array([[1.,.8],[1.5,1.5]]),atol=1e-12)
+    np.testing.assert_allclose(state[:,0],current_pose)
+    np.testing.assert_allclose(np.linalg.norm(world[:,0]-world[:,1]),.2,atol=1e-12)
+    with pytest.raises(ValueError):project_scan_to_map(local,scan_pose,[np.nan,0.,0.])
+
+
 def test_continuation_rechecks_new_rear_wall_and_does_not_renew_horizon():
     core=planner();state=np.zeros((3,1))
     controls=np.vstack((np.full(4,-.2),np.zeros(4)))

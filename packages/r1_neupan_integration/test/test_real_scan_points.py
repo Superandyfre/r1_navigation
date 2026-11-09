@@ -51,6 +51,8 @@ class RealScanPoints(unittest.TestCase):
         expected=rotation@points+np.array([[2.],[-1.]])
         np.testing.assert_allclose(node.obstacle_points,expected,atol=1e-7)
         np.testing.assert_allclose(node.raw_environment_points,expected,atol=1e-7)
+        np.testing.assert_allclose(node.latest_local_scan_points,points,atol=1e-7)
+        self.assertEqual(node.latest_local_scan_counter,node.processed_scan_counter)
         self.assertEqual(node.obstacle_points.shape,(2,2))
         self.assertEqual(node.latest_scan_filter['self_rejected_points'],1)
         self.assertEqual(node.latest_scan_filter['dynamic_obstacle_mapping'],'none')
