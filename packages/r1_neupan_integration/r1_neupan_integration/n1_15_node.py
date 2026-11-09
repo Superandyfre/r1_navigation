@@ -121,6 +121,7 @@ class N115Node(Node):
         self.declare_parameter("gear_topic", "/r1_motion_gear")
         self.declare_parameter("odom_topic", "/odom")
         self.declare_parameter("default_gear", DEFAULT_GEAR)
+        self.declare_parameter("independent_reference_direction", False)
         self.declare_parameter("navigation_mode", "cyclic")
         self.declare_parameter("cmd_vel_topic", "/neupan_cmd_vel")
         self.declare_parameter("plan_output_topic", "/neupan_plan")
@@ -302,6 +303,7 @@ class N115Node(Node):
         self.mesh_overlap_diagnostics_enabled = bool(
             self.get_parameter("mesh_overlap_diagnostics_enabled").value)
         self.include_path_direction = bool(self.get_parameter("include_initial_path_direction").value)
+        self.independent_reference_direction = bool(self.get_parameter("independent_reference_direction").value)
         self.goal_from_path_only = bool(self.get_parameter("goal_from_path_only").value)
         self.refresh_initial_path = bool(self.get_parameter("refresh_initial_path").value)
         self.allow_reverse = bool(self.get_parameter("allow_reverse").value)
@@ -767,7 +769,7 @@ class N115Node(Node):
             np.asarray([value[0] for value in coordinates]),
             np.asarray([value[1] for value in coordinates]),
             np.asarray([value[2] for value in coordinates]),
-            np.full(len(coordinates), self.active_gear, dtype=np.float64),
+            np.full(len(coordinates), 1 if self.independent_reference_direction else self.active_gear, dtype=np.float64),
         ]).astype(np.float64)
         sanitized_matrix = collapse_invalid_stationary_prefix(matrix)
         if sanitized_matrix.shape[1] != matrix.shape[1]:
@@ -834,7 +836,7 @@ class N115Node(Node):
             new_gear = validate_gear(self.pending_gear)
             self.active_gear = new_gear
             self.pending_gear = None
-            if self._raw_path_matrix is not None:
+            if self._raw_path_matrix is not None and not self.independent_reference_direction:
                 self.path_matrix = apply_uniform_gear(self._raw_path_matrix, new_gear)
                 self.path_version += 1
             self.gear_transition_count += 1

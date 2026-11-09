@@ -136,6 +136,7 @@ class AtomicNodeTests(unittest.TestCase):
         self.node.state_lock = threading.Lock()
         self.node.map_frame = 'map'
         self.node.include_path_direction = True
+        self.node.independent_reference_direction = False
         self.node.active_gear = 1
         self.node.path_version = 0
         self.node.nav2_path_version = 0
@@ -168,6 +169,21 @@ class AtomicNodeTests(unittest.TestCase):
         self.node.path_callback(Path())
         self.node.goal_callback(None)
         self.assertEqual(len(self.notifications), 1)
+
+    def test_execution_gear_does_not_rewrite_independent_path(self):
+        self.node.independent_reference_direction = True
+        self.node.active_gear = -1
+        self.send(context())
+        np.testing.assert_array_equal(self.node.path_matrix[3], [1., 1.])
+        previous = self.node.path_matrix.copy()
+        epoch = self.node.path_version
+        self.node.pending_gear = 1
+        self.node._raw_path_matrix = previous[:3].copy()
+        self.node.gear_transition_count = 0
+        self.node._consume_gear_transition()
+        self.assertEqual(self.node.active_gear, 1)
+        self.assertEqual(self.node.path_version, epoch)
+        np.testing.assert_array_equal(self.node.path_matrix, previous)
 
     def test_end_invalidates_inflight_result_without_changing_fault(self):
         self.send(context())

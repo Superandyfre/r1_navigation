@@ -74,8 +74,9 @@ n1_16_production_bridge:
     # Keep planner velocity commands without an external obstacle speed policy.
     forward_only_enabled: false
     allow_reverse: true
-    # Opposite-direction planner actions must stop and rewrite the NeuPAN
-    # path gear before reaching the closed-loop velocity smoother.
+    # Execution gear must not rewrite the planned path direction.
+    independent_reference_direction: true
+    # Serialize actual direction changes before the velocity smoother.
     auto_gear_transition_enabled: true
     auto_gear_mismatch_deadband_mps: 0.025
     auto_gear_confirm_cycles: 5

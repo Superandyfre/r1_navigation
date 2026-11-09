@@ -49,3 +49,24 @@ reached x=3.83 m on a 4 m synthetic reference, with 0.68 m peak lateral offset,
 two simulated gear transitions and no sampled chassis overlap. The recorded
 p95 and max solve durations were 282 ms and 331 ms on that run. These are
 specific offline observations, not real-robot acceptance or guarantees.
+
+## Execution direction and planner reference
+
+The HW1 profile enables `independent_reference_direction`: Nav2 path headings
+and reference direction are not rewritten when the execution gear changes.
+The automatic gear gate remains responsible for serializing physical direction
+changes; it no longer feeds its previous choice back into the path. Other
+profiles retain their explicit gear behavior unless they opt in.
+
+When the reference trajectory encounters modeled obstacles, the NeuPAN
+candidate solver evaluates both forward-first and reverse-first seeds in the
+same planning cycle, then selects among feasible trajectories by its existing
+progress and optimization costs. It does not force either direction or add an
+external collision or braking policy. On a subsequent clear path it again
+uses the path reference rather than retaining a reverse-speed reference.
+
+When the base nonresponse monitor trips, the controller logs its most recent
+planner and final authorized velocities, odometry velocity and pose, and guard
+state. This improves diagnosis of future incidents; it cannot reconstruct
+samples that were not recorded before this change or by itself identify a
+hardware fault.

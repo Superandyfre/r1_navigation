@@ -602,7 +602,8 @@ class N116Node(N115Node):
                     self.client.health.bind_execution(None, self.client.worker_generation,
                                                       self.nav2_path_version, self.goal_version)
                 else:
-                    matrix[3, :] = self.active_gear
+                    if not self.independent_reference_direction:
+                        matrix[3, :] = self.active_gear
                     self._raw_path_matrix = matrix[:3, :].copy()
                     self.path_matrix = matrix
                     self.nav2_path_version = context.path

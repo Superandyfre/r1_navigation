@@ -211,6 +211,7 @@ void NeuPANController::configure(
         motion_y_ = p.position.y; motion_yaw_ = yaw;
       } else {motion_odom_received_ = 0; stall_monitor_.reset();}
       const auto & v = msg->twist.twist;
+      motion_linear_x_ = v.linear.x; motion_angular_z_ = v.angular.z;
       const std::int64_t stamp = static_cast<std::int64_t>(msg->header.stamp.sec) * 1000000000LL +
         msg->header.stamp.nanosec;
       stopped_odometry_.observe(stamp,
@@ -571,7 +572,17 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
           std::chrono::duration<double>(std::chrono::steady_clock::now() - guard_status_.received_at).count() <= .2;
         if (stall_monitor_.observe(now, permitted_output, motion_odom_stamp_,
           motion_x_, motion_y_, motion_yaw_))
-        {throw nav2_core::PlannerException("base_command_no_odometry_progress");}
+        {
+          RCLCPP_WARN(node_->get_logger(),
+            "base_no_progress: planner=(%.4f,%.4f) final=(%.4f,%.4f) "
+            "odom_velocity=(%.4f,%.4f) odom_pose=(%.4f,%.4f,%.4f) "
+            "odom_age=%.3f guard_state=%s guard_reason=%s",
+            envelope_.linear_x, envelope_.angular_z, final_output_linear_x_,
+            final_output_angular_z_, motion_linear_x_, motion_angular_z_,
+            motion_x_, motion_y_, motion_yaw_, now - motion_odom_received_,
+            guard_status_.state.c_str(), guard_status_.reason.c_str());
+          throw nav2_core::PlannerException("base_command_no_odometry_progress");
+        }
       } else {stall_monitor_.reset();}
       const auto planning = execution_->plannerState();
       if (planning == "exhausted") {
@@ -1040,6 +1051,7 @@ void NeuPANController::guardStatusCallback(const std_msgs::msg::String::SharedPt
     const auto payload = nlohmann::json::parse(message->data);
     const double linear = payload.at("output_linear_x").get<double>();
     const double angular = payload.at("output_angular_z").get<double>();
+    final_output_linear_x_ = linear; final_output_angular_z_ = angular;
     final_output_nonzero_ = payload.value("authorization_state", "") == "ARMED" &&
       std::isfinite(linear) && std::isfinite(angular) &&
       (std::abs(linear) > .005 || std::abs(angular) > .005);

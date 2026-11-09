@@ -200,3 +200,15 @@ def test_projected_initial_overlap_can_escape_in_real_solver():
     controls = info['vel_tensor'].detach().numpy()
     dense = core._rollout_controls(state, controls, subdivisions=3)
     assert core._candidate_feasibility(core._candidate_distances(dense, points, sample_dt=core.dt/3))[0]
+
+
+def test_reverse_warm_start_can_recover_forward_and_compares_both_seeds():
+    core = planner()
+    core.cur_vel_array[0, :] = -.12
+    # Close enough to exercise avoidance but offset so a forward route exists.
+    points = np.vstack((np.full(11, 1.), np.linspace(.1, .74, 11)))
+    action, info = core(np.zeros((3,1)), points, measured_velocity=np.zeros((2,1)))
+    modes = {c["seed_mode"] for c in info["avoidance_candidates"]}
+    assert {"forward", "reverse"} <= modes
+    assert not info["stop"]
+    assert action[0,0] > 0, (action, info["avoidance_candidates"])

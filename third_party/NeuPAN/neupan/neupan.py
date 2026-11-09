@@ -356,9 +356,12 @@ class neupan(torch.nn.Module):
         if previous_side in (-1, 1) and self.preferred_avoidance_mode is not None:
             initial_mode = self.preferred_avoidance_mode
         if explore:
+            # Compare both initial longitudinal directions in the same solve.
+            # The execution gear is not evidence that a direction is blocked.
             sides = ((previous_side,) if previous_side in (-1, 1) else (1, -1))
             for side in sides:
-                enqueue(side, initial_mode)
+                enqueue(side, "forward")
+                enqueue(side, "reverse")
         # Try the other seed direction or bypass side when the first choice
         # is not feasible. These are optimization initializations only.
         first_side = previous_side if previous_side in (-1, 1) else 1
