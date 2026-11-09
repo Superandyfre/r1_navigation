@@ -520,6 +520,19 @@ void NeuPANController::setPlan(const nav_msgs::msg::Path & path)
     if (publish_path) {
       handover_envelope_ = path_published_ && sameGoal(goal, published_goal_) && !shadow_mode_ ?
         envelope_ : Envelope{};
+      // A proof can promote a newer source between control cycles. Snapshot
+      // the actual authorized old-route source, not a possibly older envelope.
+      if (path_published_ && sameGoal(goal, published_goal_) && !shadow_mode_) {
+        const auto & accepted = execution_->latestSource();
+        if (accepted && accepted->context.path == path_version_ && accepted->context.goal == goal_version_) {
+          handover_envelope_.linear_x=accepted->linear;handover_envelope_.angular_z=accepted->angular;
+          handover_envelope_.planner_result_monotonic=accepted->published;
+          handover_envelope_.planner_input_monotonic=accepted->input;
+          handover_envelope_.worker_generation=accepted->context.generation;
+          handover_envelope_.path_version=accepted->context.path;handover_envelope_.goal_version=accepted->context.goal;
+          handover_envelope_.valid=true;handover_envelope_.received_at=std::chrono::steady_clock::now();
+        }
+      }
       ++path_version_;
       published_path_ = navigation_path;
       path_published_ = true;
@@ -673,15 +686,46 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = monotonicNow();
     const bool owner_ready = ownerReadyLocked(now);
+    // The old route may have gained a newly validated pending result while
+    // the new route is solving. Keep its handover snapshot in step with it.
+    const auto & old_source = execution_->handoverSource();
+    if (handover_envelope_.valid && old_source &&
+        old_source->context.path == handover_envelope_.path_version &&
+        old_source->context.goal == handover_envelope_.goal_version &&
+        old_source->published != handover_envelope_.planner_result_monotonic) {
+      handover_envelope_.linear_x=old_source->linear;handover_envelope_.angular_z=old_source->angular;
+      handover_envelope_.planner_result_monotonic=old_source->published;
+      handover_envelope_.planner_input_monotonic=old_source->input;
+      handover_envelope_.worker_generation=old_source->context.generation;
+      handover_envelope_.received_at=std::chrono::steady_clock::now();
+    }
     // Continue the original still-fresh command until Guard acknowledges the
     // new route. Once it does, expose the new validated source to the normal
     // acceleration-limited smoother; Guard independently matches that raw
     // target to a recent new-route result before committing.
     if (owner_ready && handover_envelope_.valid &&
       execution_->handoverPermitted(now, handover_envelope_.planner_result_monotonic)) {
+      const auto & accepted = execution_->latestSource();
+      if (accepted && accepted->context.path == path_version_ &&
+          accepted->context.goal == goal_version_ &&
+          (!envelope_.valid || envelope_.planner_result_monotonic != accepted->published)) {
+        envelope_.linear_x=accepted->linear;envelope_.angular_z=accepted->angular;
+        envelope_.planner_result_monotonic=accepted->published;envelope_.planner_input_monotonic=accepted->input;
+        envelope_.worker_generation=accepted->context.generation;envelope_.path_version=accepted->context.path;
+        envelope_.goal_version=accepted->context.goal;envelope_.valid=true;
+        envelope_.received_at=std::chrono::steady_clock::now();
+      }
+      const auto new_action = continuation_enabled_ ? execution_->handoverNewAction(now) : std::nullopt;
       const bool use_new = envelope_.valid &&
-        execution_->handoverNewPermitted(now, handover_envelope_.planner_result_monotonic);
-      const auto & selected = use_new ? envelope_ : handover_envelope_;
+        execution_->handoverNewPermitted(now, handover_envelope_.planner_result_monotonic) &&
+        (execution_->handoverNewSourceFresh(now) || new_action.has_value());
+      auto selected = use_new ? envelope_ : handover_envelope_;
+      if (use_new && new_action) {
+        selected.linear_x=new_action->at(0);selected.angular_z=new_action->at(1);
+      } else if (!use_new && continuation_enabled_) {
+        const auto action = execution_->handoverContinuationAction(now);
+        if (action) {selected.linear_x=action->at(0);selected.angular_z=action->at(1);}
+      }
       const double min_linear = allow_reverse_ ? -max_reverse_ : 0.0;
       if (!finite(selected.linear_x) || !finite(selected.angular_z) ||
         selected.linear_x < min_linear - kActuatorLimitRepresentationEpsilon ||

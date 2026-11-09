@@ -343,6 +343,20 @@ class N116Node(N115Node):
         return tuple(source[key] for key in ("authority_boot_id", "controller_boot_id",
             "navigation_attempt_id", "worker_boot_id", "worker_generation", "path_version", "goal_version"))
 
+    @staticmethod
+    def _continuation_context_is_live(parent, active):
+        """A previous route can be rechecked only within its live attempt."""
+        if active is None:
+            return False
+        fields = active.fields()
+        try:
+            return (all(parent[k] == v for k, v in fields.items()
+                        if k not in ("path_version", "goal_version")) and
+                    parent["path_version"] <= fields["path_version"] and
+                    parent["goal_version"] <= fields["goal_version"])
+        except (KeyError, TypeError):
+            return False
+
     def _continuation_tick(self) -> None:
         """Prepare evidence only; authority and motion remain downstream."""
         worker = self._continuation_worker
@@ -353,7 +367,7 @@ class N116Node(N115Node):
         with self.state_lock:
             parent = self._continuation_parent
             active = self._execution_store.active
-            if parent is None or active is None or any(parent[k] != v for k,v in active.fields().items()):
+            if parent is None or not self._continuation_context_is_live(parent, active):
                 return
         snapshot = worker.snapshot()
         if snapshot["failure"]:
@@ -375,8 +389,8 @@ class N116Node(N115Node):
                              make_trajectory_proof(parent, Continuation(**result), sequence, now))
                 with self.state_lock:
                     current = self._execution_store.active
-                    if (proof is not None and self._continuation_parent is parent and current is not None and
-                            all(parent[k] == v for k,v in current.fields().items()) and
+                    if (proof is not None and self._continuation_parent is parent and
+                            self._continuation_context_is_live(parent, current) and
                             (event.get("outcome") == "obstacle_conflict" or
                              self.scan_counter == event["scan_counter"])):
                         message = String();message.data = json.dumps(proof,allow_nan=False,sort_keys=True)
@@ -414,8 +428,8 @@ class N116Node(N115Node):
             return
         with self.state_lock:
             current = self._execution_store.active
-            if (self._continuation_parent is not parent or current is None or self.scan_counter != scan or
-                    any(parent[k] != v for k,v in current.fields().items())):
+            if (self._continuation_parent is not parent or self.scan_counter != scan or
+                    not self._continuation_context_is_live(parent, current)):
                 return
             if worker.submit(context=self._continuation_context(parent),scan_counter=scan,
                     scan_received_monotonic=scene["scan_received_monotonic"],

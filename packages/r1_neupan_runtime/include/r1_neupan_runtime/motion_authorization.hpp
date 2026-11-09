@@ -172,9 +172,9 @@ public:
       throw std::invalid_argument("trajectory_source_mismatch");
     }
     source_=source;step_=step;controls_=controls;sequence_=0;scan_=source.scan;
-    observation_time_=source.input;last_.reset();
+    observation_time_=source.input;last_.reset();proofs_.clear();
   }
-  void clear() {source_.reset();controls_.clear();last_.reset();sequence_=0;scan_=0;observation_time_=0.;}
+  void clear() {source_.reset();controls_.clear();last_.reset();proofs_.clear();sequence_=0;scan_=0;observation_time_=0.;}
 
   bool accept(const Json & j, double now, double input_timeout)
   {
@@ -197,7 +197,7 @@ public:
           !j.at("valid").is_boolean()) {return false;}
       if (!j.at("valid").get<bool>()) {
         // A newer failed revalidation revokes an earlier proof immediately.
-        sequence_=sequence;scan_=scan;observation_time_=scan_time;last_.reset();return true;
+        sequence_=sequence;scan_=scan;observation_time_=scan_time;last_.reset();proofs_.clear();return true;
       }
       const double at_start=(started-plan_start)/step_, at_end=(done-plan_start)/step_,
         at_now=(now-plan_start)/step_;
@@ -207,20 +207,47 @@ public:
       const auto & command=j.at("command");
       const double linear=requiredNumber(command,"linear_x",false), angular=requiredNumber(command,"angular_z",false);
       if (std::abs(linear-expected[0])>1e-7 || std::abs(angular-expected[1])>1e-7) {return false;}
-      sequence_=sequence;scan_=scan;observation_time_=scan_time;last_=j;return true;
+      sequence_=sequence;scan_=scan;observation_time_=scan_time;last_=j;proofs_.push_back(j);
+      while (proofs_.size()>32) {proofs_.pop_front();}
+      return true;
     } catch (const std::exception &) {return false;}
   }
   const std::optional<Json> & latest() const {return last_;}
   double observationTime() const {return observation_time_;}
   std::int64_t observationScan() const {return scan_;}
   std::optional<std::array<double,2>> action(double now, double input_timeout) const
+  {return last_ ? actionFrom(*last_,now,input_timeout) : std::nullopt;}
+  std::optional<std::array<double,2>> acknowledgedAction(
+    double now, double input_timeout, std::int64_t acknowledged_scan) const
   {
-    if (!source_ || !last_ || !std::isfinite(now) || !std::isfinite(input_timeout) || input_timeout<=0.) {
+    // Guard and Controller receive the same proof on different callbacks.
+    // Reuse an earlier, still-fresh proof that Guard has actually acknowledged
+    // while a newer proof is in flight; never extend its original timestamps.
+    for (auto it=proofs_.rbegin();it!=proofs_.rend();++it) {
+      if (it->at("scan_counter").get<std::int64_t>() <= acknowledged_scan) {
+        const auto value=actionFrom(*it,now,input_timeout);
+        if (value) {return value;}
+      }
+    }
+    return std::nullopt;
+  }
+  bool commandMatches(double linear, double angular, double raw_time, double now, double timeout) const
+  {
+    if (!action(now, timeout) || !source_ || !std::isfinite(raw_time) || raw_time > now) {return false;}
+    const double knot = (raw_time - source_->published) / step_;
+    if (knot < 0. || knot >= controls_.size()) {return false;}
+    const auto & expected = controls_[static_cast<std::size_t>(knot)];
+    return std::abs(linear - expected[0]) <= 1e-7 && std::abs(angular - expected[1]) <= 1e-7;
+  }
+private:
+  std::optional<std::array<double,2>> actionFrom(const Json & proof, double now, double input_timeout) const
+  {
+    if (!source_ || !std::isfinite(now) || !std::isfinite(input_timeout) || input_timeout<=0.) {
       return std::nullopt;
     }
-    const double scan=last_->at("scan_receive_monotonic").get<double>();
-    const double pose=last_->at("pose_receive_monotonic").get<double>();
-    const double issued=last_->at("published_monotonic").get<double>();
+    const double scan=proof.at("scan_receive_monotonic").get<double>();
+    const double pose=proof.at("pose_receive_monotonic").get<double>();
+    const double issued=proof.at("published_monotonic").get<double>();
     if (now<issued || now-scan>input_timeout || now-pose>input_timeout || now-issued>input_timeout) {
       return std::nullopt;
     }
@@ -228,12 +255,12 @@ public:
     if (knot<0. || knot>=controls_.size()) {return std::nullopt;}
     return controls_[static_cast<std::size_t>(knot)];
   }
-private:
   std::optional<Source> source_;
   double step_{0.}, observation_time_{0.};
   std::vector<std::array<double,2>> controls_;
   std::int64_t sequence_{0},scan_{0};
   std::optional<Json> last_;
+  std::deque<Json> proofs_;
 };
 
 struct AuthorizationConfig
@@ -341,6 +368,18 @@ public:
         candidate.input < handover_source_->input || candidate.solved <= handover_source_->solved)) {
         return;  // an earlier computation cannot become the new route result
       }
+      // A new route solve can also predate the newest observation already
+      // used to validate the old route. Stage it until its own proof catches up.
+      if (!source_ && handover_source_ && config_.continuation_enabled &&
+          (candidate.scan < validated_scan_ || candidate.input < validated_input_)) {
+        if (candidate.trajectory.empty()) {return;}
+        if (pending_source_ && (candidate.request <= pending_source_->request ||
+            candidate.cycle <= pending_source_->cycle || candidate.scan <= pending_source_->scan ||
+            candidate.solved <= pending_source_->solved)) {return;}
+        pending_source_ = candidate;
+        pending_continuation_.install(candidate,candidate.trajectory_step,candidate.trajectory);
+        return;
+      }
       if (source_ && candidate.context == source_->context) {
         // A later revalidation has seen a newer scene. A solve computed from
         // an older scan must never overwrite it, especially after wall denial.
@@ -387,10 +426,68 @@ public:
 
   void continuation(const Json & j, double now)
   {
-    if (!config_.continuation_enabled || faulted() || !committed_ || !grant_ || !source_ ||
-        !(source_->context == *grant_)) {return;}
+    if (!config_.continuation_enabled || faulted() || !grant_) {return;}
+    if (!committed_ && handover_source_ && handover_pending_source_ && j.is_object() &&
+        j.contains("parent_request_id") && j["parent_request_id"].is_number_integer() &&
+        j["parent_request_id"] == handover_pending_source_->request &&
+        j.contains("scan_counter") && j["scan_counter"].is_number_integer() &&
+        j["scan_counter"].get<std::int64_t>() >= validated_scan_ &&
+        j.contains("scan_receive_monotonic") && j["scan_receive_monotonic"].is_number() &&
+        j["scan_receive_monotonic"].get<double>() >= validated_input_ &&
+        handover_pending_continuation_.accept(j,now,config_.input_timeout)) {
+      validated_scan_=handover_pending_continuation_.observationScan();
+      validated_input_=handover_pending_continuation_.observationTime();
+      if (j.at("valid").get<bool>()) {
+        // Guard may receive this proof just before Controller. Retain the
+        // previously certified command only for its unextended validity.
+        handover_previous_source_=handover_source_;
+        handover_previous_continuation_=handover_continuation_;
+        handover_source_=*handover_pending_source_;
+        handover_continuation_=std::move(handover_pending_continuation_);
+        handover_rejected_=false;
+      } else {
+        handover_continuation_.clear();handover_previous_source_.reset();
+        handover_previous_continuation_.clear();handover_rejected_=true;
+      }
+      handover_pending_source_.reset();handover_pending_continuation_.clear();
+      if (source_ && (source_->scan < validated_scan_ || source_->input < validated_input_)) {
+        if (!source_->trajectory.empty()) {
+          pending_source_=*source_;
+          pending_continuation_.install(*source_,source_->trajectory_step,source_->trajectory);
+        } else {pending_source_.reset();pending_continuation_.clear();}
+        source_.reset();handover_new_sources_.clear();
+      }
+      return;
+    }
+    if (!committed_ && handover_source_ && j.is_object() &&
+        j.contains("scan_counter") && j["scan_counter"].is_number_integer() &&
+        j["scan_counter"].get<std::int64_t>() >= validated_scan_ &&
+        j.contains("scan_receive_monotonic") && j["scan_receive_monotonic"].is_number() &&
+        j["scan_receive_monotonic"].get<double>() >= validated_input_ &&
+        handover_continuation_.accept(j,now,config_.input_timeout)) {
+      validated_scan_ = handover_continuation_.observationScan();
+      validated_input_ = handover_continuation_.observationTime();
+      handover_rejected_ = !j.at("valid").get<bool>();
+      if (handover_rejected_) {handover_previous_source_.reset();handover_previous_continuation_.clear();}
+      // Delayed old-route proof may carry a newer scene than an already
+      // received new-route solve. Require that solve to catch up as well.
+      if (source_ && (source_->scan < validated_scan_ || source_->input < validated_input_)) {
+        if (!source_->trajectory.empty()) {
+          pending_source_ = *source_;
+          pending_continuation_.install(*source_,source_->trajectory_step,source_->trajectory);
+        } else {pending_source_.reset();pending_continuation_.clear();}
+        source_.reset();handover_new_sources_.clear();
+      }
+      return;
+    }
+    if (!committed_ && !handover_source_) {return;}
+    if (committed_ && (!source_ || !(source_->context == *grant_))) {return;}
     if (pending_source_ && j.is_object() && j.contains("parent_request_id") &&
         j["parent_request_id"].is_number_integer() && j["parent_request_id"]==pending_source_->request &&
+        j.contains("scan_counter") && j["scan_counter"].is_number_integer() &&
+        j["scan_counter"].get<std::int64_t>() >= validated_scan_ &&
+        j.contains("scan_receive_monotonic") && j["scan_receive_monotonic"].is_number() &&
+        j["scan_receive_monotonic"].get<double>() >= validated_input_ &&
         pending_continuation_.accept(j,now,config_.input_timeout)) {
       validated_scan_=pending_continuation_.observationScan();
       validated_input_=pending_continuation_.observationTime();
@@ -398,14 +495,20 @@ public:
         source_=*pending_source_;
         continuation_=std::move(pending_continuation_);
         continuation_rejected_=false;
+        if (handover_source_) {
+          handover_new_sources_.push_back(*source_);
+          while (handover_new_sources_.size() > 16) {handover_new_sources_.pop_front();}
+        }
       } else {
         // A newly seen wall invalidates both the new plan and old proof.
         continuation_.clear();continuation_rejected_=true;
+        handover_continuation_.clear();handover_previous_source_.reset();
+        handover_previous_continuation_.clear();handover_rejected_=true;
       }
       pending_source_.reset();pending_continuation_.clear();
       return;
     }
-    if (continuation_.accept(j,now,config_.input_timeout)) {
+    if (committed_ && continuation_.accept(j,now,config_.input_timeout)) {
       validated_scan_=continuation_.observationScan();
       validated_input_=continuation_.observationTime();
       continuation_rejected_ = !j.at("valid").get<bool>();
@@ -419,10 +522,44 @@ public:
     return continuation_.action(now,config_.input_timeout);
   }
 
+  std::optional<std::array<double,2>> handoverAction(double now) const
+  {
+    if (!config_.continuation_enabled || handover_rejected_ || !handover_source_ || !grant_ ||
+        committed_ || handover_source_->context.attempt != grant_->attempt) {return std::nullopt;}
+    return handover_continuation_.action(now,config_.input_timeout);
+  }
+  bool handoverMatchesOldCommand(double linear, double angular, double raw_time, double now) const
+  {
+    if (!handoverFresh(now) || !handover_source_) {return false;}
+    if (sourceFresh(*handover_source_,now) && linear == handover_source_->linear &&
+        angular == handover_source_->angular) {return true;}
+    if (handoverAction(now) && handover_continuation_.commandMatches(
+        linear,angular,raw_time,now,config_.input_timeout)) {return true;}
+    if (!handover_previous_source_) {return false;}
+    if (sourceFresh(*handover_previous_source_,now) && linear == handover_previous_source_->linear &&
+        angular == handover_previous_source_->angular) {return true;}
+    return handover_previous_continuation_.commandMatches(
+      linear,angular,raw_time,now,config_.input_timeout);
+  }
+  std::optional<std::array<double,2>> continuationAcknowledgedAction(double now, std::int64_t scan) const
+  {
+    if (!config_.continuation_enabled || continuation_rejected_ || !committed_ || !grant_ ||
+        !source_ || !(source_->context == *grant_)) {return std::nullopt;}
+    return continuation_.acknowledgedAction(now,config_.input_timeout,scan);
+  }
+  std::optional<std::array<double,2>> handoverAcknowledgedAction(double now, std::int64_t scan) const
+  {
+    if (!handoverAction(now)) {return std::nullopt;}
+    return handover_continuation_.acknowledgedAction(now,config_.input_timeout,scan);
+  }
   std::int64_t continuationScan(double now) const
-  {return continuationAction(now).has_value() ? validated_scan_ : 0;}
+  {return (continuationAction(now) || handoverAction(now)) ? validated_scan_ : 0;}
   std::int64_t continuationParent(double now) const
-  {return continuationAction(now).has_value() && source_ ? source_->request : 0;}
+  {
+    if (continuationAction(now) && source_) {return source_->request;}
+    if (handoverAction(now) && handover_source_) {return handover_source_->request;}
+    return 0;
+  }
 
   void authorization(const Json & j, double now)
   {
@@ -443,7 +580,7 @@ public:
         if (grant_ && grant_->attempt == context.attempt) {
           retired_grants_.insert(grant_id_);
           grant_.reset(); committed_ = false; grant_id_.clear(); source_stale_since_.reset();
-          handover_source_.reset(); handover_new_sources_.clear();
+          handover_source_.reset(); handover_continuation_.clear(); handover_pending_source_.reset(); handover_pending_continuation_.clear(); handover_previous_source_.reset(); handover_previous_continuation_.clear(); handover_rejected_=false; handover_new_sources_.clear();
           pending_source_.reset();pending_continuation_.clear();continuation_.clear();
         }
         return;
@@ -454,9 +591,16 @@ public:
       if (ever_prepared_ && (context.authority_boot != authority_boot_ ||
         context.controller_boot != controller_boot_)) {latch("authority_instance_changed"); return;}
       if (context.authority_boot == authority_boot_ && sequence <= authority_sequence_) {return;}
-      if (!healthReady(now) || context.worker_boot != health_boot_ ||
-        context.generation != health_generation_ || context.attempt != health_attempt_)
-      {return;}
+      if (!healthReady(now)) {
+        // Keep the authority lease alive during a brief health gap. This
+        // never grants motion or admits a new context while health is absent.
+        if (grant_ && context == *grant_ && id == grant_id_) {
+          authority_sequence_ = sequence;authority_time_ = timestamp;
+        }
+        return;
+      }
+      if (context.worker_boot != health_boot_ || context.generation != health_generation_ ||
+          context.attempt != health_attempt_) {return;}
       if (state == "PREPARE") {
         if (!task_failed_attempt_.empty()) {return;}
         if (grant_ && !(context == *grant_)) {
@@ -468,8 +612,23 @@ public:
           {return;}
           // Same-attempt revision may temporarily keep the already-authorized
           // source, without changing or refreshing its original timestamps.
-          handover_source_ = committed_ && freshSource(now) ? source_ : std::nullopt;
+          if (committed_ && freshSource(now)) {
+            handover_pending_source_.reset();handover_pending_continuation_.clear();
+            handover_previous_source_.reset();handover_previous_continuation_.clear();
+            handover_source_ = source_;
+            handover_continuation_ = continuation_;
+            handover_rejected_ = continuation_rejected_;
+          } else if (!handoverFresh(now)) {
+            handover_source_.reset();handover_continuation_.clear();handover_pending_source_.reset();handover_pending_continuation_.clear();handover_previous_source_.reset();handover_previous_continuation_.clear();handover_rejected_=false;
+          }
           handover_new_sources_.clear();
+          // The previous route may already have a newer solve awaiting its
+          // first proof. Preserve that pending plan across the revision.
+          if (pending_source_ && handover_source_ && pending_source_->context == handover_source_->context) {
+            handover_pending_source_=pending_source_;
+            handover_pending_continuation_=pending_continuation_;
+          }
+          pending_source_.reset();pending_continuation_.clear();
           retired_grants_.insert(grant_id_);
           committed_ = false;
           source_stale_since_.reset();
@@ -498,7 +657,10 @@ public:
     if (faulted()) {return {false, true, "FAULT_LATCHED", fault_};}
     if (!task_failed_attempt_.empty()) {return {false, true, "TASK_FAILED", "planner_result_recovery_timeout"};}
     if (!grant_) {return {};}
-    if (!healthReady(now)) {latch("worker_health_stale"); return evaluate(now);}
+    if (!healthReady(now)) {
+      if (!source_stale_since_) {source_stale_since_ = now;}
+      return {false, false, "WORKER_HEALTH_HOLD", "worker_health_stale"};
+    }
     if (now < authority_time_ || now - authority_time_ > config_.authority_timeout) {
       latch("navigation_authority_stale"); return evaluate(now);
     }
@@ -541,19 +703,40 @@ public:
   const std::optional<Source> & handoverSource() const {return handover_source_;}
   bool handoverFresh(double now) const
   {
-    return handover_source_ && sourceFresh(*handover_source_, now) &&
+    return handover_source_ && !handover_rejected_ &&
+      (sourceFresh(*handover_source_, now) || handoverAction(now).has_value()) &&
       health_payload_.value("planner_state", "ready") == "ready" &&
       handover_source_->request > health_payload_.value("planner_failed_request_id", -1LL);
   }
+  bool handoverNewSourceFresh(double now) const
+  {return !committed_ && source_ && grant_ && source_->context == *grant_ && sourceFresh(*source_,now);}
+  std::optional<std::array<double,2>> handoverNewAction(double now) const
+  {
+    if (!config_.continuation_enabled || committed_ || continuation_rejected_ || !source_ || !grant_ ||
+        !(source_->context == *grant_)) {return std::nullopt;}
+    return continuation_.action(now,config_.input_timeout);
+  }
+  std::optional<std::array<double,2>> handoverNewAcknowledgedAction(double now, std::int64_t scan) const
+  {
+    if (!handoverNewAction(now)) {return std::nullopt;}
+    return continuation_.acknowledgedAction(now,config_.input_timeout,scan);
+  }
+  std::int64_t handoverNewParent(double now) const
+  {return handoverNewAction(now) && source_ ? source_->request : 0;}
+  std::int64_t handoverNewScan(double now) const
+  {return handoverNewAction(now) ? continuation_.observationScan() : 0;}
   bool handoverMatchesNewCommand(double linear, double angular, double raw_time, double now) const
   {
     if (!handoverFresh(now) || !grant_ || !std::isfinite(linear) || !std::isfinite(angular) ||
       !std::isfinite(raw_time) || raw_time > now) {return false;}
     for (auto it = handover_new_sources_.rbegin(); it != handover_new_sources_.rend(); ++it) {
-      if (it->context == *grant_ && sourceFresh(*it, now) && it->published <= raw_time &&
+      const bool original = sourceFresh(*it, now) && it->linear == linear && it->angular == angular;
+      const bool certified = source_ && it->sameContents(*source_) && handoverNewAction(now) &&
+        continuation_.commandMatches(linear,angular,raw_time,now,config_.input_timeout);
+      if (it->context == *grant_ && (original || certified) && it->published <= raw_time &&
         it->request > handover_source_->request && it->cycle > handover_source_->cycle &&
         it->scan > handover_source_->scan && it->input >= handover_source_->input &&
-        it->solved > handover_source_->solved && it->linear == linear && it->angular == angular &&
+        it->solved > handover_source_->solved &&
         it->request > health_payload_.value("planner_failed_request_id", -1LL)) {return true;}
     }
     return false;
@@ -566,9 +749,7 @@ private:
   void expireExistingGrant(double now)
   {
     if (faulted() || !grant_) {return;}
-    if (!healthReady(now)) {
-      latch("worker_health_stale");
-    } else if (now < authority_time_ || now - authority_time_ > config_.authority_timeout) {
+    if (now < authority_time_ || now - authority_time_ > config_.authority_timeout) {
       latch("navigation_authority_stale");
     } else if (source_stale_since_ && now - *source_stale_since_ > config_.recovery_timeout) {
       // Retire this attempt and its grant, not the healthy Worker. A late
@@ -576,7 +757,7 @@ private:
       task_failed_attempt_ = grant_->attempt;
       retired_.insert(grant_->attempt);
       retired_grants_.insert(grant_id_);
-      grant_.reset(); source_.reset(); handover_source_.reset(); handover_new_sources_.clear(); source_stale_since_.reset();
+      grant_.reset(); source_.reset(); handover_source_.reset(); handover_continuation_.clear(); handover_pending_source_.reset(); handover_pending_continuation_.clear(); handover_previous_source_.reset(); handover_previous_continuation_.clear(); handover_rejected_=false; handover_new_sources_.clear(); source_stale_since_.reset();
       grant_id_.clear(); committed_ = false;
     }
   }
@@ -597,7 +778,8 @@ private:
   bool freshSource(double now) const
   {
     return source_ && grant_ && source_->context == *grant_ && !continuation_rejected_ &&
-      (sourceFresh(*source_, now) || continuationAction(now).has_value());
+      (sourceFresh(*source_, now) || continuationAction(now).has_value() ||
+       handoverNewAction(now).has_value());
   }
   bool sourceFresh(const Source & source, double now) const
   {
@@ -622,11 +804,11 @@ private:
   bool ever_prepared_{false}, committed_{false};
   std::optional<Context> grant_;
   std::optional<Source> source_;
-  TrajectoryProofVerifier continuation_, pending_continuation_;
-  std::optional<Source> pending_source_;
+  TrajectoryProofVerifier continuation_, pending_continuation_, handover_continuation_, handover_pending_continuation_, handover_previous_continuation_;
+  std::optional<Source> pending_source_, handover_pending_source_, handover_previous_source_;
   std::int64_t validated_scan_{0};
   double validated_input_{0.};
-  bool continuation_rejected_{false};
+  bool continuation_rejected_{false}, handover_rejected_{false};
   std::optional<Source> handover_source_;
   std::deque<Source> handover_new_sources_;
   std::optional<double> source_stale_since_;

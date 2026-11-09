@@ -559,8 +559,8 @@ private:
       if (authorization_decision_.state == "ROUTE_HANDOVER") {
         const auto & old = authorization_->handoverSource();
         const double raw_time = std::chrono::duration<double>(source_command_received_.time_since_epoch()).count();
-        const bool old_raw = old && source_command_.linear.x == old->linear &&
-          source_command_.angular.z == old->angular;
+        const bool old_raw = old && authorization_->handoverMatchesOldCommand(
+          source_command_.linear.x, source_command_.angular.z, raw_time, monotonicNow());
         const bool new_raw = authorization_->handoverMatchesNewCommand(
           source_command_.linear.x, source_command_.angular.z, raw_time, monotonicNow());
         if (!source_command_available_ || !source_command_valid_ || (!old_raw && !new_raw)) {
@@ -641,6 +641,8 @@ private:
         {"authorization_protocol", "r1_neupan_motion_grant_v1"},
         {"health_protocol", r1_neupan_runtime::kHealthSchema}, {"source_protocol", "r1_neupan_planner_source_v2"}, {"build_revision", R1_FAILSTOP_BUILD_REVISION},
         {"route_handover_seamless_ready", seamlessHandoverReady(monotonicNow())},
+        {"handover_new_parent_request_id", authorization_->handoverNewParent(monotonicNow())},
+        {"handover_new_scan_counter", authorization_->handoverNewScan(monotonicNow())},
         {"command_barrier_ready", seamlessHandoverReady(monotonicNow()) ||
           command_barrier_.ready(monotonicNow(), source_command_timeout_sec_, command_timeout_sec_)},
         {"sequence", ++status_sequence_}, {"monotonic", monotonicNow()},

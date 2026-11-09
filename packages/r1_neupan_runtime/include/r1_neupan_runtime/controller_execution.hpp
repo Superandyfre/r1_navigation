@@ -166,14 +166,13 @@ public:
   const std::optional<Source> & latestSource() const {return monitor_.latestSource();}
   std::optional<std::array<double,2>> continuationAction(double now) const
   {
-    const auto action=monitor_.continuationAction(now);
     const auto & source=monitor_.latestSource();
-    if (!action || !source || !freshGuard(now) || !matchingGuardContext() ||
-        guard_payload_.value("continuation_parent_request_id",0LL)!=source->request ||
-        guard_payload_.value("continuation_scan_counter",0LL)<monitor_.continuationScan(now)) {
+    if (!source || !freshGuard(now) || !matchingGuardContext() ||
+        guard_payload_.value("continuation_parent_request_id",0LL)!=source->request) {
       return std::nullopt;
     }
-    return action;
+    return monitor_.continuationAcknowledgedAction(now,
+      guard_payload_.value("continuation_scan_counter",0LL));
   }
 
   void check(const std::string & authority, const std::string & attempt, double now)
@@ -199,7 +198,8 @@ public:
       health_payload_.value("navigation_attempt_id", Json()) != attempt_)) {return std::nullopt;}
     const bool matched = matchingGuardContext();
     const auto & current_source = monitor_.latestSource();
-    if (prepared_ && matched && current_source && freshSource(*current_source, now) &&
+    if (prepared_ && matched && current_source &&
+      (freshSource(*current_source, now) || handoverNewAction(now).has_value()) &&
       guard_payload_.value("command_barrier_ready", false) &&
       (guard_payload_.value("authorization_state", "") == "PREPARED" ||
        guard_payload_.value("authorization_state", "") == "ROUTE_HANDOVER") &&
@@ -223,6 +223,8 @@ public:
            matchingGuardContext();
   }
 
+  const std::optional<Source> & handoverSource() const {return monitor_.handoverSource();}
+
   bool handoverPermitted(double now, double source_published)
   {
     watchdog(now);
@@ -237,6 +239,32 @@ public:
     try {
       return state == "ARMED" && parseContext(guard_payload_) == monitor_.handoverSource()->context;
     } catch (const std::exception &) {return false;}
+  }
+
+  std::optional<std::array<double,2>> handoverContinuationAction(double now) const
+  {
+    const auto & source = monitor_.handoverSource();
+    if (!source || !freshGuard(now) ||
+        guard_payload_.value("continuation_parent_request_id",0LL) != source->request) {
+      return std::nullopt;
+    }
+    try {
+      const auto guard_context = parseContext(guard_payload_);
+      if (!(guard_context == source->context) && !matchingGuardContext()) {return std::nullopt;}
+    } catch (const std::exception &) {return std::nullopt;}
+    return monitor_.handoverAcknowledgedAction(now,
+      guard_payload_.value("continuation_scan_counter",0LL));
+  }
+
+  bool handoverNewSourceFresh(double now) const {return monitor_.handoverNewSourceFresh(now);}
+  std::optional<std::array<double,2>> handoverNewAction(double now) const
+  {
+    if (!freshGuard(now) || !matchingGuardContext() ||
+        guard_payload_.value("handover_new_parent_request_id",0LL) != monitor_.handoverNewParent(now)) {
+      return std::nullopt;
+    }
+    return monitor_.handoverNewAcknowledgedAction(now,
+      guard_payload_.value("handover_new_scan_counter",0LL));
   }
 
   bool handoverNewPermitted(double now, double source_published)
@@ -315,18 +343,6 @@ private:
            now >= s.solved && now - s.solved <= config_.source_timeout &&
            now >= s.input && now - s.input <= config_.input_timeout;
   }
-  bool effectiveHealthReady(double now) const
-  {
-    if (health_time_ <= 0 || now < health_time_) {return false;}
-    const double age = now - health_time_;
-    if (age <= config_.health_timeout) {return true;}
-    const auto & source = monitor_.latestSource();
-    return age <= config_.health_timeout + config_.source_timeout && source &&
-      source->context.worker_boot == health_boot_ &&
-      source->context.generation == worker_generation_ && freshSource(*source, now) &&
-      health_payload_.value("planner_state", "ready") == "ready" &&
-      source->request > health_payload_.value("planner_failed_request_id", -1LL);
-  }
   void watchdog(double now)
   {
     if (!active_ || faulted()) {return;}
@@ -334,8 +350,6 @@ private:
       fail("action_loop_stale");
     } else if (!freshGuard(now)) {
       fail("guard_status_stale");
-    } else if (now - started_ > config_.health_timeout && !effectiveHealthReady(now)) {
-      fail("worker_health_stale");
     } else if (route_wait_since_ && now - *route_wait_since_ > config_.recovery_timeout) {
       task_failure_ = "route_source_timeout";
     } else if (!first_source_ && now - started_ > startup_timeout_) {

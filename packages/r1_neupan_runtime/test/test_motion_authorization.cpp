@@ -147,6 +147,104 @@ TEST(ContinuationAuthorization, ProofCannotReplaceWorkerHeartbeat) {
  gate.continuation(continuationProof(),100.56);
  EXPECT_EQ(gate.evaluate(100.56).reason,"worker_health_stale");
 }
+TEST(ContinuationAuthorization, RouteHandoverKeepsFreshProofAndNewWallRevokes) {
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.3,2),100.3);gate.authorization(grant("COMMIT",100.3,3),100.3);
+ gate.health(health(100.55,3),100.55);gate.authorization(grant("COMMIT",100.55,4),100.55);
+ gate.continuation(continuationProof(),100.56);
+ auto next=grant("PREPARE",100.56,5);next["path_version"]=2;next["goal_version"]=1;next["grant_id"]="grant-b";
+ gate.authorization(next,100.56);
+ EXPECT_EQ(gate.evaluate(100.57).state,"ROUTE_HANDOVER");
+ ASSERT_TRUE(gate.handoverAction(100.57));EXPECT_DOUBLE_EQ(gate.handoverAction(100.57)->at(0),.2);
+ EXPECT_TRUE(gate.handoverMatchesOldCommand(.2,0.,100.56,100.57));
+ EXPECT_FALSE(gate.handoverMatchesOldCommand(.9,0.,100.56,100.57));
+ auto deny=continuationProof(false);deny["sequence"]=2;deny["scan_counter"]=3;
+ deny["scan_receive_monotonic"]=100.57;deny["pose_receive_monotonic"]=100.57;
+ deny["validation_started_monotonic"]=100.58;deny["validated_monotonic"]=100.59;
+ deny["published_monotonic"]=100.60;gate.continuation(deny,100.61);
+ EXPECT_FALSE(gate.handoverAction(100.61));EXPECT_FALSE(gate.evaluate(100.61).allowed);
+}
+TEST(ContinuationAuthorization, RouteResultOlderThanOldRouteProofMustBeRevalidated) {
+ AuthorizationConfig c;c.continuation_enabled=true;c.source_timeout=.1;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.3,2),100.3);gate.authorization(grant("COMMIT",100.3,3),100.3);
+ gate.health(health(100.55,3),100.55);gate.authorization(grant("COMMIT",100.55,4),100.55);
+ gate.continuation(continuationProof(),100.56);
+ auto next=grant("PREPARE",100.56,5);next["path_version"]=2;next["goal_version"]=1;next["grant_id"]="grant-b";
+ gate.authorization(next,100.56);
+ auto candidate=source(100.56,2);candidate["path_version"]=2;candidate["goal_version"]=1;
+ candidate["trajectory"]={{"step_sec",.25},{"controls",{{.1,.2},{.15,-.1},{.2,0.}}}};
+ gate.source(candidate,100.56);EXPECT_FALSE(gate.latestSource());
+ auto proof=continuationProof();proof["path_version"]=2;proof["goal_version"]=1;
+ proof["parent_request_id"]=2;proof["parent_cycle_id"]=2;proof["parent_scan_counter"]=2;
+ proof["scan_counter"]=3;proof["plan_started_monotonic"]=100.56;
+ proof["scan_receive_monotonic"]=100.59;proof["pose_receive_monotonic"]=100.59;
+ proof["validation_started_monotonic"]=100.60;proof["validated_monotonic"]=100.61;
+ proof["published_monotonic"]=100.62;proof["command"]={{"linear_x",.1},{"angular_z",.2}};
+ gate.continuation(proof,100.63);ASSERT_TRUE(gate.latestSource());
+ EXPECT_EQ(gate.latestSource()->request,2);EXPECT_EQ(gate.evaluate(100.63).state,"ROUTE_HANDOVER");
+ EXPECT_FALSE(gate.handoverNewSourceFresh(100.70));
+ ASSERT_TRUE(gate.handoverNewAction(100.70));
+ EXPECT_TRUE(gate.handoverMatchesNewCommand(.1,.2,100.69,100.70));
+ auto commit=next;commit["state"]="COMMIT";commit["sequence"]=6;commit["monotonic"]=100.70;
+ gate.authorization(commit,100.70);EXPECT_TRUE(gate.evaluate(100.70).allowed);
+ ASSERT_TRUE(gate.continuationAction(100.70));
+}
+TEST(ContinuationAuthorization, OldRouteDenialCannotOverrideNewerRouteObservation) {
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.3,2),100.3);gate.authorization(grant("COMMIT",100.3,3),100.3);
+ gate.health(health(100.55,3),100.55);gate.authorization(grant("COMMIT",100.55,4),100.55);
+ gate.continuation(continuationProof(),100.56);
+ auto next=grant("PREPARE",100.56,5);next["path_version"]=2;next["goal_version"]=1;next["grant_id"]="grant-b";
+ gate.authorization(next,100.56);
+ auto candidate=source(100.71,4);candidate["path_version"]=2;candidate["goal_version"]=1;
+ candidate["trajectory"]={{"step_sec",.25},{"controls",{{.1,.2},{.15,-.1}}}};
+ gate.source(candidate,100.71);ASSERT_TRUE(gate.latestSource());
+ auto old=continuationProof(false);old["sequence"]=2;old["scan_counter"]=3;
+ old["scan_receive_monotonic"]=100.57;old["pose_receive_monotonic"]=100.57;
+ old["validation_started_monotonic"]=100.58;old["validated_monotonic"]=100.59;
+ old["published_monotonic"]=100.60;gate.continuation(old,100.72);
+ EXPECT_TRUE(gate.handoverFresh(100.72));ASSERT_TRUE(gate.latestSource());
+ EXPECT_EQ(gate.latestSource()->request,4);
+}
+TEST(ContinuationAuthorization, PendingOldRoutePlanCanBeProvedAfterRevision) {
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.3,2),100.3);gate.authorization(grant("COMMIT",100.3,3),100.3);
+ gate.health(health(100.55,3),100.55);gate.authorization(grant("COMMIT",100.55,4),100.55);
+ gate.continuation(continuationProof(),100.56);
+ auto candidate=source(100.56,2);
+ candidate["trajectory"]={{"step_sec",.25},{"controls",{{.1,.2},{.15,-.1},{.2,0.}}}};
+ gate.source(candidate,100.56);ASSERT_EQ(gate.latestSource()->request,1);
+ auto next=grant("PREPARE",100.57,5);next["path_version"]=2;next["goal_version"]=1;next["grant_id"]="grant-b";
+ gate.authorization(next,100.57);ASSERT_EQ(gate.handoverSource()->request,1);
+ auto proof=continuationProof();proof["parent_request_id"]=2;proof["parent_cycle_id"]=2;
+ proof["parent_scan_counter"]=2;proof["scan_counter"]=3;proof["plan_started_monotonic"]=100.56;
+ proof["scan_receive_monotonic"]=100.59;proof["pose_receive_monotonic"]=100.59;
+ proof["validation_started_monotonic"]=100.60;proof["validated_monotonic"]=100.61;
+ proof["published_monotonic"]=100.62;proof["command"]={{"linear_x",.1},{"angular_z",.2}};
+ gate.continuation(proof,100.63);ASSERT_TRUE(gate.handoverSource());
+ EXPECT_EQ(gate.handoverSource()->request,2);ASSERT_TRUE(gate.handoverAction(100.63));
+ EXPECT_EQ(gate.evaluate(100.63).state,"ROUTE_HANDOVER");
+ EXPECT_TRUE(gate.handoverMatchesOldCommand(.2,0.,100.62,100.63)); // previous certified control
+ auto deny=proof;deny["valid"]=false;deny["sequence"]=2;deny["scan_counter"]=4;
+ deny["scan_receive_monotonic"]=100.64;deny["pose_receive_monotonic"]=100.64;
+ deny["validation_started_monotonic"]=100.65;deny["validated_monotonic"]=100.66;
+ deny["published_monotonic"]=100.67;gate.continuation(deny,100.68);
+ EXPECT_FALSE(gate.handoverMatchesOldCommand(.2,0.,100.62,100.68));
+ auto recovered=proof;recovered["sequence"]=3;recovered["scan_counter"]=5;
+ recovered["scan_receive_monotonic"]=100.69;recovered["pose_receive_monotonic"]=100.69;
+ recovered["validation_started_monotonic"]=100.70;recovered["validated_monotonic"]=100.71;
+ recovered["published_monotonic"]=100.72;gate.continuation(recovered,100.73);
+ ASSERT_TRUE(gate.handoverAction(100.73));
+ EXPECT_FALSE(gate.handoverMatchesOldCommand(.2,0.,100.62,100.73));
+}
 TEST_F(Gate, StartupIsDisarmedAndHealthySourceAloneNeverArms) {
   EXPECT_FALSE(gate.evaluate(100.).fault);
   gate.health(health(),100.); gate.source(source(),100.);
@@ -222,10 +320,15 @@ TEST_F(Gate, DuplicateSourceCannotBridgeMissingHealth) {
   gate.authorization(grant("COMMIT",100.55,4),100.55);
   EXPECT_EQ(gate.evaluate(100.55).reason,"worker_health_stale");
 }
-TEST_F(Gate, HealthTimeoutIsIndependentOfFreshSource) {
-  armed(); gate.source(source(),100.51);
-  gate.authorization(grant("COMMIT",100.51,3),100.51);
+TEST_F(Gate, HealthGapHoldsThenSameWorkerAndFreshSourceRecover) {
+  armed();gate.authorization(grant("COMMIT",100.3,3),100.3);
+  gate.authorization(grant("COMMIT",100.51,4),100.51);
   EXPECT_EQ(gate.evaluate(100.51).reason,"worker_health_stale");
+  EXPECT_FALSE(gate.faulted());
+  gate.health(health(100.52,2),100.52);
+  EXPECT_FALSE(gate.evaluate(100.52).allowed); // old source is still stale
+  gate.source(source(100.53,2),100.53);
+  EXPECT_TRUE(gate.evaluate(100.53).allowed);
 }
 TEST_F(Gate, AuthorityTimeoutIsIndependentOfHealthyWorkerAndSource) {
   armed(); gate.health(health(100.4,2),100.4); gate.source(source(100.4,2),100.4);
@@ -387,16 +490,33 @@ TEST_F(Gate, RecoveryDeadlineCannotBeExtendedByDuplicateOrLateFreshSource) {
   auto late=grant("PREPARE",105.62,29); gate.authorization(late,105.62);
   EXPECT_TRUE(gate.evaluate(105.62).allowed);
 }
-TEST_F(Gate, WorkerLossHasPriorityOverExpiredSourceTaskFailure) {
+TEST_F(Gate, LongHealthLossRetiresAttemptWithoutPermanentProcessFault) {
   armed();
-  gate.health(health(100.3,2),100.3);
-  gate.authorization(grant("COMMIT",100.3,3),100.3);
-  gate.health(health(100.55,3),100.55);
-  gate.authorization(grant("COMMIT",100.55,4),100.55);
-  EXPECT_EQ(gate.evaluate(100.55).state,"SOURCE_STALE_HOLD");
-  // Both the Worker lease and source recovery window have now expired.
-  EXPECT_EQ(gate.evaluate(106.).reason,"worker_health_stale");
-  EXPECT_TRUE(gate.faulted());
+  for (int i=1;i<=24;++i) {
+    const double now=100.+i*.25;
+    gate.authorization(grant("COMMIT",now,i+2),now);
+    gate.evaluate(now);
+  }
+  EXPECT_FALSE(gate.faulted());
+  EXPECT_EQ(gate.evaluate(106.).reason,"planner_result_recovery_timeout");
+  gate.health(health(106.,2),106.);
+  EXPECT_FALSE(gate.evaluate(106.).allowed); // retired attempt cannot revive
+}
+TEST_F(Gate, ANewAttemptCanStartAfterHealthRecoveryAndOldAttemptRevocation) {
+  armed();
+  for (int i=1;i<=24;++i) {
+    const double now=100.+i*.25;
+    gate.authorization(grant("COMMIT",now,i+2),now);
+    gate.evaluate(now);
+  }
+  EXPECT_EQ(gate.evaluate(106.).reason,"planner_result_recovery_timeout");
+  gate.authorization(grant("REVOKE",106.,27),106.);
+  auto h=health(106.01,2);h["navigation_attempt_id"]="attempt-b";gate.health(h,106.01);
+  auto p=grant("PREPARE",106.01,28);p["navigation_attempt_id"]="attempt-b";p["grant_id"]="grant-b";
+  gate.authorization(p,106.01);
+  auto fresh=source(106.02,2);fresh["navigation_attempt_id"]="attempt-b";gate.source(fresh,106.02);
+  p["state"]="COMMIT";p["sequence"]=29;p["monotonic"]=106.02;gate.authorization(p,106.02);
+  EXPECT_FALSE(gate.faulted());EXPECT_TRUE(gate.evaluate(106.02).allowed);
 }
 TEST_F(Gate, StartupPreparationDoesNotConsumeActiveRecoveryDeadline) {
   gate.health(health(),100.); gate.authorization(grant(),100.);
@@ -450,11 +570,12 @@ TEST_F(Gate, LateAuthorityHeartbeatCannotReviveExpiredGrantBeforeTimerTick) {
   gate.authorization(grant("COMMIT",100.51,3),100.51);
   EXPECT_EQ(gate.evaluate(100.51).reason,"navigation_authority_stale");
 }
-TEST_F(Gate, LateHealthCannotReviveExpiredWorkerBeforeTimerTick) {
+TEST_F(Gate, SameWorkerCanRecoverAfterHealthGapBeforeTimerTick) {
   armed();gate.authorization(grant("COMMIT",100.4,3),100.4);
   gate.health(health(100.51,2),100.51);
+  EXPECT_FALSE(gate.evaluate(100.51).allowed); // source still expired
   gate.source(source(100.51,2),100.51);
-  EXPECT_EQ(gate.evaluate(100.51).reason,"worker_health_stale");
+  EXPECT_TRUE(gate.evaluate(100.51).allowed);
 }
 TEST_F(Gate, BootIdsDifferAcrossNewInstances) {
   EXPECT_NE(newBootId(),newBootId());

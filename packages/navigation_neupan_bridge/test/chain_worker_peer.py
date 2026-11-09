@@ -126,8 +126,22 @@ def main():
     from r1_neupan_integration.solver_status import RecoverableSolveError
     remaining_solver_failures = 0
     original_solve = node.client.solve
+    route_delay = float(os.environ.get("NEUPAN_TEST_ROUTE_SOLVE_DELAY", "0"))
+    cycle_delay = float(os.environ.get("NEUPAN_TEST_CYCLE_SOLVE_DELAY", "0"))
+    first_route = None
+    delayed_routes = set()
     def recoverable_solve(*args, **kwargs):
-        nonlocal remaining_solver_failures
+        nonlocal remaining_solver_failures, first_route
+        if route_delay > 0 and real_solver:
+            version = args[3]
+            if first_route is None:
+                first_route = version
+            elif version > first_route and version not in delayed_routes:
+                delayed_routes.add(version)
+                print("ISOLATED_ROUTE_SOLVE_DELAY", version, route_delay, flush=True)
+                time.sleep(route_delay)
+        if cycle_delay > 0 and real_solver:
+            time.sleep(cycle_delay)
         result = original_solve(*args, **kwargs)
         if remaining_solver_failures:
             remaining_solver_failures -= 1

@@ -20,7 +20,7 @@ class RearWallContinuation(chain.FailstopChainROS):
     controller_parameters_override=dict(continuation_enabled=True,max_linear=.5,max_reverse=.5,allow_reverse=True)
     guard_parameters_override=dict(continuation_enabled=True,max_linear_mps=.5,max_reverse_mps=.5)
     smoother_parameters_override=dict(max_velocity=[.5,0.,.4],min_velocity=[-.5,0.,-.4])
-    expected_plugin_root='/tmp/continuation-wiring-install'
+    expected_plugin_root=os.environ.get('NEUPAN_TEST_ROUTE_PLUGIN_ROOT','/tmp/continuation-wiring-install')
     def setUp(self):
         self.wall=False;self.next_scene=0.;self.proofs=[]
         super().setUp()

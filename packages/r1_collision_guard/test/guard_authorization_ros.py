@@ -49,6 +49,8 @@ class GuardAuthorizationROS(unittest.TestCase):
             'planner_source_timeout_sec': '0.30', 'planner_input_timeout_sec': '0.40',
             'planner_recovery_timeout_sec': '1.0',
         }
+        if "continuation" in self._testMethodName:
+            params["continuation_enabled"] = "true"
         if "localization_hold" in self._testMethodName:
             params["require_localization_ready"] = "true"
             params["localization_health_topic"] = "/test_wp2/localization"
@@ -64,6 +66,7 @@ class GuardAuthorizationROS(unittest.TestCase):
             ('input',Twist),('raw',Twist),('scan',LaserScan),('odom',Odometry),
             ('health',String),('source',String),('grant',String),('footprint',PolygonStamped),('provenance',Float64MultiArray)]}
         self.pubs["localization"] = self.node.create_publisher(String, "/test_wp2/localization", 20)
+        self.pubs["continuation"] = self.node.create_publisher(String, "/neupan_trajectory_proof", 20)
         self.localization_state = "READY"
         self.health_seq = self.source_seq = self.grant_seq = 0
         self.next_input=0
@@ -97,7 +100,7 @@ class GuardAuthorizationROS(unittest.TestCase):
 
     def context(self):
         return dict(authority_boot_id='authority-a', controller_boot_id='controller-a',
-                    navigation_attempt_id='attempt-a', worker_boot_id=self.worker_boot,
+                    navigation_attempt_id=getattr(self,'attempt','attempt-a'), worker_boot_id=self.worker_boot,
                     worker_generation=self.generation,path_version=getattr(self,'route',1),goal_version=getattr(self,'route',1)-1)
 
     def publish_json(self,key,payload):
@@ -126,7 +129,7 @@ class GuardAuthorizationROS(unittest.TestCase):
                 self.health_seq+=1
                 self.publish_json('health',dict(schema='r1_neupan_worker_health_v2',planner_state='ready',planner_failed_request_id=-1,boot_id=self.worker_boot,
                     sequence=self.health_seq,state='RUNNING',worker_generation=self.generation,
-                    navigation_attempt_id='attempt-a',monotonic=now,fault_id=None,fault_code=None))
+                    navigation_attempt_id=getattr(self,'attempt','attempt-a'),monotonic=now,fault_id=None,fault_code=None))
             if self.source_enabled:
                 if not self.duplicate or self.old_source is None:
                     self.source_seq+=1
@@ -135,6 +138,8 @@ class GuardAuthorizationROS(unittest.TestCase):
                         scan_receive_monotonic=now-self.input_age,request_dispatched_monotonic=now-.008,
                         worker_solve_end_monotonic=now-.003,planner_result_monotonic=now,
                         command=dict(linear_x=self.result_linear,angular_z=.0))
+                    if "continuation" in self._testMethodName:
+                        source["trajectory"] = dict(step_sec=.25, controls=[[self.result_linear,0.]]*12)
                     self.old_source=source
                 source=json.loads(json.dumps(self.old_source))
                 if self.corrupt_duplicate:source['command']['linear_x']=.15
@@ -176,7 +181,8 @@ class GuardAuthorizationROS(unittest.TestCase):
 
     def assert_stopped(self,reason):
         start=time.monotonic()
-        self.until(lambda:self.statuses[-1]['reason']==reason)
+        self.until(lambda:self.statuses[-1]['reason']==reason and
+                   self.statuses[-1].get('monotonic',0.)>=start)
         settled=time.monotonic()+.04
         while time.monotonic()<settled:self.tick()
         mark=time.monotonic()
@@ -321,6 +327,105 @@ class GuardAuthorizationROS(unittest.TestCase):
         self.health_enabled=False
         self.assert_stopped('worker_health_stale')
 
+    def test_route_continuation_keeps_output_during_delayed_new_solve(self):
+        # Old source and every proof are immutable test records. No solver or
+        # hardware is run; this checks the real Guard publication chain.
+        self.source_enabled=False
+        start=time.monotonic()
+        while time.monotonic()<start+.06:self.tick()
+        parent=dict(self.old_source);proof_seq=0
+        def issue_proof():
+            nonlocal proof_seq
+            now=time.monotonic();proof_seq+=1
+            proof={k:parent[k] for k in ("authority_boot_id","controller_boot_id","navigation_attempt_id",
+                "worker_boot_id","worker_generation","path_version","goal_version")}
+            proof.update(schema="r1_neupan_trajectory_proof_v1", sequence=proof_seq,
+                parent_request_id=parent["request_id"],parent_cycle_id=parent["cycle_id"],
+                parent_scan_counter=parent["scan_counter"],scan_counter=parent["scan_counter"]+proof_seq,
+                plan_started_monotonic=parent["planner_result_monotonic"],scan_receive_monotonic=now-.001,
+                pose_receive_monotonic=now-.001,validation_started_monotonic=now,
+                validated_monotonic=now,published_monotonic=now,valid=True,command=parent["command"])
+            self.publish_json("continuation",proof)
+        issue_proof()
+        self.until(lambda:self.statuses[-1].get("continuation_parent_request_id")==parent["request_id"])
+        self.route=2;self.grant_id="grant-route-2";self.grant_state="PREPARE"
+        changed=time.monotonic()
+        self.until(lambda:self.statuses[-1].get("authorization_state")=="ROUTE_HANDOVER")
+        until=changed+.75;next_proof=time.monotonic()
+        while time.monotonic()<until:
+            if time.monotonic()>=next_proof:
+                issue_proof();next_proof=time.monotonic()+.10
+            self.tick()
+        rows=[v for t,v,w in self.outputs if changed+.04<t<until-.04]
+        self.assertGreater(len(rows),15)
+        self.assertTrue(all(v>.05 for v in rows),rows)
+        self.assertEqual(self.statuses[-1]["authorization_state"],"ROUTE_HANDOVER")
+
+    def test_route_continuation_promotes_pending_old_plan(self):
+        self.source_enabled=False
+        until=time.monotonic()+.06
+        while time.monotonic()<until:self.tick()
+        old=dict(self.old_source)
+        def proof_for(parent, sequence, scan):
+            now=time.monotonic()
+            proof={k:parent[k] for k in ("authority_boot_id","controller_boot_id","navigation_attempt_id",
+                "worker_boot_id","worker_generation","path_version","goal_version")}
+            proof.update(schema="r1_neupan_trajectory_proof_v1",sequence=sequence,
+                parent_request_id=parent["request_id"],parent_cycle_id=parent["cycle_id"],
+                parent_scan_counter=parent["scan_counter"],scan_counter=scan,
+                plan_started_monotonic=parent["planner_result_monotonic"],scan_receive_monotonic=now-.001,
+                pose_receive_monotonic=now-.001,validation_started_monotonic=now,
+                validated_monotonic=now,published_monotonic=now,valid=True,command=parent["command"])
+            self.publish_json("continuation",proof);return now-.001
+        observed=proof_for(old,1,old["scan_counter"]+2)
+        self.until(lambda:self.statuses[-1].get("continuation_parent_request_id")==old["request_id"])
+        now=time.monotonic();pending=dict(old)
+        pending.update(request_id=old["request_id"]+1,cycle_id=old["cycle_id"]+1,
+            scan_counter=old["scan_counter"]+1,scan_receive_monotonic=observed-.002,
+            request_dispatched_monotonic=now-.002,worker_solve_end_monotonic=now-.001,
+            planner_result_monotonic=now)
+        pending["command"]={"linear_x":.2,"angular_z":0.}
+        pending["trajectory"]={"step_sec":.25,"controls":[[.2,0.]]*12}
+        self.publish_json("source",pending)
+        until=time.monotonic()+.06
+        while time.monotonic()<until:self.tick()
+        self.route=2;self.grant_id="grant-route-2";self.grant_state="PREPARE"
+        changed=time.monotonic()
+        self.until(lambda:self.statuses[-1].get("authorization_state")=="ROUTE_HANDOVER")
+        proof_for(pending,1,old["scan_counter"]+3)
+        self.until(lambda:self.statuses[-1].get("continuation_parent_request_id")==pending["request_id"])
+        until=time.monotonic()+.06
+        while time.monotonic()<until:self.tick()  # Controller still emits the preceding action.
+        self.command_value=.2
+        until=time.monotonic()+.12
+        while time.monotonic()<until:self.tick()
+        rows=[v for t,v,w in self.outputs if changed+.04<t<until]
+        self.assertGreater(len(rows),4)
+        self.assertTrue(all(v>.05 for v in rows),rows)
+
+    def test_same_worker_heartbeat_recovers_without_restarting_guard(self):
+        self.health_enabled=False
+        self.assert_stopped("worker_health_stale")
+        self.assertEqual(self.statuses[-1]["authorization_state"], "WORKER_HEALTH_HOLD")
+        self.health_enabled=True
+        cutoff=time.monotonic()
+        self.until(lambda:self.statuses[-1]["authorization_state"] == "ARMED" and
+                   any(t>cutoff and v>.05 for t,v,w in self.outputs),2.)
+
+    def test_new_goal_can_start_after_long_heartbeat_gap_and_revocation(self):
+        self.health_enabled=False
+        self.assert_stopped("planner_result_recovery_timeout")
+        self.command_value=0.;self.grant_state="REVOKE"
+        self.until(lambda:self.statuses[-1]["authorization_state"]=="DISARMED")
+        self.attempt="attempt-b";self.grant_id="grant-b";self.health_enabled=True
+        self.grant_state="PREPARE"
+        self.until(lambda:self.statuses[-1]["authorization_state"]=="PREPARED",3.)
+        self.until(lambda:self.statuses[-1].get("command_barrier_ready",False),3.)
+        self.grant_state="COMMIT"
+        self.until(lambda:self.statuses[-1]["authorization_state"]=="ARMED",3.)
+        self.command_value=.1;marker=time.monotonic()
+        self.until(lambda:any(t>marker and v>.05 for t,v,w in self.outputs),3.)
+
     def test_authority_dropout_stops_with_continuous_health_and_raw(self):
         self.grant_state=None
         self.assert_stopped('navigation_authority_stale')
@@ -356,7 +461,7 @@ class GuardAuthorizationROS(unittest.TestCase):
         rows=[r for r in self.outputs if r[0]>start+.55]
         self.assertTrue(rows)
         self.assertTrue(all(v>.05 for _,v,w in rows),rows)
-        self.assertEqual(self.statuses[-1]['reason'],'collision_check_disabled')
+        self.assertEqual(self.statuses[-1]['reason'],'planner_command')
 
     def test_old_input_is_not_laundered_by_fresh_result_publication(self):
         self.input_age=.8

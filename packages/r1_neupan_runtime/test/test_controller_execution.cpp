@@ -81,8 +81,89 @@ TEST(ControllerContinuation, RequiresGuardAcknowledgementOfSamePlanAndScan) {
  ack["continuation_parent_request_id"]=1;ack["continuation_scan_counter"]=2;
  runtime.guard(ack,100.57);ASSERT_TRUE(runtime.continuationAction(100.57));
  EXPECT_DOUBLE_EQ(runtime.continuationAction(100.57)->at(0),.2);
- ack["sequence"]=7;ack["monotonic"]=100.58;ack["continuation_parent_request_id"]=2;
- runtime.guard(ack,100.58);EXPECT_FALSE(runtime.continuationAction(100.58));
+ // A later proof reaching Controller before Guard must not discard the
+ // still-fresh scan 2 proof that Guard already acknowledged.
+ auto later=proof;later["sequence"]=2;later["scan_counter"]=3;
+ later["scan_receive_monotonic"]=100.59;later["pose_receive_monotonic"]=100.59;
+ later["validation_started_monotonic"]=100.60;later["validated_monotonic"]=100.61;
+ later["published_monotonic"]=100.62;runtime.continuation(later,100.63);
+ ASSERT_TRUE(runtime.continuationAction(100.63));
+ EXPECT_DOUBLE_EQ(runtime.continuationAction(100.63)->at(0),.2);
+ ack["sequence"]=7;ack["monotonic"]=100.64;ack["continuation_parent_request_id"]=2;
+ runtime.guard(ack,100.64);EXPECT_FALSE(runtime.continuationAction(100.64));
+ auto denied=later;denied["valid"]=false;denied["sequence"]=3;denied["scan_counter"]=4;
+ denied["scan_receive_monotonic"]=100.65;denied["pose_receive_monotonic"]=100.65;
+ denied["validation_started_monotonic"]=100.66;denied["validated_monotonic"]=100.67;
+ denied["published_monotonic"]=100.68;runtime.continuation(denied,100.69);
+ ack["sequence"]=8;ack["monotonic"]=100.70;ack["continuation_parent_request_id"]=1;
+ runtime.guard(ack,100.70);EXPECT_FALSE(runtime.continuationAction(100.70));
+}
+TEST(ControllerContinuation, RouteHandoverNeedsGuardAcknowledgementOfOldProof) {
+ AuthorizationConfig c;c.continuation_enabled=true;ControllerExecution runtime("controller-a",c);
+ runtime.guard(guard(),100.);ASSERT_TRUE(runtime.arm(100.,true));runtime.begin("authority-a","attempt-a",100.);
+ runtime.plan(1,0,100.);runtime.health(health(),100.);ASSERT_TRUE(runtime.tick(100.));
+ auto src=source();src["trajectory"]={{"step_sec",.25},{"controls",{{.1,0.},{.15,-.1},{.2,0.},{.25,0.}}}};
+ ASSERT_TRUE(runtime.source(src,100.));runtime.guard(guard(100.01,2,"PREPARED",runtime.grantId()),100.01);
+ ASSERT_TRUE(runtime.tick(100.01));runtime.guard(guard(100.02,3,"ARMED",runtime.grantId()),100.02);
+ runtime.health(health(100.3,2),100.3);runtime.guard(guard(100.3,4,"ARMED",runtime.grantId()),100.3);
+ runtime.check("authority-a","attempt-a",100.3);ASSERT_TRUE(runtime.tick(100.3));
+ runtime.health(health(100.55,3),100.55);runtime.guard(guard(100.55,5,"ARMED",runtime.grantId()),100.55);
+ runtime.check("authority-a","attempt-a",100.55);ASSERT_TRUE(runtime.tick(100.55));
+ auto proof=src;proof.erase("trajectory");proof["schema"]=kTrajectoryProofSchema;
+ proof["parent_request_id"]=1;proof["parent_cycle_id"]=1;proof["parent_scan_counter"]=1;
+ proof["sequence"]=1;proof["scan_counter"]=2;proof["plan_started_monotonic"]=100.;
+ proof["scan_receive_monotonic"]=100.52;proof["pose_receive_monotonic"]=100.52;
+ proof["validation_started_monotonic"]=100.53;proof["validated_monotonic"]=100.54;
+ proof["published_monotonic"]=100.55;proof["valid"]=true;
+ proof["command"]={{"linear_x",.2},{"angular_z",0.}};
+ runtime.continuation(proof,100.56);runtime.plan(2,1,100.56);ASSERT_TRUE(runtime.tick(100.56));
+ EXPECT_FALSE(runtime.handoverContinuationAction(100.56));
+ auto ack=guard(100.57,6,"ROUTE_HANDOVER",runtime.grantId());ack["path_version"]=2;ack["goal_version"]=1;
+ ack["continuation_parent_request_id"]=1;ack["continuation_scan_counter"]=2;
+ runtime.guard(ack,100.57);ASSERT_TRUE(runtime.handoverContinuationAction(100.57));
+ EXPECT_DOUBLE_EQ(runtime.handoverContinuationAction(100.57)->at(0),.2);
+ auto newer=proof;newer["sequence"]=2;newer["scan_counter"]=3;
+ newer["scan_receive_monotonic"]=100.59;newer["pose_receive_monotonic"]=100.59;
+ newer["validation_started_monotonic"]=100.60;newer["validated_monotonic"]=100.61;
+ newer["published_monotonic"]=100.62;runtime.continuation(newer,100.63);
+ ASSERT_TRUE(runtime.handoverContinuationAction(100.63));
+ EXPECT_DOUBLE_EQ(runtime.handoverContinuationAction(100.63)->at(0),.2);
+ ack["sequence"]=7;ack["monotonic"]=100.64;ack["continuation_parent_request_id"]=2;
+ runtime.guard(ack,100.64);EXPECT_FALSE(runtime.handoverContinuationAction(100.64));
+}
+TEST(ControllerContinuation, CertifiedNewRouteNeedsGuardAckBeforeCommit) {
+ AuthorizationConfig c;c.continuation_enabled=true;c.source_timeout=.1;ControllerExecution runtime("controller-a",c);
+ runtime.guard(guard(),100.);ASSERT_TRUE(runtime.arm(100.,true));runtime.begin("authority-a","attempt-a",100.);
+ runtime.plan(1,0,100.);runtime.health(health(),100.);ASSERT_TRUE(runtime.tick(100.));
+ auto src=source();src["trajectory"]={{"step_sec",.25},{"controls",{{.1,0.},{.15,-.1},{.2,0.},{.25,0.}}}};
+ ASSERT_TRUE(runtime.source(src,100.));runtime.guard(guard(100.01,2,"PREPARED",runtime.grantId()),100.01);
+ ASSERT_TRUE(runtime.tick(100.01));runtime.guard(guard(100.02,3,"ARMED",runtime.grantId()),100.02);
+ runtime.health(health(100.3,2),100.3);runtime.guard(guard(100.3,4,"ARMED",runtime.grantId()),100.3);
+ runtime.check("authority-a","attempt-a",100.3);ASSERT_TRUE(runtime.tick(100.3));
+ runtime.health(health(100.55,3),100.55);runtime.guard(guard(100.55,5,"ARMED",runtime.grantId()),100.55);
+ runtime.check("authority-a","attempt-a",100.55);ASSERT_TRUE(runtime.tick(100.55));
+ auto proof=src;proof.erase("trajectory");proof["schema"]=kTrajectoryProofSchema;
+ proof["parent_request_id"]=1;proof["parent_cycle_id"]=1;proof["parent_scan_counter"]=1;
+ proof["sequence"]=1;proof["scan_counter"]=2;proof["plan_started_monotonic"]=100.;
+ proof["scan_receive_monotonic"]=100.52;proof["pose_receive_monotonic"]=100.52;
+ proof["validation_started_monotonic"]=100.53;proof["validated_monotonic"]=100.54;
+ proof["published_monotonic"]=100.55;proof["valid"]=true;proof["command"]={{"linear_x",.2},{"angular_z",0.}};
+ runtime.continuation(proof,100.56);runtime.plan(2,1,100.56);ASSERT_TRUE(runtime.tick(100.56));
+ auto next=source(100.56,2,"attempt-a",2,1);
+ next["trajectory"]={{"step_sec",.25},{"controls",{{.1,0.},{.15,-.1},{.2,0.}}}};
+ EXPECT_FALSE(runtime.source(next,100.56));
+ auto checked=proof;checked["path_version"]=2;checked["goal_version"]=1;
+ checked["parent_request_id"]=2;checked["parent_cycle_id"]=2;checked["parent_scan_counter"]=2;
+ checked["scan_counter"]=3;checked["plan_started_monotonic"]=100.56;
+ checked["scan_receive_monotonic"]=100.59;checked["pose_receive_monotonic"]=100.59;
+ checked["validation_started_monotonic"]=100.60;checked["validated_monotonic"]=100.61;
+ checked["published_monotonic"]=100.62;checked["command"]={{"linear_x",.1},{"angular_z",0.}};
+ runtime.continuation(checked,100.63);EXPECT_FALSE(runtime.handoverNewAction(100.63));
+ auto ack=guard(100.70,6,"ROUTE_HANDOVER",runtime.grantId());ack["path_version"]=2;ack["goal_version"]=1;
+ ack["handover_new_parent_request_id"]=2;ack["handover_new_scan_counter"]=3;
+ runtime.guard(ack,100.70);ASSERT_TRUE(runtime.handoverNewAction(100.70));
+ ASSERT_FALSE(runtime.handoverNewSourceFresh(100.70));
+ const auto grant=runtime.tick(100.70);ASSERT_TRUE(grant);EXPECT_EQ((*grant)["state"],"COMMIT");
 }
 TEST_F(Execution, NoImplicitArmOrFirstResultAuthorization) {
   runtime.guard(guard(), 100.);
@@ -116,8 +197,13 @@ TEST_F(Execution, AdvancingResultsBridgeBriefMissingHealthWithoutStopping) {
   runtime.source(source(100.81,4),100.81);runtime.tick(100.81);
   EXPECT_TRUE(runtime.permitted(100.81));
   runtime.guard(guard(101.01,7,"ARMED",runtime.grantId()),101.01);
-  EXPECT_THROW(runtime.check("authority-a","attempt-a",101.01),std::exception);
-  EXPECT_EQ(runtime.fault(),"worker_health_stale");
+  EXPECT_NO_THROW(runtime.check("authority-a","attempt-a",101.01));
+  EXPECT_FALSE(runtime.permitted(101.01));
+  EXPECT_FALSE(runtime.faulted());
+  runtime.health(health(101.02,2),101.02);
+  runtime.source(source(101.02,5),101.02);
+  runtime.guard(guard(101.02,8,"ARMED",runtime.grantId()),101.02);
+  EXPECT_TRUE(runtime.permitted(101.02));
 }
 TEST_F(Execution, FatalReasonSurvivesTimerEndingExecution) {
   begin(); runtime.fail("worker_fault_latched"); runtime.end(100.01);

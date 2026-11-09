@@ -25,6 +25,22 @@ class Producer(unittest.TestCase):
         n._execution_store=SimpleNamespace(active=SimpleNamespace(fields=lambda:{
             'authority_boot_id':'authority','controller_boot_id':'controller',
             'navigation_attempt_id':'attempt','path_version':1,'goal_version':0}))
+    def test_old_route_only_remains_live_in_same_attempt(self):
+        n=self.node;t=self.now
+        value=Continuation(self.context,1,2,t-.3,t-.05,t-.05,t-.04,t-.03,.15,-.1,.05)
+        event={"scan_counter":2,"result":asdict(value)}
+        snapshot={"completed_sequence":1,"failure":None,"event":event}
+        n._continuation_worker.snapshot.return_value=snapshot
+        fields={"authority_boot_id":"authority","controller_boot_id":"controller",
+                "navigation_attempt_id":"attempt","path_version":2,"goal_version":1}
+        n._execution_store.active=SimpleNamespace(fields=lambda:fields)
+        n._continuation_tick();self.assertEqual(n._continuation_pub.publish.call_count,1)
+        for mutation in ({"navigation_attempt_id":"other"},{"authority_boot_id":"other"},
+                         {"controller_boot_id":"other"},{"path_version":0},{"goal_version":-1}):
+            old=fields.copy();fields.update(mutation);snapshot["completed_sequence"]+=1
+            n._continuation_tick();self.assertEqual(n._continuation_pub.publish.call_count,1,mutation)
+            fields.clear();fields.update(old)
+
     def test_unavailable_validation_does_not_publish_spurious_stop(self):
         n=self.node;t=self.now
         event={'scan_counter':2,'result':None,'outcome':'unavailable','scan_receive_monotonic':t-.05,
