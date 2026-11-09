@@ -44,7 +44,7 @@ class ShadowFilter(unittest.TestCase):
             "-p","additional_mesh_frames:=[held_object]",
             "-p","additional_mesh_uris:=["+uri+"]","-p","additional_mesh_scales:=[1.0]"],
             stdout=log,stderr=subprocess.STDOUT)
-        position=1.;right_position=2.;missing=False;last=0.
+        position=1.;right_position=2.;left_yaw=right_yaw=0.;missing=False;last=0.
         def tick():
             nonlocal last
             self.assertIsNone(proc.poll(),"shadow process exited")
@@ -56,8 +56,12 @@ class ShadowFilter(unittest.TestCase):
                     if missing and f==target:continue
                     t=TransformStamped();t.header.stamp=stamp;t.header.frame_id="base_link";t.child_frame_id=f;t.transform.rotation.w=1.
                     if f in ("lidar_link","other_lidar_link","laser_link"): pass
-                    elif f==target:t.transform.translation.x=position;t.transform.translation.z=-vz
-                    elif f==target_right:t.transform.translation.x=right_position;t.transform.translation.z=-vz
+                    elif f==target:
+                        t.transform.translation.x=position;t.transform.translation.z=-vz
+                        t.transform.rotation.z=math.sin(left_yaw/2);t.transform.rotation.w=math.cos(left_yaw/2)
+                    elif f==target_right:
+                        t.transform.translation.x=right_position;t.transform.translation.z=-vz
+                        t.transform.rotation.z=math.sin(right_yaw/2);t.transform.rotation.w=math.cos(right_yaw/2)
                     elif f=="held_object":t.transform.translation.x=2.5;t.transform.translation.z=-vz
                     else:t.transform.translation.x=20.
                     transforms.append(t)
@@ -153,6 +157,25 @@ class ShadowFilter(unittest.TestCase):
             until(lambda:any(json.loads(q).get("removed_by_mesh",{}).get(target_right,0)>0 for q in states),2.)
             self.assertTrue(any(e.get("reason")=="confirmed_link_echo" and e.get("mesh_frame")==target_right
                 for q in states for e in json.loads(q).get("removed_sample",[])))
+            # Each template follows its own complete rotation, not just translation.
+            left_yaw=.65;right_yaw=-.8;start=time.monotonic()
+            while time.monotonic()<start+.35:tick()
+            captured=node.get_clock().now();msg.header.stamp=captured.to_msg();ts=float(captured.nanoseconds)
+            lx=1.5+.3*math.cos(left_yaw);ly=.3*math.sin(left_yaw)
+            rx=2.1+.3*math.cos(right_yaw)-.2*math.sin(right_yaw)
+            ry=.3*math.sin(right_yaw)+.2*math.cos(right_yaw)
+            msg.width=4;msg.row_step=80
+            msg.data=struct.pack("<"+"fffd"*4,lx,ly,.3-vz,ts,rx,ry,.3-vz,ts,
+                1.8,0.,.3-vz,ts,2.4,.2,.3-vz,ts)
+            clouds.clear();states.clear();cp.publish(msg);until(lambda:bool(clouds),4.)
+            self.assertTrue(math.isnan(struct.unpack_from("<f",clouds[-1].data,0)[0]))
+            self.assertTrue(math.isnan(struct.unpack_from("<f",clouds[-1].data,20)[0]))
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,40)[0]))
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,60)[0]))
+            until(lambda:any(sum(e.get("reason")=="confirmed_link_echo" for e in
+                json.loads(q).get("removed_sample",[]))>=2 for q in states),2.)
+            left_yaw=right_yaw=0.;start=time.monotonic()
+            while time.monotonic()<start+.35:tick()
             msg.width=2;msg.row_step=40
             # Pause only one unchanged part TF for a short time. The filter
             # must emit an explicitly degraded, temporally bounded result
