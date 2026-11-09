@@ -171,9 +171,10 @@ public:
     if (std::abs(controls[0][0]-source.linear)>1e-7 || std::abs(controls[0][1]-source.angular)>1e-7) {
       throw std::invalid_argument("trajectory_source_mismatch");
     }
-    source_=source;step_=step;controls_=controls;sequence_=0;scan_=source.scan;last_.reset();
+    source_=source;step_=step;controls_=controls;sequence_=0;scan_=source.scan;
+    observation_time_=source.input;last_.reset();
   }
-  void clear() {source_.reset();controls_.clear();last_.reset();sequence_=0;scan_=0;}
+  void clear() {source_.reset();controls_.clear();last_.reset();sequence_=0;scan_=0;observation_time_=0.;}
 
   bool accept(const Json & j, double now, double input_timeout)
   {
@@ -196,7 +197,7 @@ public:
           !j.at("valid").is_boolean()) {return false;}
       if (!j.at("valid").get<bool>()) {
         // A newer failed revalidation revokes an earlier proof immediately.
-        sequence_=sequence;scan_=scan;last_.reset();return true;
+        sequence_=sequence;scan_=scan;observation_time_=scan_time;last_.reset();return true;
       }
       const double at_start=(started-plan_start)/step_, at_end=(done-plan_start)/step_,
         at_now=(now-plan_start)/step_;
@@ -207,10 +208,12 @@ public:
       const auto & command=j.at("command");
       const double linear=requiredNumber(command,"linear_x",false), angular=requiredNumber(command,"angular_z",false);
       if (std::abs(linear-expected[0])>1e-7 || std::abs(angular-expected[1])>1e-7) {return false;}
-      sequence_=sequence;scan_=scan;last_=j;return true;
+      sequence_=sequence;scan_=scan;observation_time_=scan_time;last_=j;return true;
     } catch (const std::exception &) {return false;}
   }
   const std::optional<Json> & latest() const {return last_;}
+  double observationTime() const {return observation_time_;}
+  std::int64_t observationScan() const {return scan_;}
   std::optional<std::array<double,2>> action(double now, double input_timeout) const
   {
     if (!source_ || !last_ || !std::isfinite(now) || !std::isfinite(input_timeout) || input_timeout<=0.) {
@@ -228,7 +231,7 @@ public:
   }
 private:
   std::optional<Source> source_;
-  double step_{0.};
+  double step_{0.}, observation_time_{0.};
   std::vector<std::array<double,2>> controls_;
   std::int64_t sequence_{0},scan_{0};
   std::optional<Json> last_;
@@ -340,6 +343,11 @@ public:
         return;  // an earlier computation cannot become the new route result
       }
       if (source_ && candidate.context == source_->context) {
+        // A later revalidation has seen a newer scene. A solve computed from
+        // an older scan must never overwrite it, especially after wall denial.
+        if (config_.continuation_enabled && committed_ && !source_->trajectory.empty() &&
+            (candidate.scan < continuation_.observationScan() ||
+             candidate.input < continuation_.observationTime())) {return;}
         if (candidate.sameIdentity(*source_)) {
           if (!candidate.sameContents(*source_)) {latch("duplicate_command_mismatch");}
           return;  // even exact duplicates do not refresh time or recovery

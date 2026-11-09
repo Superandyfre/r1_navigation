@@ -76,6 +76,24 @@ TEST(ContinuationAuthorization, NewWallRevokesEvenIfOriginalSourceIsStillFresh) 
  gate.continuation(deny,100.35);EXPECT_FALSE(gate.evaluate(100.35).allowed);
  // Only a new source may replace the original; an unrelated proof cannot.
 }
+TEST(ContinuationAuthorization, OlderSolveCannotOverwriteMoreRecentWallObservation) {
+ AuthorizationConfig c;c.continuation_enabled=true;MotionAuthorization gate("guard-a",c);
+ gate.health(health(),100.);gate.source(trajectorySource(),100.);gate.authorization(grant(),100.);
+ gate.authorization(grant("COMMIT",100.,2),100.);
+ gate.health(health(100.3,2),100.3);gate.authorization(grant("COMMIT",100.3,3),100.3);
+ gate.health(health(100.55,3),100.55);gate.authorization(grant("COMMIT",100.55,4),100.55);
+ gate.continuation(continuationProof(),100.56);
+ gate.source(source(100.56,2),100.56);  // its input was at 100.46, older than scan 100.52
+ ASSERT_TRUE(gate.latestSource());EXPECT_EQ(gate.latestSource()->request,1);
+ auto deny=continuationProof(false);deny["sequence"]=2;deny["scan_counter"]=3;
+ deny["scan_receive_monotonic"]=100.57;deny["pose_receive_monotonic"]=100.57;
+ deny["validation_started_monotonic"]=100.58;deny["validated_monotonic"]=100.59;
+ deny["published_monotonic"]=100.60;gate.continuation(deny,100.61);
+ gate.source(source(100.65,3),100.65);  // input 100.55 predates the new wall
+ EXPECT_EQ(gate.latestSource()->request,1);EXPECT_FALSE(gate.evaluate(100.65).allowed);
+ gate.source(source(100.70,4),100.70);  // input 100.60 sees the new wall
+ EXPECT_EQ(gate.latestSource()->request,4);EXPECT_TRUE(gate.evaluate(100.70).allowed);
+}
 TEST(ContinuationAuthorization, DisabledOrCancelledNeverAllowsProof) {
  MotionAuthorization gate("guard-a");gate.health(health(),100.);gate.source(trajectorySource(),100.);
  gate.authorization(grant(),100.);gate.authorization(grant("COMMIT",100.,2),100.);
