@@ -3,11 +3,19 @@ import time
 import unittest
 from pathlib import Path
 import numpy as np
-from r1_neupan_integration.continuation_worker import ContinuationWorker
+from r1_neupan_integration.continuation_worker import ContinuationWorker, _result_is_relevant
 
 ROOT=Path(__file__).resolve().parents[3]
 
 class ContinuationWorkerTest(unittest.TestCase):
+    def test_older_confirmed_obstacle_is_not_hidden_by_a_queued_scan(self):
+        event={'type':'result','epoch':3,'sequence':8,'result':None,'outcome':'obstacle_conflict'}
+        self.assertTrue(_result_is_relevant(event,3,9,7))
+        self.assertFalse(_result_is_relevant(dict(event,outcome='unavailable'),3,9,7))
+        self.assertFalse(_result_is_relevant(dict(event,result={'valid':True}),3,9,7))
+        self.assertFalse(_result_is_relevant(event,4,9,7))
+        self.assertFalse(_result_is_relevant(event,3,9,8))
+
     def test_new_wall_and_cancel_do_not_reuse_previous_result(self):
         worker=ContinuationWorker(ROOT/'packages/navigation_neupan_bridge/config/planner_r1_hw1.yaml',
             ROOT/'packages/r1_neupan_integration/config/models/dune_model_5000.pth')
@@ -40,6 +48,7 @@ class ContinuationWorkerTest(unittest.TestCase):
         event=worker.snapshot()['event']
         self.assertEqual(event['scan_counter'],3)
         self.assertIsNone(event['result'])
+        self.assertEqual(event['outcome'],'obstacle_conflict')
         self.assertLessEqual(event['validation_started_monotonic'],event['validated_monotonic'])
         worker.clear()
         self.assertIsNone(worker.snapshot()['result'])

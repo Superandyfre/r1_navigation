@@ -202,7 +202,7 @@ class neupan(torch.nn.Module):
                     states[-1], controls[:, t:t+1], self.robot.L, self.dt / subdivisions))
         return np.hstack(states)
 
-    def validate_remaining_trajectory(self, state, controls, elapsed, points, velocities=None):
+    def validate_remaining_trajectory(self, state, controls, elapsed, points, velocities=None, with_reason=False):
         """Re-evaluate a previously optimized control horizon with current observations.
 
         This is a NeuPAN geometry check, not a separate collision-distance policy.
@@ -215,8 +215,10 @@ class neupan(torch.nn.Module):
                 not np.isfinite(state).all() or not np.isfinite(controls).all() or
                 not np.isfinite(elapsed) or elapsed < 0. or self.dt <= 0.):
             raise ValueError("invalid_trajectory_continuation")
+        def outcome(value, reason):
+            return (value, reason) if with_reason else value
         if points is None:
-            return None  # missing sensor input is not an empty, clear scene
+            return outcome(None, "missing_scene")  # not an empty, clear scene
         points = np.asarray(points, dtype=np.float64)
         if points.ndim != 2 or points.shape[0] != 2 or not np.isfinite(points).all():
             raise ValueError("invalid_trajectory_obstacles")
@@ -226,12 +228,12 @@ class neupan(torch.nn.Module):
                 raise ValueError("invalid_trajectory_obstacle_velocity")
         index = int(elapsed / self.dt)
         if index >= controls.shape[1]:
-            return None  # a completed horizon cannot be renewed by a heartbeat
+            return outcome(None, "horizon_expired")  # heartbeat cannot renew a horizon
         remaining = controls[:, index:]
         if not points.shape[1]:
-            return remaining[:, 0].copy(), None
+            return outcome((remaining[:, 0].copy(), None), "validated")
         if self.pan.dune_layer is None:
-            return None  # absent robot-distance model cannot validate a scene
+            return outcome(None, "distance_model_unavailable")
         subdivisions = 3
         # The first knot is already partly elapsed. Propagate for exactly its
         # remaining duration before switching control; a full first knot can
@@ -250,8 +252,8 @@ class neupan(torch.nn.Module):
         distances = self._candidate_distances(states, points, velocities, sample_times=np.asarray(times))
         feasible = self._candidate_feasibility(distances)[0]
         if not feasible:
-            return None
-        return remaining[:, 0].copy(), float(np.min(distances))
+            return outcome(None, "obstacle_conflict")
+        return outcome((remaining[:, 0].copy(), float(np.min(distances))), "validated")
 
     def _candidate_distances(self, states, points, velocities=None, sample_dt=None, sample_times=None):
         """Evaluate DUNE's dual distances along an actual dynamics rollout."""

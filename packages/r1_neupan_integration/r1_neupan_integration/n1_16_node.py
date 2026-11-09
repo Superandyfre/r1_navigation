@@ -366,13 +366,19 @@ class N116Node(N115Node):
             try:
                 sequence = self._continuation_proof_sequence + 1
                 result = event.get("result")
-                proof = (make_trajectory_rejection(parent, event, sequence, now) if result is None else
-                         make_trajectory_proof(parent, Continuation(**result), sequence, now))
+                # Stale inputs and scheduling delays do not prove an obstacle;
+                # retain the previous still-valid proof across those gaps.
+                if result is None and event.get("outcome") != "obstacle_conflict":
+                    proof = None
+                else:
+                    proof = (make_trajectory_rejection(parent, event, sequence, now) if result is None else
+                             make_trajectory_proof(parent, Continuation(**result), sequence, now))
                 with self.state_lock:
                     current = self._execution_store.active
-                    if (self._continuation_parent is parent and current is not None and
+                    if (proof is not None and self._continuation_parent is parent and current is not None and
                             all(parent[k] == v for k,v in current.fields().items()) and
-                            self.scan_counter == event["scan_counter"]):
+                            (event.get("outcome") == "obstacle_conflict" or
+                             self.scan_counter == event["scan_counter"])):
                         message = String();message.data = json.dumps(proof,allow_nan=False,sort_keys=True)
                         self._continuation_pub.publish(message)
                         self._continuation_proof_sequence = sequence
@@ -388,6 +394,11 @@ class N116Node(N115Node):
             local = self.latest_local_scan_points.copy()
             stamp = self.latest_scan_stamp_sec
             received = self.latest_scan_receive_monotonic
+            # A scan received while the solve was in flight predates the
+            # published trajectory and cannot validate its later controls.
+            if received <= parent["planner_result_monotonic"]:
+                self._continuation_last_scan = scan
+                return
         def lookup_pose(stamp_sec):
             when = (rclpy.time.Time() if stamp_sec is None else
                     rclpy.time.Time(nanoseconds=int(round(stamp_sec * 1e9))))

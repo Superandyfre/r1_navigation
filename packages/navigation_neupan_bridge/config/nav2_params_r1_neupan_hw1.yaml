@@ -81,8 +81,8 @@ controller_server:
       guard_status_topic: "/r1_collision_guard/status"
       localization_health_topic: "/r1_localization_health"
       diagnostics_topic: "/neupan_controller_status"
-      # An old planner command is never reused. A stale envelope produces a
-      # fresh zero while waiting for a new solve, keeping the action alive.
+      # A validated remaining NeuPAN trajectory can bridge a short solve delay.
+      continuation_enabled: true
       envelope_timeout: 0.50
       worker_health_topic: /neupan_worker_health
       execution_context_topic: /neupan_execution_context

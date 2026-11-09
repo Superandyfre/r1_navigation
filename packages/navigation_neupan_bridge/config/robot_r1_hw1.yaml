@@ -80,6 +80,8 @@ n1_16_production_bridge:
     # bounds. The velocity smoother performs continuous reversals; an external
     # confirmation gate would inject zeros and discard the planner result.
     auto_gear_transition_enabled: false
+    # Continue only a NeuPAN trajectory revalidated against fresh observations.
+    continuation_enabled: true
     auto_gear_mismatch_deadband_mps: 0.025
     auto_gear_confirm_cycles: 5
     # A transient opposite signed NeuPAN sample must not start a base reversal.

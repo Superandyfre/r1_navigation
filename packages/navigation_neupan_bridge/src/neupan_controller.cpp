@@ -138,7 +138,12 @@ void NeuPANController::configure(
     declareIfMissing(node_, plugin_name_ + "." + pair.first, *pair.second);
     node_->get_parameter(plugin_name_ + "." + pair.first, *pair.second);
   }
+  declareIfMissing(node_, plugin_name_ + ".continuation_enabled", continuation_enabled_);
+  declareIfMissing(node_, plugin_name_ + ".continuation_proof_topic", continuation_proof_topic_);
+  node_->get_parameter(plugin_name_ + ".continuation_enabled", continuation_enabled_);
+  node_->get_parameter(plugin_name_ + ".continuation_proof_topic", continuation_proof_topic_);
   r1_neupan_runtime::AuthorizationConfig runtime_config;
+  runtime_config.continuation_enabled = continuation_enabled_;
   runtime_config.source_timeout = std::min(envelope_timeout_sec_, 0.5);
   runtime_config.recovery_timeout = envelope_recovery_timeout_sec_;
   for (auto pair : {std::make_pair("worker_health_timeout", &runtime_config.health_timeout),
@@ -264,6 +269,14 @@ void NeuPANController::configure(
   envelope_sub_ = node_->create_subscription<std_msgs::msg::String>(
     envelope_topic_, rclcpp::QoS(20),
     std::bind(&NeuPANController::envelopeCallback, this, std::placeholders::_1));
+  continuation_sub_ = node_->create_subscription<std_msgs::msg::String>(
+    continuation_proof_topic_, rclcpp::QoS(20), [this](std_msgs::msg::String::SharedPtr msg) {
+      if (shadow_mode_) {return;}
+      std::lock_guard<std::mutex> lock(mutex_);
+      try {
+        execution_->continuation(nlohmann::json::parse(msg->data),monotonicNow());
+      } catch (const std::exception &) { /* malformed proof cannot create authority */ }
+    });
   gate_command_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
     gate_command_topic_, rclcpp::QoS(20),
     std::bind(&NeuPANController::gateCommandCallback, this, std::placeholders::_1));
@@ -305,6 +318,7 @@ void NeuPANController::cleanup()
   goal_pub_.reset();
   diagnostics_pub_.reset();
   envelope_sub_.reset();
+  continuation_sub_.reset();
   gate_command_sub_.reset();
   gate_status_sub_.reset();
   guard_status_sub_.reset();
@@ -549,6 +563,7 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
   nav2_core::GoalChecker *)
 {
   Envelope envelope;
+  std::optional<std::array<double,2>> continuation_action;
   geometry_msgs::msg::Twist gate_command;
   GateStatus gate_status;
   GuardStatus guard_status;
@@ -691,6 +706,20 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
       geometry_msgs::msg::TwistStamped zero; zero.header = pose.header; zero.header.stamp = node_->now();
       return zero;
     }
+    if (continuation_enabled_ && !require_gate_match_) {
+      continuation_action = execution_->continuationAction(now);
+      if (continuation_action) {
+        const auto & source=execution_->latestSource();
+        if (source && (!envelope_.valid || source->published != envelope_.planner_result_monotonic)) {
+          envelope_.linear_x=source->linear;envelope_.angular_z=source->angular;
+          envelope_.planner_result_monotonic=source->published;envelope_.planner_input_monotonic=source->input;
+          envelope_.worker_generation=source->context.generation;envelope_.path_version=source->context.path;
+          envelope_.goal_version=source->context.goal;envelope_.valid=true;
+          envelope_.received_at=std::chrono::steady_clock::now();
+        }
+        envelope=envelope_;
+      }
+    }
   }
   if (!envelope.valid) {
     const auto startup_age = std::chrono::duration<double>(
@@ -723,8 +752,8 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
   const auto receive_age = std::chrono::duration<double>(
     std::chrono::steady_clock::now() - envelope.received_at).count();
   const auto planner_age = monotonicNow() - envelope.planner_result_monotonic;
-  if (receive_age > envelope_timeout_sec_ || planner_age < 0.0 ||
-      planner_age > envelope_timeout_sec_) {
+  if (!continuation_action && (receive_age > envelope_timeout_sec_ || planner_age < 0.0 ||
+      planner_age > envelope_timeout_sec_)) {
     const auto now = std::chrono::steady_clock::now();
     double recovery_age = 0.0;
     {
@@ -784,9 +813,16 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
     publishDiagnostic("error", detail);
     throw nav2_core::PlannerException(detail);
   }
-  const double bounded_linear = std::clamp(envelope.linear_x, minimum_linear, max_linear_);
-  const double bounded_angular = std::clamp(
-    envelope.angular_z, -max_angular_, max_angular_);
+  const double target_linear = continuation_action ? continuation_action->at(0) : envelope.linear_x;
+  const double target_angular = continuation_action ? continuation_action->at(1) : envelope.angular_z;
+  if (!finite(target_linear) || !finite(target_angular) ||
+      target_linear < minimum_linear-kActuatorLimitRepresentationEpsilon ||
+      target_linear > max_linear_+kActuatorLimitRepresentationEpsilon ||
+      std::abs(target_angular) > max_angular_+kActuatorLimitRepresentationEpsilon) {
+    throw nav2_core::PlannerException("NeuPAN continuation violates actuator limits");
+  }
+  const double bounded_linear = std::clamp(target_linear, minimum_linear, max_linear_);
+  const double bounded_angular = std::clamp(target_angular, -max_angular_, max_angular_);
   if (require_gate_match_ && !shadow_mode_) {
     const auto gate_status_age = std::chrono::duration<double>(
       std::chrono::steady_clock::now() - gate_status.received_at).count();
@@ -891,8 +927,17 @@ geometry_msgs::msg::TwistStamped NeuPANController::computeVelocityCommands(
       path_version_ != expected_path || goal_version_ != expected_goal ||
       !envelope_.valid || envelope_.planner_result_monotonic != envelope.planner_result_monotonic)
     {return command;}
-    command.twist.linear.x = bounded_linear;
-    command.twist.angular.z = bounded_angular;
+    if (continuation_action) {
+      // Recheck guard acknowledgement and freshness at the publication
+      // boundary; an expired or revoked certificate cannot carry motion.
+      const auto live = execution_->continuationAction(monotonicNow());
+      if (!live) {return command;}
+      command.twist.linear.x = std::clamp(live->at(0), minimum_linear, max_linear_);
+      command.twist.angular.z = std::clamp(live->at(1), -max_angular_, max_angular_);
+    } else {
+      command.twist.linear.x = bounded_linear;
+      command.twist.angular.z = bounded_angular;
+    }
   }
   publishDiagnostic("info", shadow_mode_ ? "shadow_envelope_valid" : "envelope_valid");
   return command;

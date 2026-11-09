@@ -10,6 +10,16 @@ import time
 import numpy as np
 
 
+def _result_is_relevant(message, epoch, latest_sequence, completed_sequence):
+    """Never drop an observed obstacle just because a newer scan is queued."""
+    sequence=message.get("sequence",0)
+    if message.get("epoch")!=epoch or sequence<=completed_sequence:
+        return False
+    return (sequence==latest_sequence or
+            (message.get("type")=="result" and message.get("result") is None and
+             message.get("outcome")=="obstacle_conflict"))
+
+
 def _run(conn, config_path, checkpoint_path):
     try:
         import torch
@@ -33,10 +43,10 @@ def _run(conn, config_path, checkpoint_path):
                     installed = key
                 scene = dict(job["scene"])
                 scene["now"] = time.monotonic()
-                result = engine.validate(**scene)
+                result, outcome = engine.validate_detailed(**scene)
                 finished = time.monotonic()
                 conn.send({"type": "result", "epoch": job["epoch"], "sequence": job["sequence"],
-                           "result": None if result is None else asdict(result),
+                           "result": None if result is None else asdict(result), "outcome": outcome,
                            "scan_counter": scene["scan_counter"],
                            "scan_receive_monotonic": scene["scan_received_monotonic"],
                            "pose_receive_monotonic": scene["pose_received_monotonic"],
@@ -87,7 +97,9 @@ class ContinuationWorker:
                 input_timeout=input_timeout,state=np.asarray(state,dtype=float).copy(),
                 points=None if points is None else np.asarray(points,dtype=float).copy())
             self._pending=dict(epoch=self._epoch,sequence=self._sequence,plan=self._plan,scene=scene)
-            self._result=None;self._event=None;return True
+            # Keep an unconsumed obstacle denial until the consumer sees it;
+            # submitting a newer scan must not erase that evidence.
+            return True
 
     def snapshot(self):
         with self._lock:
@@ -107,11 +119,11 @@ class ContinuationWorker:
                         elif kind=="fatal":self._failure=message.get("error","worker_failed")
                         else:
                             busy=False
-                            if message.get("epoch")==self._epoch and message.get("sequence")==self._sequence:
+                            if _result_is_relevant(message,self._epoch,self._sequence,self._completed_sequence):
                                 if kind=="error":self._failure=message.get("error","validation_failed")
                                 else:
                                     self._result=message.get("result");self._event=dict(message)
-                                    self._completed_sequence=self._sequence
+                                    self._completed_sequence=message["sequence"]
                 if not self._process.is_alive():
                     with self._lock:self._failure=self._failure or "continuation_worker_exited"
                     return

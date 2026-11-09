@@ -202,8 +202,7 @@ public:
       const double at_start=(started-plan_start)/step_, at_end=(done-plan_start)/step_,
         at_now=(now-plan_start)/step_;
       if (at_start<0. || at_end<0. || at_now<0. || at_start>=controls_.size() ||
-          at_end>=controls_.size() || at_now>=controls_.size() ||
-          static_cast<std::size_t>(at_start)!=static_cast<std::size_t>(at_end)) {return false;}
+          at_end>=controls_.size() || at_now>=controls_.size()) {return false;}
       const auto & expected=controls_[static_cast<std::size_t>(at_start)];
       const auto & command=j.at("command");
       const double linear=requiredNumber(command,"linear_x",false), angular=requiredNumber(command,"angular_z",false);
@@ -390,7 +389,8 @@ public:
   {
     if (!config_.continuation_enabled || faulted() || !committed_ || !grant_ || !source_ ||
         !(source_->context == *grant_)) {return;}
-    if (pending_source_ && j.is_object() && j.value("parent_request_id",-1LL)==pending_source_->request &&
+    if (pending_source_ && j.is_object() && j.contains("parent_request_id") &&
+        j["parent_request_id"].is_number_integer() && j["parent_request_id"]==pending_source_->request &&
         pending_continuation_.accept(j,now,config_.input_timeout)) {
       validated_scan_=pending_continuation_.observationScan();
       validated_input_=pending_continuation_.observationTime();
@@ -418,6 +418,11 @@ public:
         !source_ || !(source_->context == *grant_)) {return std::nullopt;}
     return continuation_.action(now,config_.input_timeout);
   }
+
+  std::int64_t continuationScan(double now) const
+  {return continuationAction(now).has_value() ? validated_scan_ : 0;}
+  std::int64_t continuationParent(double now) const
+  {return continuationAction(now).has_value() && source_ ? source_->request : 0;}
 
   void authorization(const Json & j, double now)
   {

@@ -38,11 +38,12 @@ TEST(TrajectoryProof, WrongTaskOrPlanCannotAuthorize) {
  p=proof();p["parent_request_id"]=2;EXPECT_FALSE(v.accept(p,100.33,.5));
  p=proof();p["plan_started_monotonic"]=100.01;EXPECT_FALSE(v.accept(p,100.33,.5));
 }
-TEST(TrajectoryProof, NoStaleInputsOrKnotCrossing) {
+TEST(TrajectoryProof, RejectsStaleInputsButAcceptsValidatedKnotCrossing) {
  auto v=verifier();auto p=proof();EXPECT_FALSE(v.accept(p,100.8,.5));
  p["pose_receive_monotonic"]=99.7;EXPECT_FALSE(v.accept(p,100.33,.5));
  p=proof();p["scan_receive_monotonic"]=99.9;EXPECT_FALSE(v.accept(p,100.33,.5));
- p=proof();p["validated_monotonic"]=100.51;p["published_monotonic"]=100.52;EXPECT_FALSE(v.accept(p,100.53,.5));
+ p=proof();p["validated_monotonic"]=100.51;p["published_monotonic"]=100.52;EXPECT_TRUE(v.accept(p,100.53,.5));
+ ASSERT_TRUE(v.action(100.53,.5));EXPECT_DOUBLE_EQ(v.action(100.53,.5)->at(0),.2);
 }
 TEST(TrajectoryProof, CannotChangeOrExtendOriginalControlHorizon) {
  auto v=verifier();auto p=proof();p["command"]["linear_x"]=-.5;EXPECT_FALSE(v.accept(p,100.33,.5));

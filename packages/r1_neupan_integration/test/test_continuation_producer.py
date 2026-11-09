@@ -25,6 +25,15 @@ class Producer(unittest.TestCase):
         n._execution_store=SimpleNamespace(active=SimpleNamespace(fields=lambda:{
             'authority_boot_id':'authority','controller_boot_id':'controller',
             'navigation_attempt_id':'attempt','path_version':1,'goal_version':0}))
+    def test_unavailable_validation_does_not_publish_spurious_stop(self):
+        n=self.node;t=self.now
+        event={'scan_counter':2,'result':None,'outcome':'unavailable','scan_receive_monotonic':t-.05,
+            'pose_receive_monotonic':t-.05,'validation_started_monotonic':t-.04,'validated_monotonic':t-.03}
+        n._continuation_worker.snapshot.return_value={'completed_sequence':1,'failure':None,'event':event}
+        n._continuation_tick()
+        n._continuation_pub.publish.assert_not_called()
+        self.assertEqual(n._continuation_proof_sequence,0)
+
     def test_positive_then_new_wall_rejection_and_cancel(self):
         n=self.node;t=self.now
         value=Continuation(self.context,1,2,t-.3,t-.05,t-.05,t-.04,t-.03,.15,-.1,.05)
@@ -34,7 +43,7 @@ class Producer(unittest.TestCase):
         self.assertTrue(first['valid']);self.assertEqual(first['parent_request_id'],1)
         self.assertEqual(first['scan_counter'],2);self.assertEqual(first['command']['linear_x'],.15)
         n.scan_counter=3
-        event={'scan_counter':3,'result':None,'scan_receive_monotonic':t-.02,
+        event={'scan_counter':3,'result':None,'outcome':'obstacle_conflict','scan_receive_monotonic':t-.02,
             'pose_receive_monotonic':t-.02,'validation_started_monotonic':t-.015,
             'validated_monotonic':t-.01}
         n._continuation_worker.snapshot.return_value={'completed_sequence':2,'failure':None,'event':event}

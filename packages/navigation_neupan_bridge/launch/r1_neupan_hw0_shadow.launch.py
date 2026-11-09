@@ -129,6 +129,8 @@ def _build(context):
                 "navigation_mode": "terminal",
                 "planner_result_topic": "/neupan_planner_result",
                 "require_execution_context": False,
+                # Shadow has no task grant and cannot issue continuation proofs.
+                "continuation_enabled": False,
                 "planner_context_topic": "/neupan_planner_context",
                 "bridge_status_topic": "/neupan_bridge_status",
                 "torch_num_threads": 8,

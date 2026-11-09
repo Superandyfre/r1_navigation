@@ -204,6 +204,9 @@ private:
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr diagnostics_pub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr envelope_sub_;
+  bool continuation_enabled_{false};
+  std::string continuation_proof_topic_{"/neupan_trajectory_proof"};
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr continuation_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr gate_command_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr gate_status_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr guard_status_sub_;

@@ -103,6 +103,8 @@ TEST(ContinuationAuthorization, OlderSolveIsPromotedOnlyAfterNewSceneValidation)
  gate.continuation(continuationProof(),100.56);ASSERT_TRUE(gate.evaluate(100.56).allowed);
  auto next=source(100.56,2);next["trajectory"]={{"step_sec",.25},{"controls",{{.1,.2},{.15,-.1},{.2,0.}}}};
  gate.source(next,100.56);ASSERT_EQ(gate.latestSource()->request,1);
+ auto malformed=continuationProof();malformed["parent_request_id"]="not-an-integer";
+ EXPECT_NO_THROW(gate.continuation(malformed,100.57));EXPECT_FALSE(gate.faulted());
  auto proof=continuationProof();proof["parent_request_id"]=2;proof["parent_cycle_id"]=2;
  proof["parent_scan_counter"]=2;proof["scan_counter"]=3;proof["plan_started_monotonic"]=100.56;
  proof["scan_receive_monotonic"]=100.59;proof["pose_receive_monotonic"]=100.59;

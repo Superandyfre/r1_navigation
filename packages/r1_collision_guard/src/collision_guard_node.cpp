@@ -83,11 +83,13 @@ public:
     authorization_config.input_timeout = declare_parameter<double>("planner_input_timeout_sec", 0.75);
     authorization_config.authority_timeout = declare_parameter<double>("navigation_authority_timeout_sec", 0.50);
     authorization_config.recovery_timeout = declare_parameter<double>("planner_recovery_timeout_sec", 5.0);
+    authorization_config.continuation_enabled = declare_parameter<bool>("continuation_enabled", false);
     authorization_ = std::make_unique<r1_neupan_runtime::MotionAuthorization>(
       r1_neupan_runtime::newBootId(), authorization_config);
     const auto worker_health_topic = declare_parameter<std::string>("worker_health_topic", "/neupan_worker_health");
     const auto planner_source_topic = declare_parameter<std::string>("planner_source_topic", "/neupan_planner_result");
     const auto motion_grant_topic = declare_parameter<std::string>("motion_grant_topic", "/neupan_motion_grant");
+    const auto continuation_topic = declare_parameter<std::string>("continuation_proof_topic", "/neupan_trajectory_proof");
     control_frequency_ = declare_parameter<double>("control_frequency", 50.0);
     odom_timeout_sec_ = declare_parameter<double>("odom_timeout_sec", 0.15);
     command_timeout_sec_ = declare_parameter<double>("command_timeout_sec", 0.20);
@@ -154,6 +156,11 @@ public:
         std::lock_guard<std::mutex> lock(mutex_);
         authorization_->source(parseProtocol(msg->data), monotonicNow());
       });
+    continuation_sub_ = create_subscription<std_msgs::msg::String>(
+      continuation_topic, rclcpp::QoS(20), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        authorization_->continuation(parseProtocol(msg->data), monotonicNow());
+      });
     motion_grant_sub_ = create_subscription<std_msgs::msg::String>(
       motion_grant_topic, rclcpp::QoS(20), [this](std_msgs::msg::String::ConstSharedPtr msg) {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -219,7 +226,8 @@ public:
           if (name == "worker_health_timeout_sec" || name == "planner_source_timeout_sec" ||
             name == "planner_input_timeout_sec" || name == "navigation_authority_timeout_sec" ||
             name == "planner_recovery_timeout_sec" || name == "worker_health_topic" ||
-            name == "planner_source_topic" || name == "motion_grant_topic")
+            name == "planner_source_topic" || name == "motion_grant_topic" ||
+            name == "continuation_enabled" || name == "continuation_proof_topic")
           {
             result.successful = false;
             result.reason = "authorization configuration requires controlled restart";
@@ -639,6 +647,8 @@ private:
         {"worker_health_age_sec", authorization_->healthAge(monotonicNow())},
         {"worker_health_bridged_by_source", authorization_->healthBridged(monotonicNow())},
         {"guard_boot_id", authorization_->bootId()}, {"authorization_state", authorization_decision_.state},
+        {"continuation_parent_request_id", authorization_->continuationParent(monotonicNow())},
+        {"continuation_scan_counter", authorization_->continuationScan(monotonicNow())},
         {"authorization_reason", authorization_decision_.reason}, {"physical_safety_state", physical_safety_state_},
         {"grant_id", authorization_->grantId()}, {"navigation_attempt_id", authorization_->attemptId()}});
       if (const auto & context = authorization_->grantContext()) {
@@ -661,6 +671,7 @@ private:
   std::string physical_safety_state_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr worker_health_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr planner_source_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr continuation_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr motion_grant_sub_;
   double max_linear_mps_{0.15};
   double max_reverse_mps_{0.15};

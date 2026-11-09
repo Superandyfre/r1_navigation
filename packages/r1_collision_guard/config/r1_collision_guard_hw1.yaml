@@ -17,6 +17,8 @@ r1_collision_guard:
     motion_grant_topic: /neupan_motion_grant
     worker_health_timeout_sec: 0.50
     planner_source_timeout_sec: 0.50
+    # Accept only the controller trajectory bound to a fresh NeuPAN proof.
+    continuation_enabled: true
     planner_input_timeout_sec: 0.75
     navigation_authority_timeout_sec: 0.50
     planner_recovery_timeout_sec: 5.0

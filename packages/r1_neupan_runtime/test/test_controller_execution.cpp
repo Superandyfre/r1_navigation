@@ -57,6 +57,33 @@ public:
     ASSERT_TRUE(runtime.permitted(100.02));
   }
 };
+TEST(ControllerContinuation, RequiresGuardAcknowledgementOfSamePlanAndScan) {
+ AuthorizationConfig c;c.continuation_enabled=true;ControllerExecution runtime("controller-a",c);
+ runtime.guard(guard(),100.);ASSERT_TRUE(runtime.arm(100.,true));runtime.begin("authority-a","attempt-a",100.);
+ runtime.plan(1,0,100.);runtime.health(health(),100.);ASSERT_TRUE(runtime.tick(100.));
+ auto src=source();src["trajectory"]={{"step_sec",.25},{"controls",{{.1,0.},{.15,-.1},{.2,0.}}}};
+ ASSERT_TRUE(runtime.source(src,100.));runtime.guard(guard(100.01,2,"PREPARED",runtime.grantId()),100.01);
+ ASSERT_TRUE(runtime.tick(100.01));runtime.guard(guard(100.02,3,"ARMED",runtime.grantId()),100.02);
+ ASSERT_TRUE(runtime.permitted(100.02));
+ runtime.health(health(100.3,2),100.3);runtime.guard(guard(100.3,4,"ARMED",runtime.grantId()),100.3);
+ runtime.check("authority-a","attempt-a",100.3);ASSERT_TRUE(runtime.tick(100.3));
+ runtime.health(health(100.55,3),100.55);runtime.guard(guard(100.55,5,"ARMED",runtime.grantId()),100.55);
+ runtime.check("authority-a","attempt-a",100.55);ASSERT_TRUE(runtime.tick(100.55));
+ auto proof=src;proof.erase("trajectory");proof["schema"]=kTrajectoryProofSchema;
+ proof["parent_request_id"]=1;proof["parent_cycle_id"]=1;proof["parent_scan_counter"]=1;
+ proof["sequence"]=1;proof["scan_counter"]=2;proof["plan_started_monotonic"]=100.;
+ proof["scan_receive_monotonic"]=100.52;proof["pose_receive_monotonic"]=100.52;
+ proof["validation_started_monotonic"]=100.53;proof["validated_monotonic"]=100.54;
+ proof["published_monotonic"]=100.55;proof["valid"]=true;
+ proof["command"]={{"linear_x",.2},{"angular_z",0.}};
+ runtime.continuation(proof,100.56);EXPECT_FALSE(runtime.continuationAction(100.56));
+ auto ack=guard(100.57,6,"ARMED",runtime.grantId());
+ ack["continuation_parent_request_id"]=1;ack["continuation_scan_counter"]=2;
+ runtime.guard(ack,100.57);ASSERT_TRUE(runtime.continuationAction(100.57));
+ EXPECT_DOUBLE_EQ(runtime.continuationAction(100.57)->at(0),.2);
+ ack["sequence"]=7;ack["monotonic"]=100.58;ack["continuation_parent_request_id"]=2;
+ runtime.guard(ack,100.58);EXPECT_FALSE(runtime.continuationAction(100.58));
+}
 TEST_F(Execution, NoImplicitArmOrFirstResultAuthorization) {
   runtime.guard(guard(), 100.);
   EXPECT_THROW(runtime.begin("authority-a", "attempt-a", 100.), std::exception);

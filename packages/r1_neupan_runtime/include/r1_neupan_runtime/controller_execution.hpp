@@ -158,6 +158,24 @@ public:
     } catch (const std::exception &) {fail("invalid_planner_source"); return false;}
   }
 
+  void continuation(const Json & j, double now)
+  {
+    if (!active_ || !has_plan_ || faulted()) {return;}
+    monitor_.continuation(j,now);syncFault();
+  }
+  const std::optional<Source> & latestSource() const {return monitor_.latestSource();}
+  std::optional<std::array<double,2>> continuationAction(double now) const
+  {
+    const auto action=monitor_.continuationAction(now);
+    const auto & source=monitor_.latestSource();
+    if (!action || !source || !freshGuard(now) || !matchingGuardContext() ||
+        guard_payload_.value("continuation_parent_request_id",0LL)!=source->request ||
+        guard_payload_.value("continuation_scan_counter",0LL)<monitor_.continuationScan(now)) {
+      return std::nullopt;
+    }
+    return action;
+  }
+
   void check(const std::string & authority, const std::string & attempt, double now)
   {
     checkFault();

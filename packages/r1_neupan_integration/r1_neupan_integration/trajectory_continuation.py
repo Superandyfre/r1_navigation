@@ -49,12 +49,15 @@ class TrajectoryContinuation:
             self._plan = (context, request_id, float(started_monotonic), a.copy())
             self._last_scan = scan_counter
 
-    def validate(self, *, context, scan_counter, scan_received_monotonic,
-                 pose_received_monotonic, now, input_timeout, state, points):
+    def validate(self, **kwargs):
+        return self.validate_detailed(**kwargs)[0]
+
+    def validate_detailed(self, *, context, scan_counter, scan_received_monotonic,
+                          pose_received_monotonic, now, input_timeout, state, points):
         with self._lock:
             plan = self._plan
             if plan is None or context != plan[0]:
-                return None
+                return None, "unavailable"
             if (type(scan_counter) is not int or scan_counter <= self._last_scan or
                     not all(math.isfinite(x) for x in (scan_received_monotonic,
                         pose_received_monotonic, now, input_timeout)) or input_timeout <= 0 or
@@ -62,34 +65,35 @@ class TrajectoryContinuation:
                     scan_received_monotonic > now or pose_received_monotonic > now or
                     now - scan_received_monotonic > input_timeout or
                     now - pose_received_monotonic > input_timeout or now < plan[2]):
-                return None
+                return None, "unavailable"
             # Failed revalidation cannot be replayed under the same scan identity.
             self._last_scan = scan_counter
         started = self.clock()
-        result = self.planner.validate_remaining_trajectory(
-            state, plan[3], now - plan[2], points)
+        result, reason = self.planner.validate_remaining_trajectory(
+            state, plan[3], now - plan[2], points, with_reason=True)
         finished = now + max(0.0, self.clock() - started)
         with self._lock:
             # Cancellation, replacement or a newer scan invalidates in-flight
             # results. The publisher must recheck authority at its own boundary.
             if self._plan is not plan or self._last_scan != scan_counter:
-                return None
-        # Validation time cannot refresh input timestamps or silently select a
-        # different trajectory knot. Recompute on the next scan instead.
-        if (result is None or finished - scan_received_monotonic > input_timeout or
+                return None, "unavailable"
+        # Validation time cannot refresh input timestamps or extend the
+        # original trajectory horizon; proofs cover all remaining knots.
+        if result is None:
+            return None, reason
+        if (finished - scan_received_monotonic > input_timeout or
                 finished - pose_received_monotonic > input_timeout or
-                int((finished - plan[2]) / self.planner.dt) !=
-                int((now - plan[2]) / self.planner.dt)):
-            return None
+                finished - plan[2] >= plan[3].shape[1] * self.planner.dt):
+            return None, "unavailable"
         action, minimum = result
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         if action.size != 2 or not np.isfinite(action).all():
             raise ValueError("invalid_validated_continuation")
         if minimum is not None and not math.isfinite(minimum):
             raise ValueError("invalid_continuation_distance")
-        return Continuation(context, plan[1], scan_counter, plan[2],
+        return (Continuation(context, plan[1], scan_counter, plan[2],
                             float(scan_received_monotonic), float(pose_received_monotonic),
-                            float(now), float(finished), float(action[0]), float(action[1]), minimum)
+                            float(now), float(finished), float(action[0]), float(action[1]), minimum), "validated")
 
 
 def make_trajectory_proof(parent_source, continuation, sequence, published_monotonic):

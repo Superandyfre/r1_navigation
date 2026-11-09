@@ -286,7 +286,7 @@ def test_continuation_does_not_launder_slow_validation_or_cross_knot():
     from r1_neupan_integration.trajectory_continuation import TrajectoryContinuation
     from types import SimpleNamespace
     context=('attempt',)
-    model=SimpleNamespace(dt=.25,validate_remaining_trajectory=lambda *args:(np.array([.2,0.]),.1))
+    model=SimpleNamespace(dt=.25,validate_remaining_trajectory=lambda *args,**kwargs:((np.array([.2,0.]),.1),"validated"))
     controls=np.vstack((np.full(4,.2),np.zeros(4)))
     def attempt(*,plan_started,scan_received,input_timeout,duration):
         ticks=iter((1.,1.+duration))
@@ -295,7 +295,9 @@ def test_continuation_does_not_launder_slow_validation_or_cross_knot():
         return g.validate(context=context,scan_counter=2,scan_received_monotonic=scan_received,
                           pose_received_monotonic=scan_received,now=100.,input_timeout=input_timeout,
                           state=np.zeros((3,1)),points=np.empty((2,0)))
-    assert attempt(plan_started=99.76,scan_received=99.99,input_timeout=.5,duration=.02) is None
+    # Crossing a knot during successful validation is not a failure: the
+    # proof covers the entire remaining trajectory.
+    assert attempt(plan_started=99.76,scan_received=99.99,input_timeout=.5,duration=.02) is not None
     assert attempt(plan_started=99.9,scan_received=99.85,input_timeout=.2,duration=.06) is None
     accepted=attempt(plan_started=99.9,scan_received=99.95,input_timeout=.2,duration=.02)
     assert accepted is not None and accepted.validated_monotonic==pytest.approx(100.02)
@@ -306,9 +308,9 @@ def test_continuation_cancelled_during_validation_cannot_publish():
     from r1_neupan_integration.trajectory_continuation import TrajectoryContinuation
     from types import SimpleNamespace
     entered=threading.Event();release=threading.Event();results=[]
-    def validate(*args):
+    def validate(*args,**kwargs):
         entered.set();assert release.wait(2.)
-        return np.array([.2,0.]),.1
+        return (np.array([.2,0.]),.1),"validated"
     gate=TrajectoryContinuation(SimpleNamespace(dt=.25,validate_remaining_trajectory=validate),clock=lambda:100.)
     gate.install(context=('old',),request_id=1,scan_counter=1,started_monotonic=99.9,
                  controls=np.vstack((np.full(4,.2),np.zeros(4))))
