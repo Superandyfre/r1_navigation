@@ -392,7 +392,7 @@ private:
       publisher->publish(*item.msg);
       status(sensor,"DEGRADED","pose_unavailable_raw_passthrough",samples,0,
         std::chrono::duration<double,std::milli>(Steady::now()-start).count(),age,lost,true,
-        ns(item.msg->header.stamp),ns(item.msg->header.stamp),0.);
+        ns(item.msg->header.stamp),ns(item.msg->header.stamp),-1.);
       return;
     }
     const double ms=std::chrono::duration<double,std::milli>(Steady::now()-start).count();

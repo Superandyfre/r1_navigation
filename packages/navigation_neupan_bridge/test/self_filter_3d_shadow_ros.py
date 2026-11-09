@@ -144,6 +144,14 @@ class ShadowFilter(unittest.TestCase):
             until(lambda:bool(clouds) and any(json.loads(x).get("reason")=="pose_unavailable_raw_passthrough" for x in states),3.)
             self.assertEqual(clouds[-1].header.stamp,captured.to_msg())
             self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,0)[0]), "unknown pose must preserve raw point")
+            passthrough=[json.loads(x) for x in states if json.loads(x).get("reason")=="pose_unavailable_raw_passthrough"]
+            self.assertEqual(passthrough[-1]["max_pose_time_error_sec"],-1.)
+            scans.clear(); states.clear()
+            captured=node.get_clock().now();scan.header.stamp=captured.to_msg()
+            scan.ranges=[math.hypot(x,y)];sp.publish(scan)
+            until(lambda:bool(scans) and any(json.loads(x).get("reason")=="pose_unavailable_raw_passthrough" for x in states),3.)
+            self.assertEqual(scans[-1].header.stamp,captured.to_msg())
+            self.assertAlmostEqual(scans[-1].ranges[0],scan.ranges[0],places=6)
             missing=False
             start=time.monotonic()
             while time.monotonic()<start+.3:tick()
