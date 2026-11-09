@@ -223,6 +223,39 @@ class neupan(torch.nn.Module):
             distance = dune.cal_objective_distance(mu, local).reshape(states.shape[1], -1)
         return distance.detach().cpu().numpy()
 
+    @staticmethod
+    def _candidate_feasibility(distances):
+        """Accept clear rollouts or an improving escape from existing overlap.
+
+        Initially clear points must remain clear. For already-overlapping
+        points, aggregate model penetration must not increase, and must be
+        reduced by the end of the horizon. The only tolerance is float32
+        numerical precision, scaled to the magnitude of the computation.
+        """
+        initial = distances[0]
+        inside = initial < 0.0
+        eps = np.finfo(np.float32).eps * max(1.0, float(np.max(np.abs(distances)))) * 16.0
+        new_overlap = bool(np.any(distances[:, ~inside] < -eps)) if np.any(~inside) else False
+        if np.any(inside):
+            penetration_by_point = np.maximum(-distances[:, inside], 0.0)
+            penetration = penetration_by_point.sum(axis=1)
+            # Do not hide a serious worsening at one point behind clearance
+            # gained at other points. A transient worsening must be no larger
+            # than the net reduction in total penetration at that instant.
+            worst_deepening = np.maximum(
+                penetration_by_point - penetration_by_point[0], 0.0).max(axis=1)
+            net_improvement = np.maximum(penetration[0] - penetration, 0.0)
+        else:
+            penetration = np.zeros(distances.shape[0])
+            worst_deepening = net_improvement = penetration
+        escaping = bool(np.any(inside) and not new_overlap and
+                        np.all(penetration <= penetration[0] + eps) and
+                        np.all(worst_deepening <= net_improvement + eps) and
+                        penetration[-1] < penetration[0] - eps)
+        feasible = bool(float(np.min(distances)) >= -eps or escaping)
+        return (feasible, escaping, float(np.min(initial)),
+                float(penetration[0]), float(penetration[-1]))
+
     def _candidate_cost(self, state, rollout, controls, ref, ref_speed, points, velocities):
         # Evaluate between optimizer knots too, so small obstacles are not
         # skipped when the robot translates or rotates over one solver step.
@@ -238,6 +271,9 @@ class neupan(torch.nn.Module):
                                                sample_dt=self.dt / subdivisions)
         k = min(self.pan.nrmp_max_num, distances.shape[1])
         nearest = np.partition(distances, k - 1, axis=1)[:, :k]
+        feasible, escaping, initial_minimum, initial_penetration, final_penetration = (
+            self._candidate_feasibility(distances))
+        minimum = float(np.min(distances))
         d_min = float(self.pan.nrmp_layer.d_min.detach().cpu().item())
         violation = np.maximum(d_min - nearest, 0.0)
         obstacle_cost = 0.5 * float(self.pan.nrmp_layer.ro_obs) * np.square(violation).sum()
@@ -252,7 +288,8 @@ class neupan(torch.nn.Module):
         tracking = np.square(q[0] * along).sum() + np.square(q[1] * across).sum() + np.square(q[2] * delta[2]).sum()
         p = float(self.pan.nrmp_layer.p_u.detach().cpu().item())
         speed = np.square(p * (controls[0] - ref_speed)).sum()
-        return float(tracking + speed + obstacle_cost), float(np.min(distances)), float(obstacle_cost)
+        return (float(tracking + speed + obstacle_cost), minimum, float(obstacle_cost),
+                feasible, escaping, initial_minimum, initial_penetration, final_penetration)
 
     def _avoidance_seed(self, state, original_ref, ref_speed, side, reverse_first=True, retreat_only=False, turn_first=False):
         # Generate an initial hypothesis inside NeuPAN, not a steering command.
@@ -351,7 +388,8 @@ class neupan(torch.nn.Module):
                 planned_np = tensor_to_np(planned)
                 if np.isfinite(control_np).all() and np.isfinite(planned_np).all():
                     rollout = self._rollout_controls(state, control_np)
-                    cost, minimum, obstacle_cost = self._candidate_cost(
+                    (cost, minimum, obstacle_cost, feasible, escaping, initial_minimum,
+                     initial_penetration, final_penetration) = self._candidate_cost(
                         state, rollout, control_np, ref_s, ref_us, points, velocities)
                     if np.isfinite(cost) and np.isfinite(minimum):
                         linearization_error = float(np.max(np.linalg.norm(
@@ -365,6 +403,8 @@ class neupan(torch.nn.Module):
                                                     np.maximum(step_bound, 1e-9)))
                         candidates.append(dict(side=side, mode=mode, result=evaluated_result,
                             cost=cost, minimum=minimum, obstacle_cost=obstacle_cost,
+                            feasible=feasible, escaping=escaping, initial_minimum=initial_minimum,
+                            initial_penetration=initial_penetration, final_penetration=final_penetration,
                             progress=progress, first_effort=first_effort,
                             linearization_error=linearization_error,
                             dune_min=self.pan.dune_layer.min_distance,
@@ -381,7 +421,7 @@ class neupan(torch.nn.Module):
             # A trajectory that merely waits in front of the obstacle is not
             # a useful bypass. Try alternative seeds if every feasible candidate
             # makes little progress along the original route horizon.
-            viable_progress = any(c["minimum"] >= 0.0 and c["progress"] >= useful_progress
+            viable_progress = any(c["feasible"] and c["progress"] >= useful_progress
                                   and c["first_effort"] > 0.05 for c in candidates)
             if explore and index == len(queue) and not viable_progress and not fallback_added:
                 # Keep planning within the command freshness window. Search
@@ -397,7 +437,7 @@ class neupan(torch.nn.Module):
             if last_error is not None:
                 raise last_error
             raise RuntimeError("NeuPAN candidate optimization produced no finite result")
-        nonoverlap = [candidate for candidate in candidates if candidate["minimum"] >= 0.0]
+        nonoverlap = [candidate for candidate in candidates if candidate["feasible"]]
         best_progress = max((candidate["progress"] for candidate in nonoverlap), default=0.0)
         progress_goal = max(useful_progress, best_progress * 0.8)
         progressing = [candidate for candidate in nonoverlap
@@ -427,6 +467,8 @@ class neupan(torch.nn.Module):
         self.info["avoidance_candidates"] = [
             dict(side=c["side"], seed_mode=c["mode"], cost=c["cost"],
                  min_distance=c["minimum"], obstacle_cost=c["obstacle_cost"],
+                 feasible=c["feasible"], escaping=c["escaping"], initial_minimum=c["initial_minimum"],
+                 initial_penetration=c["initial_penetration"], final_penetration=c["final_penetration"],
                  progress=c["progress"], first_effort=c["first_effort"],
                  linearization_error=c["linearization_error"], selected=c is best)
             for c in candidates]

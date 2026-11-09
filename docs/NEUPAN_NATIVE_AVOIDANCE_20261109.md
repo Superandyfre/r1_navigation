@@ -12,9 +12,15 @@ feasible progress, retains the chosen side and searches further alternatives
 across cycles. Returned trajectories are dynamics rollouts, not unvalidated
 linearized states. The previous optimized control horizon is shifted each
 cycle. Candidate state survives same-goal path and gear revisions and worker
-snapshot/restore, but resets with a new goal. If all evaluated candidates
-intersect according to the internal model, NeuPAN reports `candidate_infeasible`.
-No independent external obstacle-speed or braking-distance policy is added.
+snapshot/restore, but resets with a new goal. If the starting configuration
+already has negative DUNE distances, a candidate may still be selected when it
+introduces no new overlap, its aggregate existing overlap never increases,
+no single point worsens more than the net improvement, and the aggregate
+overlap is reduced by the end of the horizon. This permits a modeled escape from
+arm-projected overlap without treating the initial pose as proof that all
+future motions are impossible. If no evaluated clear or improving candidate
+exists, NeuPAN reports `candidate_infeasible`. No independent external
+obstacle-speed or braking-distance policy is added.
 
 The existing scan adapter now preserves the actual sensor returns along with
 arm-projected points. This is needed because a lateral arm projection is not a

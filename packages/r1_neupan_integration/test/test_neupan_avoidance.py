@@ -169,3 +169,34 @@ def test_reverse_path_bypasses_obstacle_without_intersection():
         local_x = np.cos(yaw)*dx + np.sin(yaw)*dy
         local_y = -np.sin(yaw)*dx + np.cos(yaw)*dy
         assert not np.any((np.abs(local_x)<.341) & (np.abs(local_y)<.266))
+
+
+def test_escape_feasibility_requires_improvement_without_new_overlap():
+    classify = neupan._candidate_feasibility
+    escaping = np.array([[-.05, .10], [-.04, .08], [-.01, .03]], dtype=np.float32)
+    assert classify(escaping)[:2] == (True, True)
+    worsens = np.array([[-.05, .10], [-.06, .08], [-.01, .03]], dtype=np.float32)
+    assert classify(worsens)[:2] == (False, False)
+    new_overlap = np.array([[-.05, .10], [-.04, -.01], [-.01, .03]], dtype=np.float32)
+    assert classify(new_overlap)[:2] == (False, False)
+    stationary = np.array([[-.05, .10], [-.05, .10], [-.05, .10]], dtype=np.float32)
+    assert classify(stationary)[:2] == (False, False)
+    masked_worsening = np.array([[-.10, -.10], [-.19, 0.], [-.19, 0.]], dtype=np.float32)
+    assert classify(masked_worsening)[:2] == (False, False)
+
+
+def test_projected_initial_overlap_can_escape_in_real_solver():
+    core = planner()
+    points = np.array([[.2185, .2185, .2247, .2247, .1901, .1901, 2.],
+                       [.33, .2625, .3331, .2656, .3227, .2552, 2.]])
+    state = np.zeros((3, 1))
+    action, info = core(state, points, measured_velocity=np.zeros((2, 1)))
+    assert not info['stop'], info
+    assert np.linalg.norm(action) > 0.01
+    selected = next(candidate for candidate in info['avoidance_candidates'] if candidate['selected'])
+    assert selected['initial_minimum'] < 0.0
+    assert selected['feasible'] and selected['escaping']
+    assert selected['final_penetration'] < selected['initial_penetration']
+    controls = info['vel_tensor'].detach().numpy()
+    dense = core._rollout_controls(state, controls, subdivisions=3)
+    assert core._candidate_feasibility(core._candidate_distances(dense, points, sample_dt=core.dt/3))[0]
