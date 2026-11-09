@@ -36,6 +36,13 @@ class SpeedLaunchValidation(unittest.TestCase):
         for profile in ('direct', 'smoothed'):
             launch._validate_speed_profile(str(self.bridge), str(self.guard), profile)
 
+    def test_forward_and_reverse_limits_can_differ(self):
+        launch._validate_speed_profile(str(self.bridge), str(self.guard), "smoothed")
+        self.alter(self.bridge, "planner_r1_hw1.yaml",
+                   lambda p: p["robot"].update(max_reverse_speed=.8))
+        with self.assertRaisesRegex(RuntimeError, "reverse exceeds"):
+            launch._validate_speed_profile(str(self.bridge), str(self.guard), "smoothed")
+
     def test_reverse_mismatch_is_rejected(self):
         self.alter(self.bridge, 'nav2_params_r1_neupan_hw1.yaml',
                    lambda p: p['controller_server']['ros__parameters']['FollowPath'].update(max_reverse=0.2))

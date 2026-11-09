@@ -114,6 +114,8 @@ class InitialPath:
         gear_array = np.array(gear_list)
 
         ref_us = gear_array * speed_profile
+        # Keep path lookahead while making the reverse speed target achievable.
+        ref_us = np.maximum(ref_us, float(self.robot.speed_lower_bound[0, 0]))
 
         return nom_s, nom_u, ref_s, ref_us
 

@@ -1,7 +1,7 @@
 # HW1 profile. Its launch requires a mechanical calibration record before use.
 receding: 20
 step_time: 0.25
-ref_speed: 0.5
+ref_speed: 0.7
 device: 'cpu'
 time_print: false
 # DUNE current-pose threshold, separate from NRMP distance variables. When
@@ -11,7 +11,8 @@ collision_threshold: 0.005
 
 robot:
   kinematics: 'diff'
-  max_speed: [0.5, 0.25]
+  max_speed: [0.7, 0.25]
+  max_reverse_speed: 0.3
   max_acce: [0.50, 0.50]
   length: 0.682
   width: 0.532

@@ -36,6 +36,43 @@ def test_hw1_motion_uses_planner_direction_and_smoother_without_gear_stop():
     assert bridge['auto_gear_transition_enabled'] is False
 
 
+def test_asymmetric_speed_bounds_apply_inside_neupan_optimization():
+    import cvxpy as cp
+    body=robot(receding=2,step_time=1.,kinematics="diff",length=.682,width=.532,
+               max_speed=[.7,.25],max_acce=[1.,1.],max_reverse_speed=.3)
+    body.define_variable(no_obs=True);body.state_parameter_define()
+    body.para_s.value=np.zeros((3,3));body.para_measured_u.value=np.zeros((2,1))
+    body.para_first_step_bound.value=np.ones((2,1))
+    constraints=body.bound_su_constraints()
+    forward=cp.Problem(cp.Maximize(body.indep_u[0,0]),constraints);forward.solve(solver="ECOS")
+    assert forward.status == cp.OPTIMAL and body.indep_u.value[0,0] == pytest.approx(.7,abs=1e-6)
+    reverse=cp.Problem(cp.Minimize(body.indep_u[0,0]),constraints);reverse.solve(solver="ECOS")
+    assert reverse.status == cp.OPTIMAL and body.indep_u.value[0,0] == pytest.approx(-.3,abs=1e-6)
+    values=body.generate_state_parameter_value(torch.zeros((3,3)),torch.zeros((2,2)),
+        torch.zeros((3,3)),torch.zeros(2),measured_velocity=torch.tensor([[-.5],[0.]]))
+    assert values[3][0,0].item() == pytest.approx(-.3)
+    with pytest.raises(ValueError,match="max_reverse_speed"):
+        robot(receding=2,step_time=1.,kinematics="diff",length=.682,width=.532,
+              max_speed=[.7,.25],max_acce=[1.,1.],max_reverse_speed=.8)
+
+
+def test_neupan_horizon_respects_forward_and_reverse_speed_limits():
+    for direction in (1.,-1.):
+        core=planner()
+        core.set_initial_path([np.array([[x],[0.],[0.],[direction]])
+                               for x in np.linspace(0.,direction*4.,41)])
+        points=np.array([[4.],[4.]])
+        action,info=core(np.zeros((3,1)),points,measured_velocity=np.zeros((2,1)))
+        controls=info["vel_tensor"].detach().cpu().numpy()
+        assert np.isfinite(action).all() and np.isfinite(controls).all()
+        assert controls[0].max() <= .700001 and controls[0].min() >= -.300001
+        reference=info["ref_speed_tensor"].detach().cpu().numpy()
+        if direction>0:
+            assert controls[0].max() > .6 and reference.max() == pytest.approx(.7)
+        else:
+            assert controls[0].min() < -.25 and reference.min() == pytest.approx(-.3)
+
+
 def test_risk_sampling_retains_near_points_and_scan_coverage():
     points = torch.stack((torch.linspace(4.,8.,1000), torch.linspace(-3.,3.,1000)))
     points[:, 321] = torch.tensor([.2,.03])
@@ -195,7 +232,9 @@ def test_reverse_path_bypasses_obstacle_without_intersection():
         assert selected.ndim == 2 and selected.shape[1] == 2 and len(selected) > 0
         assert np.allclose(selected[:, 0], -1.)  # the reverse wall survived selection
     states = core._rollout_controls(state, info['vel_tensor'].detach().numpy(), subdivisions=3)
-    assert states[0, -1] < -.8
+    # With reverse capped at 0.3 m/s, still require meaningful progress over
+    # the five-second horizon while checking the complete body trajectory.
+    assert states[0, -1] < -.6
     assert np.max(np.abs(states[1])) > .25
     for x, y, yaw in states.T:
         dx, dy = points[0]-x, points[1]-y

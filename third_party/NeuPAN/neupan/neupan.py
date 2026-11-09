@@ -372,7 +372,9 @@ class neupan(torch.nn.Module):
         heading = np.array([np.cos(state[2, 0]), np.sin(state[2, 0])])
         alignment = float(np.dot(route, heading))
         reference_sign = (-1.0 if alignment < 0.0 else 1.0)
-        linear = min(abs(float(self.ref_speed)), float(self.robot.max_speed[0, 0]))
+        direction_limit = (float(self.robot.max_speed[0, 0]) if reference_sign > 0.0 else
+                           -float(self.robot.speed_lower_bound[0, 0]))
+        linear = min(abs(float(self.ref_speed)), direction_limit)
         angular = float(self.robot.max_speed[1, 0])
         controls = np.zeros((2, self.T), dtype=np.float64)
         controls[0, :] = reference_sign * linear * 0.7

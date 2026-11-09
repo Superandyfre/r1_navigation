@@ -66,6 +66,13 @@ class robot:
                 self.max_speed[1] = 1.57
 
         self.speed_bound = self.max_speed
+        self.speed_lower_bound = -np.array(self.speed_bound, dtype=float, copy=True)
+        reverse_limit = kwargs.get("max_reverse_speed")
+        if reverse_limit is not None:
+            reverse_limit = float(reverse_limit)
+            if not np.isfinite(reverse_limit) or reverse_limit <= 0 or reverse_limit > float(self.max_speed[0, 0]):
+                raise ValueError("invalid max_reverse_speed")
+            self.speed_lower_bound[0, 0] = -reverse_limit
         self.acce_bound = self.max_acce * self.dt
         self.smooth_weight = float(kwargs.get("smooth_weight", 0.0))
         self.path_relative_cost = bool(kwargs.get("path_relative_cost", False))
@@ -262,7 +269,7 @@ class robot:
 
         constraints += [ cp.abs(self.indep_u[:, 1:] - self.indep_u[:, :-1] ) <= self.acce_bound ] 
         constraints += [cp.abs(self.indep_u[:, 0:1] - self.para_measured_u) <= self.para_first_step_bound]
-        constraints += [ cp.abs(self.indep_u) <= self.speed_bound]
+        constraints += [self.indep_u <= self.speed_bound, self.indep_u >= self.speed_lower_bound]
         constraints += [ self.indep_s[:, 0:1] == self.para_s[:, 0:1] ]
 
         return constraints
@@ -281,7 +288,9 @@ class robot:
                 raise ValueError("measured velocity must be finite")
             speed_bound = torch.as_tensor(
                 self.max_speed, dtype=nom_u.dtype, device=nom_u.device)
-            measured = torch.clamp(measured, -speed_bound, speed_bound)
+            speed_lower = torch.as_tensor(
+                self.speed_lower_bound, dtype=nom_u.dtype, device=nom_u.device)
+            measured = torch.clamp(measured, speed_lower, speed_bound)
             first_step_bound = torch.as_tensor(
                 self.acce_bound + 0.005, dtype=nom_u.dtype, device=nom_u.device)
 

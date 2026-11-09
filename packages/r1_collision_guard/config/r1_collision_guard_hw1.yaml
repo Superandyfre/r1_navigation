@@ -43,6 +43,6 @@ r1_collision_guard:
     odom_timeout_sec: 0.15
     command_timeout_sec: 0.30
     source_command_timeout_sec: 0.35
-    max_linear_mps: 1.0
-    max_reverse_mps: 0.50
+    max_linear_mps: 0.70
+    max_reverse_mps: 0.30
     max_angular_radps: 0.4

@@ -81,8 +81,9 @@ def _validate_speed_profile(bridge_share, guard_share, command_profile):
         controller = nav["controller_server"]["ros__parameters"]["FollowPath"]
         smoother = nav["neupan_velocity_smoother"]["ros__parameters"]
         linear, angular = map(float, planner["robot"]["max_speed"][:2])
+        reverse = float(planner["robot"].get("max_reverse_speed", linear))
         reference = float(planner["ref_speed"])
-        limits = {"planner_linear": linear, "planner_angular": angular,
+        limits = {"planner_linear": linear, "planner_reverse": reverse, "planner_angular": angular,
                   "reference": reference, "controller_forward": float(controller["max_linear"]),
                   "controller_reverse": float(controller["max_reverse"]),
                   "controller_angular": float(controller["max_angular"]),
@@ -96,11 +97,13 @@ def _validate_speed_profile(bridge_share, guard_share, command_profile):
                           smoother_angular_reverse=-float(smoother["min_velocity"][2]))
         if any(not math.isfinite(v) or v <= 0 for v in limits.values()):
             raise ValueError("speed values must be finite and positive")
+        if reverse > linear + 1e-9:
+            raise ValueError("reverse exceeds planner linear speed")
         if reference > linear + 1e-9:
             raise ValueError("reference exceeds planner linear speed")
         for name, value in limits.items():
-            required = angular if "angular" in name else linear
-            if name not in {"planner_linear", "planner_angular", "reference"} and value + 1e-9 < required:
+            required = angular if "angular" in name else reverse if "reverse" in name else linear
+            if name not in {"planner_linear", "planner_reverse", "planner_angular", "reference"} and value + 1e-9 < required:
                 raise ValueError(f"{name}={value} is below planner limit {required}")
     except (OSError, KeyError, TypeError, ValueError, IndexError, yaml.YAMLError) as error:
         raise RuntimeError("inconsistent HW1 speed profile: " + str(error)) from error
