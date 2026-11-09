@@ -216,6 +216,48 @@ def test_continuation_rechecks_new_rear_wall_and_does_not_renew_horizon():
     assert core.validate_remaining_trajectory(state,controls,.1,None) is None
 
 
+def test_continuation_requires_new_fresh_scan_and_live_task_identity():
+    from r1_neupan_integration.trajectory_continuation import TrajectoryContinuation
+    core=planner();clock=lambda:100.0
+    gate=TrajectoryContinuation(core,clock=clock)
+    context=('authority','controller','attempt',3,4,'worker',7)
+    state=np.zeros((3,1));controls=np.vstack((np.full(4,-.2),np.zeros(4)))
+    clear=np.vstack((np.full(11,-2.),np.linspace(-.4,.4,11)))
+    wall=np.vstack((np.full(11,-.43),np.linspace(-.4,.4,11)))
+    gate.install(context=context,request_id=9,scan_counter=10,started_monotonic=99.8,controls=controls)
+    args=dict(context=context,scan_counter=11,scan_received_monotonic=99.98,
+              pose_received_monotonic=99.99,now=100.,input_timeout=.4,state=state,points=clear)
+    accepted=gate.validate(**args)
+    assert accepted is not None and accepted.plan_request_id==9 and accepted.validation_scan_counter==11
+    assert accepted.plan_started_monotonic==99.8 and accepted.scan_received_monotonic==99.98
+    assert gate.validate(**args) is None  # duplicate is never a new observation
+    assert gate.validate(**dict(args,scan_counter=12,context=('other-attempt',))) is None
+    assert gate.validate(**dict(args,scan_counter=12,points=wall)) is None
+    assert gate.validate(**dict(args,scan_counter=13,scan_received_monotonic=99.0)) is None
+    assert gate.validate(**dict(args,scan_counter=13,pose_received_monotonic=99.0)) is None
+    gate.clear()
+    assert gate.validate(**dict(args,scan_counter=13)) is None
+
+
+def test_continuation_does_not_launder_slow_validation_or_cross_knot():
+    from r1_neupan_integration.trajectory_continuation import TrajectoryContinuation
+    from types import SimpleNamespace
+    context=('attempt',)
+    model=SimpleNamespace(dt=.25,validate_remaining_trajectory=lambda *args:(np.array([.2,0.]),.1))
+    controls=np.vstack((np.full(4,.2),np.zeros(4)))
+    def attempt(*,plan_started,scan_received,input_timeout,duration):
+        ticks=iter((1.,1.+duration))
+        g=TrajectoryContinuation(model,clock=lambda:next(ticks))
+        g.install(context=context,request_id=1,scan_counter=1,started_monotonic=plan_started,controls=controls)
+        return g.validate(context=context,scan_counter=2,scan_received_monotonic=scan_received,
+                          pose_received_monotonic=scan_received,now=100.,input_timeout=input_timeout,
+                          state=np.zeros((3,1)),points=np.empty((2,0)))
+    assert attempt(plan_started=99.76,scan_received=99.99,input_timeout=.5,duration=.02) is None
+    assert attempt(plan_started=99.9,scan_received=99.85,input_timeout=.2,duration=.06) is None
+    accepted=attempt(plan_started=99.9,scan_received=99.95,input_timeout=.2,duration=.02)
+    assert accepted is not None and accepted.validated_monotonic==pytest.approx(100.02)
+
+
 def test_reverse_motion_near_rear_wall_recovers_without_body_crossing():
     # The current rearward velocity cannot reverse instantaneously. Verify
     # the actual optimized rollout, not merely its first command.
