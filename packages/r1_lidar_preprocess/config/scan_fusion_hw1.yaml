@@ -30,4 +30,7 @@
     self_filter_polygon_xy: [-0.371, -0.296, 0.150, -0.296, 0.150, -0.340,
                              0.450, -0.360, 0.450, -0.296, 0.371, -0.296,
                              0.371, 0.296, -0.371, 0.296]
+    # Keep the existing Livox self-return margin. Rear returns just outside
+    # the measured body outline can be real walls and must remain visible.
     self_filter_margin_m: 0.02
+    rear_self_filter_margin_m: 0.0

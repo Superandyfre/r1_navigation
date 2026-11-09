@@ -64,3 +64,11 @@ The high-sampling NeuPAN launcher accepts `scan_source:=livox_only` (default)
 or `scan_source:=dual`. The Starterbutton wrapper forwards
 `RPP_NEUPAN_SCAN_SOURCE`; set it to `dual` only after the stationary and
 low-speed rear-obstacle checks have passed.
+
+For the HW1 dual-sensor profile, the rear scanner uses a zero extra
+self-filter margin while the Livox scan retains its configured margin. Both
+still remove points inside the configured body polygon. A stationary capture
+on 2026-11-09 showed a real rear wall outside the polygon being removed by the
+previous 0.02 m rear margin. Recorded scan replay verifies the wall points
+reach the NeuPAN input filter; this does not establish coverage in every
+mechanical configuration or guarantee physical collision avoidance.

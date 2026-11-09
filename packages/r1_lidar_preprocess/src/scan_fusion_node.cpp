@@ -77,13 +77,17 @@ public:
     livox_history_size_ = declare_parameter<int>("livox_history_size", 16);
     rear_history_size_ = declare_parameter<int>("rear_history_size", 16);
     self_filter_margin_m_ = declare_parameter<double>("self_filter_margin_m", 0.02);
+    rear_self_filter_margin_m_ = declare_parameter<double>(
+      "rear_self_filter_margin_m", self_filter_margin_m_);
     const auto polygon = declare_parameter<std::vector<double>>(
       "self_filter_polygon_xy", std::vector<double>{});
 
     if (angle_increment_ <= 0.0 || angle_max_ <= angle_min_ || range_min_ <= 0.0 ||
       range_max_ <= range_min_ || max_scan_age_sec_ <= 0.0 || max_pair_delta_sec_ <= 0.0 ||
       pair_wait_sec_ <= 0.0 || pair_wait_sec_ >= max_scan_age_sec_ ||
-      livox_history_size_ <= 0 || rear_history_size_ <= 0 || self_filter_margin_m_ < 0.0)
+      livox_history_size_ <= 0 || rear_history_size_ <= 0 || self_filter_margin_m_ < 0.0 ||
+      rear_self_filter_margin_m_ < 0.0 || !std::isfinite(self_filter_margin_m_) ||
+      !std::isfinite(rear_self_filter_margin_m_))
     {
       throw std::runtime_error("invalid scan fusion parameters");
     }
@@ -238,7 +242,8 @@ private:
 
     std::vector<float> ranges(output_size_, std::numeric_limits<float>::infinity());
     std::string transform_error;
-    if (!mergeScan(livox.scan, ranges, transform_error) || !mergeScan(rear.scan, ranges, transform_error)) {
+    if (!mergeScan(livox.scan, ranges, transform_error, self_filter_margin_m_) ||
+      !mergeScan(rear.scan, ranges, transform_error, rear_self_filter_margin_m_)) {
       publishStatus("transform_unavailable:" + transform_error);
       return;
     }
@@ -262,7 +267,7 @@ private:
 
   bool mergeScan(
     const sensor_msgs::msg::LaserScan & scan, std::vector<float> & fused_ranges,
-    std::string & error)
+    std::string & error, double self_filter_margin_m)
   {
     if (scan.header.frame_id.empty()) {
       error = "empty_source_frame";
@@ -299,7 +304,7 @@ private:
       const double x = tx + source_range * (cos_yaw * std::cos(source_angle) - sin_yaw * std::sin(source_angle));
       const double y = ty + source_range * (sin_yaw * std::cos(source_angle) + cos_yaw * std::sin(source_angle));
       const double range = std::hypot(x, y);
-      if (range < range_min_ || range > range_max_ || insideSelfFilter({x, y})) {
+      if (range < range_min_ || range > range_max_ || insideSelfFilter({x, y}, self_filter_margin_m)) {
         continue;
       }
       double angle = std::atan2(y, x);
@@ -319,7 +324,7 @@ private:
     return true;
   }
 
-  bool insideSelfFilter(const Point2D & point) const
+  bool insideSelfFilter(const Point2D & point, double margin_m) const
   {
     if (self_filter_polygon_.empty()) {
       return false;
@@ -338,7 +343,7 @@ private:
       nearest_distance_squared = std::min(
         nearest_distance_squared, pointSegmentDistanceSquared(point, start, end));
     }
-    return inside || nearest_distance_squared <= self_filter_margin_m_ * self_filter_margin_m_;
+    return inside || nearest_distance_squared <= margin_m * margin_m;
   }
 
   void publishStatus(const std::string & state)
@@ -365,6 +370,7 @@ private:
   int livox_history_size_;
   int rear_history_size_;
   double self_filter_margin_m_;
+  double rear_self_filter_margin_m_;
   size_t output_size_;
   std::vector<Point2D> self_filter_polygon_;
   std::mutex mutex_;
