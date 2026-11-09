@@ -216,6 +216,21 @@ def test_continuation_rechecks_new_rear_wall_and_does_not_renew_horizon():
     assert core.validate_remaining_trajectory(state,controls,.1,None) is None
 
 
+def test_continuation_rollout_uses_remaining_fraction_of_first_knot():
+    from unittest.mock import patch
+    core=planner();state=np.zeros((3,1))
+    controls=np.array([[.2,-.2],[0.,0.]])
+    points=np.array([[2.],[2.]])
+    with patch.object(core,'_candidate_distances',return_value=np.ones((7,1))) as distances:
+        result=core.validate_remaining_trajectory(state,controls,.1,points)
+    assert result is not None
+    states=distances.call_args.args[0]
+    times=distances.call_args.kwargs['sample_times']
+    assert times[3]==pytest.approx(.15) and times[-1]==pytest.approx(.4)
+    assert states[0,3]==pytest.approx(.03)  # .2 m/s for .15 s, not .25 s
+    assert states[0,-1]==pytest.approx(-.02)
+
+
 def test_continuation_requires_new_fresh_scan_and_live_task_identity():
     from r1_neupan_integration.trajectory_continuation import TrajectoryContinuation
     core=planner();clock=lambda:100.0
@@ -276,6 +291,31 @@ def test_continuation_cancelled_during_validation_cannot_publish():
     thread=threading.Thread(target=run);thread.start();assert entered.wait(2.)
     gate.clear();release.set();thread.join(2.)
     assert not thread.is_alive() and results==[None]
+
+
+def test_continuation_proof_keeps_original_source_and_fresh_scan_times():
+    from r1_neupan_integration.trajectory_continuation import (
+        Continuation, make_trajectory_proof, make_trajectory_rejection)
+    source={'schema':'r1_neupan_planner_source_v2','authority_boot_id':'authority',
+        'controller_boot_id':'controller','navigation_attempt_id':'attempt','worker_boot_id':'worker',
+        'worker_generation':7,'path_version':1,'goal_version':0,'request_id':1,'cycle_id':1,
+        'scan_counter':1,'finite':True,'scan_receive_monotonic':99.9,'request_dispatched_monotonic':99.92,
+        'worker_solve_end_monotonic':99.98,'planner_result_monotonic':100.,
+        'command':{'linear_x':.1,'angular_z':.2}}
+    context=('authority','controller','attempt','worker',7,1,0)
+    c=Continuation(context,1,2,100.,100.28,100.28,100.3,100.31,.15,-.1,.05)
+    p=make_trajectory_proof(source,c,1,100.32)
+    assert p['plan_started_monotonic']==source['planner_result_monotonic']
+    assert p['scan_receive_monotonic']==100.28 and p['validation_started_monotonic']==100.3
+    assert p['command']=={'linear_x':.15,'angular_z':-.1}
+    with pytest.raises(ValueError):make_trajectory_proof(source,c,1,100.30)
+    with pytest.raises(ValueError):make_trajectory_proof(dict(source,request_id=2),c,1,100.32)
+    event={'result':None,'scan_counter':3,'scan_receive_monotonic':100.34,
+        'pose_receive_monotonic':100.34,'validation_started_monotonic':100.35,
+        'validated_monotonic':100.36}
+    rejection=make_trajectory_rejection(source,event,2,100.37)
+    assert rejection['valid'] is False and rejection['scan_counter']==3
+    with pytest.raises(ValueError):make_trajectory_rejection(source,dict(event,scan_counter=1),2,100.37)
 
 
 def test_reverse_motion_near_rear_wall_recovers_without_body_crossing():

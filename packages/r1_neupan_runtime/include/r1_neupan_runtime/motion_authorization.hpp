@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <array>
+#include <vector>
 #include <cmath>
 #include <cstdint>
 #include <deque>
@@ -90,6 +92,8 @@ struct Source
   Context context;
   std::int64_t request{}, cycle{}, scan{};
   double input{}, dispatched{}, solved{}, published{}, linear{}, angular{}, received{};
+  double trajectory_step{};
+  std::vector<std::array<double,2>> trajectory;
   bool sameIdentity(const Source & b) const
   {
     return context == b.context && request == b.request && cycle == b.cycle && scan == b.scan;
@@ -97,7 +101,8 @@ struct Source
   bool sameContents(const Source & b) const
   {
     return sameIdentity(b) && input == b.input && dispatched == b.dispatched && solved == b.solved &&
-           published == b.published && linear == b.linear && angular == b.angular;
+           published == b.published && linear == b.linear && angular == b.angular &&
+           trajectory_step == b.trajectory_step && trajectory == b.trajectory;
   }
 };
 inline Source parseSource(const Json & j, double received)
@@ -117,6 +122,28 @@ inline Source parseSource(const Json & j, double received)
   s.published = requiredNumber(j, "planner_result_monotonic");
   s.linear = requiredNumber(j.at("command"), "linear_x", false);
   s.angular = requiredNumber(j.at("command"), "angular_z", false);
+  if (j.contains("trajectory")) {
+    const auto & t=j.at("trajectory");
+    s.trajectory_step=requiredNumber(t,"step_sec");
+    const auto & controls=t.at("controls");
+    if (!controls.is_array() || controls.empty() || controls.size()>1000) {
+      throw std::runtime_error("invalid_source_trajectory");
+    }
+    for (const auto & u:controls) {
+      if (!u.is_array() || u.size()!=2 || !u[0].is_number() || !u[1].is_number()) {
+        throw std::runtime_error("invalid_source_trajectory_action");
+      }
+      const double linear=u[0].get<double>(),angular=u[1].get<double>();
+      if (!std::isfinite(linear) || !std::isfinite(angular)) {
+        throw std::runtime_error("invalid_source_trajectory_action");
+      }
+      s.trajectory.push_back({linear,angular});
+    }
+    if (std::abs(s.trajectory[0][0]-s.linear)>1e-7 ||
+        std::abs(s.trajectory[0][1]-s.angular)>1e-7) {
+      throw std::runtime_error("source_trajectory_action_mismatch");
+    }
+  }
   s.received = received;
   if (s.input > s.dispatched || s.dispatched > s.solved || s.solved > s.published ||
     s.published > received)

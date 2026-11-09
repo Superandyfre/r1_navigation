@@ -1065,6 +1065,19 @@ class N116Node(N115Node):
                     solved=timing["worker_solve_end_monotonic"],
                     published=planner_result_monotonic, linear=command.linear.x,
                     angular=command.angular.z)
+            # Preserve the actual optimized horizon with its original source
+            # identity. A downstream revalidator can prove a later control
+            # belongs to this immutable plan without forging a new solve time.
+            horizon = outputs.get("optimized_velocity")
+            step = record.get("semantic", {}).get("planner_step_time_sec", 0.0)
+            if (execution_context is not None and not arrived and not stop_requested and
+                    isinstance(horizon, np.ndarray) and horizon.ndim == 2 and
+                    horizon.shape[0] == 2 and 0 < horizon.shape[1] <= 1000 and
+                    np.isfinite(horizon).all() and isinstance(step, (float, int)) and
+                    np.isfinite(step) and step > 0.0 and
+                    np.allclose(horizon[:, 0], [command.linear.x, command.angular.z], rtol=0.0, atol=1e-7)):
+                planner_result["trajectory"] = {"step_sec": float(step),
+                    "controls": horizon.T.tolist()}
             planner_result_message = String()
             planner_result_message.data = json.dumps(
                 planner_result, sort_keys=True, allow_nan=False

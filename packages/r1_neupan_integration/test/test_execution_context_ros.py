@@ -100,10 +100,11 @@ class ExecutionContextROS(unittest.TestCase):
                         now = time.monotonic()
                         outputs = dict(opt_state=np.array([[0., .1], [0., 0.], [0., 0.]]),
                                        ref_state=np.array([[0., .1], [0., 0.], [0., 0.]]),
-                                       action=np.array([[.1], [.0]]))
+                                       action=np.array([[.1], [.0]]),
+                                       optimized_velocity=np.array([[.1,.2],[.0,.05]]))
                         record = dict(worker_generation=node.client.worker_generation, request_id=1,
                                       scan_counter=scan, cycle_id=kwargs['cycle_id'], info={},
-                                      timings=dict(request_dispatched_monotonic=now,
+                                      semantic={'planner_step_time_sec':.25}, timings=dict(request_dispatched_monotonic=now,
                                                    worker_solve_end_monotonic=now + .000001))
                         return outputs, record
                     node.client.solve = fake_solve
@@ -132,6 +133,8 @@ class ExecutionContextROS(unittest.TestCase):
                         self.assertEqual(rows[-1]['scan_receive_monotonic'], old_scan_time)
                         self.assertEqual(rows[-1]['scan_counter'], 1)
                         self.assertEqual(rows[-1]['navigation_attempt_id'], 'attempt-a')
+                        self.assertEqual(rows[-1]['trajectory']['step_sec'],.25)
+                        self.assertEqual(rows[-1]['trajectory']['controls'],[[.1,.0],[.2,.05]])
                     self.assertFalse(any(name == '/cmd_vel' for name, _ in node.get_topic_names_and_types()))
                     print(json.dumps(dict(scenario=mutation, published_sources=len(rows),
                                           scan_snapshot_preserved=True, ledger_ignored=True)))

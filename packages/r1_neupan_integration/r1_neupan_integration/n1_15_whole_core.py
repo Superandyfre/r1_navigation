@@ -891,6 +891,7 @@ def _planner_semantics(planner: Any) -> dict[str, Any]:
         return value.T.tolist()
     return {
         "initial_path": _pack_array(path),
+        "planner_step_time_sec": float(getattr(planner, "dt", 0.0)),
         "point_index": int(getattr(ipath, "point_index", -1)),
         "curve_index": int(getattr(ipath, "curve_index", -1)),
         "curve_length": int(len(getattr(ipath, "cur_curve", []))) if ipath is not None and getattr(ipath, "curve_list", None) else 0,

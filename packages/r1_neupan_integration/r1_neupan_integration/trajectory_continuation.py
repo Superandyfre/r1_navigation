@@ -16,6 +16,8 @@ class Continuation:
     validation_scan_counter: int
     plan_started_monotonic: float
     scan_received_monotonic: float
+    pose_received_monotonic: float
+    validation_started_monotonic: float
     validated_monotonic: float
     linear_x: float
     angular_z: float
@@ -86,5 +88,65 @@ class TrajectoryContinuation:
         if minimum is not None and not math.isfinite(minimum):
             raise ValueError("invalid_continuation_distance")
         return Continuation(context, plan[1], scan_counter, plan[2],
-                            float(scan_received_monotonic), float(finished),
-                            float(action[0]), float(action[1]), minimum)
+                            float(scan_received_monotonic), float(pose_received_monotonic),
+                            float(now), float(finished), float(action[0]), float(action[1]), minimum)
+
+
+def make_trajectory_proof(parent_source, continuation, sequence, published_monotonic):
+    """Describe a real, newly validated trajectory knot without changing plan time."""
+    from .execution_protocol import validate_source
+    if type(sequence) is not int or sequence < 1:
+        raise ValueError("invalid_trajectory_proof_sequence")
+    source = validate_source(parent_source, published_monotonic)
+    fields = ("authority_boot_id", "controller_boot_id", "navigation_attempt_id",
+              "worker_boot_id", "worker_generation", "path_version", "goal_version")
+    context = tuple(source[k] for k in fields)
+    if continuation.context != context or continuation.plan_request_id != source["request_id"]:
+        raise ValueError("trajectory_proof_parent_mismatch")
+    if (continuation.plan_started_monotonic != source["planner_result_monotonic"] or
+            continuation.validation_scan_counter <= source["scan_counter"] or
+            continuation.scan_received_monotonic <= continuation.plan_started_monotonic or
+            not (continuation.scan_received_monotonic <= continuation.validation_started_monotonic <=
+                 continuation.validated_monotonic <= published_monotonic) or
+            continuation.pose_received_monotonic > continuation.validation_started_monotonic):
+        raise ValueError("invalid_trajectory_proof_times")
+    proof = {key:source[key] for key in fields}
+    proof.update(schema="r1_neupan_trajectory_proof_v1", sequence=sequence,
+        parent_request_id=source["request_id"], parent_cycle_id=source["cycle_id"],
+        parent_scan_counter=source["scan_counter"], scan_counter=continuation.validation_scan_counter,
+        plan_started_monotonic=continuation.plan_started_monotonic,
+        scan_receive_monotonic=continuation.scan_received_monotonic,
+        pose_receive_monotonic=continuation.pose_received_monotonic,
+        validation_started_monotonic=continuation.validation_started_monotonic,
+        validated_monotonic=continuation.validated_monotonic,
+        published_monotonic=float(published_monotonic), valid=True,
+        command=dict(linear_x=continuation.linear_x, angular_z=continuation.angular_z))
+    return proof
+
+
+def make_trajectory_rejection(parent_source, event, sequence, published_monotonic):
+    """Revoke a previously validated continuation after a newer failed scan."""
+    from .execution_protocol import validate_source
+    source = validate_source(parent_source, published_monotonic)
+    if (type(sequence) is not int or sequence < 1 or event.get("result") is not None or
+            type(event.get("scan_counter")) is not int or event["scan_counter"] <= source["scan_counter"]):
+        raise ValueError("invalid_trajectory_rejection")
+    keys = ("scan_receive_monotonic", "pose_receive_monotonic",
+            "validation_started_monotonic", "validated_monotonic")
+    if any(type(event.get(k)) not in (int, float) or not math.isfinite(event[k]) for k in keys):
+        raise ValueError("invalid_trajectory_rejection_times")
+    scan, pose, started, done = (float(event[k]) for k in keys)
+    if not (source["planner_result_monotonic"] < scan <= started <= done <= published_monotonic and
+            0 < pose <= started):
+        raise ValueError("invalid_trajectory_rejection_times")
+    fields = ("authority_boot_id", "controller_boot_id", "navigation_attempt_id",
+              "worker_boot_id", "worker_generation", "path_version", "goal_version")
+    proof = {key:source[key] for key in fields}
+    proof.update(schema="r1_neupan_trajectory_proof_v1", sequence=sequence,
+        parent_request_id=source["request_id"], parent_cycle_id=source["cycle_id"],
+        parent_scan_counter=source["scan_counter"], scan_counter=event["scan_counter"],
+        plan_started_monotonic=source["planner_result_monotonic"],
+        scan_receive_monotonic=scan, pose_receive_monotonic=pose,
+        validation_started_monotonic=started, validated_monotonic=done,
+        published_monotonic=float(published_monotonic), valid=False)
+    return proof

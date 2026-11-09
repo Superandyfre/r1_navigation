@@ -233,20 +233,34 @@ class neupan(torch.nn.Module):
         if self.pan.dune_layer is None:
             return None  # absent robot-distance model cannot validate a scene
         subdivisions = 3
-        # Use the current pose and conservatively recheck the entire first
-        # remaining knot; evaluate all observed points, not only the DUNE budget.
-        states = self._rollout_controls(state, remaining, subdivisions=subdivisions)
-        distances = self._candidate_distances(states, points, velocities, sample_dt=self.dt / subdivisions)
+        # The first knot is already partly elapsed. Propagate for exactly its
+        # remaining duration before switching control; a full first knot can
+        # trace a different and potentially unsafe path around an obstacle.
+        first_duration = self.dt - (elapsed - index * self.dt)
+        trajectory = [state.copy()]
+        times = [0.0]
+        for k in range(remaining.shape[1]):
+            interval = first_duration if k == 0 else self.dt
+            for _ in range(subdivisions):
+                trajectory.append(self.ipath.motion_predict_model(
+                    trajectory[-1], remaining[:, k:k+1], self.robot.L, interval / subdivisions))
+                times.append(times[-1] + interval / subdivisions)
+        states = np.hstack(trajectory)
+        # Evaluate every observed point, not only the DUNE sampling budget.
+        distances = self._candidate_distances(states, points, velocities, sample_times=np.asarray(times))
         feasible = self._candidate_feasibility(distances)[0]
         if not feasible:
             return None
         return remaining[:, 0].copy(), float(np.min(distances))
 
-    def _candidate_distances(self, states, points, velocities=None, sample_dt=None):
+    def _candidate_distances(self, states, points, velocities=None, sample_dt=None, sample_times=None):
         """Evaluate DUNE's dual distances along an actual dynamics rollout."""
         from neupan.configuration import to_device
         samples = np.asarray(points, dtype=np.float64)
-        times = np.arange(states.shape[1], dtype=np.float64) * (self.dt if sample_dt is None else sample_dt)
+        times = (np.arange(states.shape[1], dtype=np.float64) * (self.dt if sample_dt is None else sample_dt)
+                 if sample_times is None else np.asarray(sample_times, dtype=np.float64))
+        if times.shape != (states.shape[1],) or not np.isfinite(times).all():
+            raise ValueError("invalid_candidate_sample_times")
         predicted = samples[None, :, :]
         if velocities is not None:
             predicted = predicted + times[:, None, None] * np.asarray(velocities)[None, :, :]

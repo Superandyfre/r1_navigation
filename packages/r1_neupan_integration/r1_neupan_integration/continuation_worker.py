@@ -3,6 +3,7 @@
 The caller must separately check execution authority at publication time.
 """
 from dataclasses import asdict
+import copy
 import multiprocessing as mp
 import threading
 import time
@@ -33,8 +34,14 @@ def _run(conn, config_path, checkpoint_path):
                 scene = dict(job["scene"])
                 scene["now"] = time.monotonic()
                 result = engine.validate(**scene)
+                finished = time.monotonic()
                 conn.send({"type": "result", "epoch": job["epoch"], "sequence": job["sequence"],
-                           "result": None if result is None else asdict(result)})
+                           "result": None if result is None else asdict(result),
+                           "scan_counter": scene["scan_counter"],
+                           "scan_receive_monotonic": scene["scan_received_monotonic"],
+                           "pose_receive_monotonic": scene["pose_received_monotonic"],
+                           "validation_started_monotonic": scene["now"],
+                           "validated_monotonic": finished})
             except Exception as exc:
                 conn.send({"type": "error", "epoch": job["epoch"], "sequence": job["sequence"],
                            "error": type(exc).__name__ + ": " + str(exc)})
@@ -53,7 +60,7 @@ class ContinuationWorker:
         self._process=ctx.Process(target=_run,args=(child,str(config_path),str(checkpoint_path)),daemon=True)
         self._process.start();child.close()
         self._lock=threading.Lock()
-        self._epoch=0;self._sequence=0;self._completed_sequence=0;self._plan=None;self._pending=None;self._result=None
+        self._epoch=0;self._sequence=0;self._completed_sequence=0;self._plan=None;self._pending=None;self._result=None;self._event=None
         self._closed=False;self._ready=False;self._failure=None
         self._thread=threading.Thread(target=self._io,daemon=True);self._thread.start()
 
@@ -62,12 +69,12 @@ class ContinuationWorker:
                   started_monotonic=started_monotonic,controls=np.asarray(controls,dtype=float).copy())
         with self._lock:
             if self._closed: raise RuntimeError("continuation_worker_closed")
-            self._epoch+=1;self._plan=plan;self._pending=None;self._result=None
+            self._epoch+=1;self._plan=plan;self._pending=None;self._result=None;self._event=None
             return self._epoch
 
     def clear(self):
         with self._lock:
-            self._epoch+=1;self._plan=None;self._pending=None;self._result=None
+            self._epoch+=1;self._plan=None;self._pending=None;self._result=None;self._event=None
 
     def submit(self, *, context, scan_counter, scan_received_monotonic, pose_received_monotonic,
                input_timeout, state, points):
@@ -80,12 +87,13 @@ class ContinuationWorker:
                 input_timeout=input_timeout,state=np.asarray(state,dtype=float).copy(),
                 points=None if points is None else np.asarray(points,dtype=float).copy())
             self._pending=dict(epoch=self._epoch,sequence=self._sequence,plan=self._plan,scene=scene)
-            self._result=None;return True
+            self._result=None;self._event=None;return True
 
     def snapshot(self):
         with self._lock:
             return dict(ready=self._ready, failure=self._failure, epoch=self._epoch,
-                        sequence=self._sequence, completed_sequence=self._completed_sequence, result=self._result)
+                        sequence=self._sequence, completed_sequence=self._completed_sequence, result=copy.deepcopy(self._result),
+                        event=copy.deepcopy(self._event))
 
     def _io(self):
         busy=False
@@ -102,7 +110,8 @@ class ContinuationWorker:
                             if message.get("epoch")==self._epoch and message.get("sequence")==self._sequence:
                                 if kind=="error":self._failure=message.get("error","validation_failed")
                                 else:
-                                    self._result=message.get("result");self._completed_sequence=self._sequence
+                                    self._result=message.get("result");self._event=dict(message)
+                                    self._completed_sequence=self._sequence
                 if not self._process.is_alive():
                     with self._lock:self._failure=self._failure or "continuation_worker_exited"
                     return
@@ -115,7 +124,7 @@ class ContinuationWorker:
             with self._lock:self._failure=type(exc).__name__
 
     def close(self):
-        with self._lock:self._closed=True;self._epoch+=1;self._pending=None;self._result=None
+        with self._lock:self._closed=True;self._epoch+=1;self._pending=None;self._result=None;self._event=None
         self._thread.join(timeout=.5)
         if self._thread.is_alive():
             self._process.terminate();self._thread.join(timeout=1.)

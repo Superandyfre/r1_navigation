@@ -37,6 +37,10 @@ class ContinuationWorkerTest(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertAlmostEqual(result['linear_x'],-.2)
         self.assertIsNone(scene(3,-.43),'new rear wall must invalidate old reverse trajectory')
+        event=worker.snapshot()['event']
+        self.assertEqual(event['scan_counter'],3)
+        self.assertIsNone(event['result'])
+        self.assertLessEqual(event['validation_started_monotonic'],event['validated_monotonic'])
         worker.clear()
         self.assertIsNone(worker.snapshot()['result'])
         now=time.monotonic()
