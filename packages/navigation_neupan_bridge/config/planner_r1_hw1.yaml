@@ -4,7 +4,7 @@ step_time: 0.25
 ref_speed: 0.5
 device: 'cpu'
 time_print: false
-# NRMP constrains its distance slack to d_min=0.01. The collision threshold
+# NRMP constrains its distance slack to d_min=0.05. The collision threshold
 # must be strictly below that numerical lower bound or every finite solve is
 # falsely reported as a collision due to floating-point roundoff.
 collision_threshold: 0.005
@@ -50,7 +50,7 @@ adjust:
   # This is a soft reward for extra clearance, not the collision constraint.
   # Keep physical collision protection unchanged while avoiding a needless
   # refusal of a corridor that the measured footprint can clear.
-  eta: 3.5
-  d_max: 0.1
-  d_min: 0.01
+  eta: 3.8
+  d_max: 0.15
+  d_min: 0.05
   ro_obs: 4000
