@@ -103,6 +103,15 @@ class ShadowFilter(unittest.TestCase):
             self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,100)[0]), "nearby return outside box was removed")
             until(lambda:any(json.loads(x).get("additional_meshes")==1 for x in states),2.)
             self.assertTrue(math.isinf(scans[-1].ranges[0]),scans[-1].ranges)
+            until(lambda:any(json.loads(x).get("removed_by_mesh",{}).get(target,0)>=2
+                for x in states),2.)
+            matching=[json.loads(x) for x in states if json.loads(x).get("sensor")=="front_cloud"
+                and json.loads(x).get("removed_by_mesh",{}).get(target,0)>=2]
+            entries=matching[-1]["removed_sample"]
+            self.assertTrue(any(e["mesh_frame"]==target and e["index"]==0 for e in entries))
+            self.assertTrue(any(e["mesh_frame"]==target and e["index"]==2 and
+                e["point_stamp_ns"]>entries[0]["point_stamp_ns"] for e in entries))
+            self.assertTrue(any(e["mesh_frame"]=="held_object" for e in entries))
             msg.width=2;msg.row_step=40
             # Pause only one unchanged part TF for a short time. The filter
             # must emit an explicitly degraded, temporally bounded result
@@ -132,8 +141,9 @@ class ShadowFilter(unittest.TestCase):
             clouds.clear();states.clear()
             captured=node.get_clock().now();msg.header.stamp=captured.to_msg();ts=float(captured.nanoseconds)
             msg.data=struct.pack("<fffdfffd",x,y,0.,ts,x,y,.40,ts);cp.publish(msg)
-            until(lambda:any(json.loads(x).get("reason")=="tf_wait_expired" for x in states),3.)
-            self.assertFalse(clouds,"expired pose must not publish a filtered frame")
+            until(lambda:bool(clouds) and any(json.loads(x).get("reason")=="pose_unavailable_raw_passthrough" for x in states),3.)
+            self.assertEqual(clouds[-1].header.stamp,captured.to_msg())
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",clouds[-1].data,0)[0]), "unknown pose must preserve raw point")
             missing=False
             start=time.monotonic()
             while time.monotonic()<start+.3:tick()
@@ -151,9 +161,10 @@ class ShadowFilter(unittest.TestCase):
             clouds.clear();states.clear()
             captured=node.get_clock().now();msg.header.stamp=captured.to_msg();ts=float(captured.nanoseconds)
             x=2.+vx;msg.data=struct.pack("<fffdfffd",x,y,0.,ts,x,y,.40,ts);cp.publish(msg)
-            until(lambda:any(json.loads(x).get("reason")=="tf_wait_expired" for x in states),3.)
-            self.assertTrue(all(c.header.stamp==last_good_stamp for c in clouds),
-                "moving pose cannot produce a freshly stamped fallback")
+            until(lambda:any(json.loads(x).get("reason")=="pose_unavailable_raw_passthrough" for x in states),3.)
+            current=[c for c in clouds if c.header.stamp==captured.to_msg()]
+            self.assertTrue(current, "unknown pose must forward the original scan")
+            self.assertTrue(math.isfinite(struct.unpack_from("<f",current[-1].data,0)[0]))
             self.assertFalse(any(name=="/cmd_vel" for name,_ in node.get_topic_names_and_types()))
         finally:
             proc.send_signal(signal.SIGINT)

@@ -1,9 +1,8 @@
 // Copyright 2026 R1 navigation
 // SPDX-License-Identifier: BSD-3-Clause
 //
-// Experimental SHADOW ONLY: subscribes to raw sensors and publishes only
-// /r1_self_filter_3d_shadow/* for replay and accuracy/performance evaluation.
-// It is not wired to navigation or hardware.
+// Timestamp-aware 3D robot self-return filter for live and isolated replay.
+// Topic names are selected by launch; this node never publishes motion commands.
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -195,10 +194,10 @@ private:
     }
     return true;
   }
-  bool nearAnySurface(const fcl::Vector3d & point,const Poses & poses) const
+  bool nearAnySurface(const fcl::Vector3d & point,const Poses & poses, std::string & matched_frame)
   {
     for (std::size_t i=0;i<meshes_.size();++i) {
-      if (meshes_[i].mesh->nearSurface(poses[i]*point)) {return true;}
+      if (meshes_[i].mesh->nearSurface(poses[i]*point)) {matched_frame=meshes_[i].frame;++removed_by_mesh_[matched_frame];return true;}
     }
     return false;
   }
@@ -212,7 +211,7 @@ private:
     std_msgs::msg::String m;
     m.data=nlohmann::json{{"schema","r1_self_filter_3d_shadow_v1"},
       {"sensor",sensor},{"state",state},{"reason",reason},{"input_points",input},
-      {"filtered_points",removed},{"fixed_echo_filtered_points",fixed_echo_removed_},{"processing_ms",ms},{"queue_age_sec",age},
+      {"filtered_points",removed},{"removed_by_mesh",removed_by_mesh_},{"removed_sample",removed_sample_},{"fixed_echo_filtered_points",fixed_echo_removed_},{"processing_ms",ms},{"queue_age_sec",age},
       {"dropped_frames",dropped},{"output_published",published},
       {"input_stamp_ns",input_stamp},{"output_stamp_ns",output_stamp},
       {"max_pose_time_error_sec",pose_error},{"mesh_parts",meshes_.size()},{"closed_meshes",closed_meshes_},
@@ -296,7 +295,15 @@ private:
         base_point.y()>=echo_box_[2] && base_point.y()<=echo_box_[3] &&
         base_point.z()>=echo_box_[4] && base_point.z()<=echo_box_[5];
       if (fixed_echo) {++fixed_echo_removed_;}
-      if (fixed_echo || nearAnySurface({x,y,z},poses.at(bin.index))) {
+      std::string matched_frame;
+      if (fixed_echo || nearAnySurface({x,y,z},poses.at(bin.index),matched_frame)) {
+        if (removed_sample_.size()<64) {
+          removed_sample_.push_back({{"index",static_cast<std::size_t>(row)*output.width+col},
+            {"xyz_sensor",{x,y,z}},{"point_stamp_ns",stamp},
+            {"pose_stamp_ns",bin.representative_ns},
+            {"reason",fixed_echo?"fixed_echo_box":"robot_mesh"},
+            {"mesh_frame",matched_frame}});
+        }
         invalidate(p,offsets.x);invalidate(p,offsets.y);invalidate(p,offsets.z);++removed;
       }
     }
@@ -330,7 +337,15 @@ private:
       if (!std::isfinite(range)||range<input.range_min||range>input.range_max) {continue;}
       const auto bin=*sensorTimeBin(start,*scanBeamTime(start,i,input.time_increment),bin_ns_,span_ns_);
       const double angle=input.angle_min+static_cast<double>(i)*input.angle_increment;
-      if (nearAnySurface({range*std::cos(angle),range*std::sin(angle),0.},poses.at(bin.index))) {
+      const double x=range*std::cos(angle),y=range*std::sin(angle);
+      std::string matched_frame;
+      if (nearAnySurface({x,y,0.},poses.at(bin.index),matched_frame)) {
+        if (removed_sample_.size()<64) {
+          removed_sample_.push_back({{"index",i},{"xyz_sensor",{x,y,0.}},
+            {"point_stamp_ns",*scanBeamTime(start,i,input.time_increment)},
+            {"pose_stamp_ns",bin.representative_ns},
+            {"reason","robot_mesh"},{"mesh_frame",matched_frame}});
+        }
         output.ranges[i]=std::numeric_limits<float>::infinity();++removed;
       }
     }
@@ -347,6 +362,8 @@ private:
     {std::lock_guard<std::mutex> lock(mutex_);if(queue.empty())return;item=queue.front();lost=drops;}
     const auto start=Steady::now();std::size_t removed=0,samples=0;
     fixed_echo_removed_=0;
+    removed_by_mesh_.clear();
+    removed_sample_.clear();
     allow_stable_fallback_=std::chrono::duration<double>(start-item.received).count() >= stable_fallback_after_;
     used_stable_fallback_=false;
     max_pose_time_error_sec_=static_cast<double>(bin_ns_)/2e9;
@@ -368,6 +385,16 @@ private:
       return;
     }
     {std::lock_guard<std::mutex> lock(mutex_);if (!queue.empty() && queue.front().sequence==item.sequence) queue.pop_front();}
+    // If pose is unavailable, do not classify any current point as self.
+    // Preserve original measurements and timestamps; never manufacture a
+    // freshly stamped observation from cached geometry.
+    if (result==Outcome::WAIT_TF) {
+      publisher->publish(*item.msg);
+      status(sensor,"DEGRADED","pose_unavailable_raw_passthrough",samples,0,
+        std::chrono::duration<double,std::milli>(Steady::now()-start).count(),age,lost,true,
+        ns(item.msg->header.stamp),ns(item.msg->header.stamp),0.);
+      return;
+    }
     const double ms=std::chrono::duration<double,std::milli>(Steady::now()-start).count();
     if (result==Outcome::OK) {last_pose_error=max_pose_time_error_sec_;}
     status(sensor,result==Outcome::OK&&!used_stable_fallback_?"READY":"DEGRADED",
@@ -387,6 +414,8 @@ private:
   std::vector<MeshEntry> meshes_;
   std::vector<double> echo_box_;
   std::size_t fixed_echo_removed_{0};
+  std::map<std::string,std::size_t> removed_by_mesh_;
+  std::vector<nlohmann::json> removed_sample_;
   std::size_t closed_meshes_{0},additional_meshes_{0};std::vector<std::string> open_mesh_frames_;
   std::int64_t bin_ns_{},span_ns_{};double tf_wait_{},max_reuse_age_{},reuse_after_{};
   std::shared_ptr<Cloud> last_cloud_;std::shared_ptr<Scan> last_scan_;
