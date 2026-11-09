@@ -137,6 +137,8 @@ class NRMP(torch.nn.Module):
             self.obstacle_points = point_list[0][
                 :, : self.max_num
             ]  # current obstacle points considered in the optimization
+        else:
+            self.obstacle_points = None
 
         parameter_values = self.generate_parameter_value(
             nom_s, nom_u, ref_s, ref_us, mu_list, lam_list, point_list,

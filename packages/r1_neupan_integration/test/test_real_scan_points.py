@@ -56,5 +56,17 @@ class RealScanPoints(unittest.TestCase):
         self.assertEqual(node.latest_scan_filter['dynamic_obstacle_mapping'],'none')
         self.assertEqual(node.latest_scan_filter['dynamic_obstacle_max_displacement_m'],0.)
         node._planner_input_updated.assert_called_once()
+        # A rear wall survives self-filtering without point relocation, and
+        # diagnostics identify how many rear points reached the planner.
+        scan.header.stamp.sec=2
+        scan.angle_min=-np.pi+.1;scan.angle_max=np.pi-.1
+        scan.angle_increment=(scan.angle_max-scan.angle_min)/2
+        scan.ranges=[.5,.2,.5]
+        node.scan_callback(scan)
+        self.assertEqual(node.latest_scan_filter['rear_input_points'],2)
+        self.assertEqual(node.latest_scan_filter['rear_retained_points'],2)
+        nearest=node.latest_scan_filter['nearest_rear_base_link']
+        self.assertLess(nearest[0],-.49)
+        self.assertAlmostEqual(abs(nearest[1]),.5*np.sin(.1),places=6)
 
 if __name__ == '__main__': unittest.main()

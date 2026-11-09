@@ -196,11 +196,51 @@ class neupan(torch.nn.Module):
 
     def _rollout_controls(self, state, controls, subdivisions=1):
         states = [np.asarray(state[:3], dtype=np.float64).reshape(3, 1).copy()]
-        for t in range(self.T):
+        for t in range(controls.shape[1]):
             for _ in range(subdivisions):
                 states.append(self.ipath.motion_predict_model(
                     states[-1], controls[:, t:t+1], self.robot.L, self.dt / subdivisions))
         return np.hstack(states)
+
+    def validate_remaining_trajectory(self, state, controls, elapsed, points, velocities=None):
+        """Re-evaluate a previously optimized control horizon with current observations.
+
+        This is a NeuPAN geometry check, not a separate collision-distance policy.
+        Callers must independently verify sensor/pose freshness, task identity,
+        and authorization; passing this test alone cannot authorize motion.
+        """
+        state = np.asarray(state, dtype=np.float64)
+        controls = np.asarray(controls, dtype=np.float64)
+        if (state.shape != (3, 1) or controls.ndim != 2 or controls.shape[0] != 2 or
+                not np.isfinite(state).all() or not np.isfinite(controls).all() or
+                not np.isfinite(elapsed) or elapsed < 0. or self.dt <= 0.):
+            raise ValueError("invalid_trajectory_continuation")
+        if points is None:
+            return None  # missing sensor input is not an empty, clear scene
+        points = np.asarray(points, dtype=np.float64)
+        if points.ndim != 2 or points.shape[0] != 2 or not np.isfinite(points).all():
+            raise ValueError("invalid_trajectory_obstacles")
+        if velocities is not None:
+            velocities = np.asarray(velocities, dtype=np.float64)
+            if velocities.shape != points.shape or not np.isfinite(velocities).all():
+                raise ValueError("invalid_trajectory_obstacle_velocity")
+        index = int(elapsed / self.dt)
+        if index >= controls.shape[1]:
+            return None  # a completed horizon cannot be renewed by a heartbeat
+        remaining = controls[:, index:]
+        if not points.shape[1]:
+            return remaining[:, 0].copy(), None
+        if self.pan.dune_layer is None:
+            return None  # absent robot-distance model cannot validate a scene
+        subdivisions = 3
+        # Use the current pose and conservatively recheck the entire first
+        # remaining knot; evaluate all observed points, not only the DUNE budget.
+        states = self._rollout_controls(state, remaining, subdivisions=subdivisions)
+        distances = self._candidate_distances(states, points, velocities, sample_dt=self.dt / subdivisions)
+        feasible = self._candidate_feasibility(distances)[0]
+        if not feasible:
+            return None
+        return remaining[:, 0].copy(), float(np.min(distances))
 
     def _candidate_distances(self, states, points, velocities=None, sample_dt=None):
         """Evaluate DUNE's dual distances along an actual dynamics rollout."""
@@ -265,7 +305,8 @@ class neupan(torch.nn.Module):
         velocity_tensor = (torch.zeros_like(point_tensor) if velocities is None
                            else np_to_tensor(velocities))
         indices = self.pan.select_obstacle_indices(np_to_tensor(dense), point_tensor,
-                    velocity_tensor, self.pan.dune_max_num, self.dt / subdivisions).cpu().numpy()
+                    velocity_tensor, self.pan.dune_max_num, self.dt / subdivisions,
+                    robot_geometry=(self.robot.G, self.robot.h)).cpu().numpy()
         sampled_velocities = None if velocities is None else velocities[:, indices]
         distances = self._candidate_distances(dense, points[:, indices], sampled_velocities,
                                                sample_dt=self.dt / subdivisions)

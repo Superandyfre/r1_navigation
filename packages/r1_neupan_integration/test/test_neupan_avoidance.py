@@ -28,6 +28,14 @@ def planner():
     return result
 
 
+def test_hw1_motion_uses_planner_direction_and_smoother_without_gear_stop():
+    p=ROOT / 'packages/navigation_neupan_bridge/config/robot_r1_hw1.yaml'
+    bridge=yaml.safe_load(p.read_text())['n1_16_production_bridge']['ros__parameters']
+    assert bridge['allow_reverse'] is True
+    assert bridge['independent_reference_direction'] is True
+    assert bridge['auto_gear_transition_enabled'] is False
+
+
 def test_risk_sampling_retains_near_points_and_scan_coverage():
     points = torch.stack((torch.linspace(4.,8.,1000), torch.linspace(-3.,3.,1000)))
     points[:, 321] = torch.tensor([.2,.03])
@@ -38,6 +46,25 @@ def test_risk_sampling_retains_near_points_and_scan_coverage():
     assert len(torch.unique(indices)) == 80
     assert {321, 654} <= set(indices.tolist())
     assert 0 in indices and 999 in indices
+
+
+def test_risk_sampling_prioritizes_rear_corner_over_nearer_center_points():
+    # Side clutter is closer to the robot origin, but a rear-corner return is
+    # much closer to the physical boundary and must reach the optimizer.
+    c = config(); body = robot(c['receding'], c['step_time'], **c['robot'])
+    side = torch.stack((torch.zeros(300), torch.full((300,), .31)))
+    corner = torch.stack((torch.full((300,), -.342), torch.full((300,), .265)))
+    points = torch.cat((side, corner), dim=1)
+    state = torch.zeros((3, 3))
+    selected = PAN.select_obstacle_indices(state, points, torch.zeros_like(points), 20, .25,
+                                             robot_geometry=(body.G, body.h))
+    assert int((selected >= 300).sum()) >= 15
+    # Rotating the body and the scene together must preserve selection.
+    rotated = torch.stack((-points[1], points[0]))
+    state[2, :] = np.pi / 2
+    selected_rotated = PAN.select_obstacle_indices(state, rotated, torch.zeros_like(rotated), 20, .25,
+                                                     robot_geometry=(body.G, body.h))
+    assert set(selected.tolist()) == set(selected_rotated.tolist())
 
 
 def test_dune_dual_outputs_obey_training_constraint():
@@ -161,6 +188,12 @@ def test_reverse_path_bypasses_obstacle_without_intersection():
     state = np.zeros((3, 1))
     action, info = core(state, points, measured_velocity=np.zeros((2, 1)))
     assert not info['stop']
+    from r1_neupan_integration.n1_15_whole_core import _planner_semantics
+    trace = _planner_semantics(core)
+    for name in ('dune_selected_points_map_xy', 'nrmp_selected_points_map_xy'):
+        selected = np.asarray(trace[name])
+        assert selected.ndim == 2 and selected.shape[1] == 2 and len(selected) > 0
+        assert np.allclose(selected[:, 0], -1.)  # the reverse wall survived selection
     states = core._rollout_controls(state, info['vel_tensor'].detach().numpy(), subdivisions=3)
     assert states[0, -1] < -.8
     assert np.max(np.abs(states[1])) > .25
@@ -169,6 +202,40 @@ def test_reverse_path_bypasses_obstacle_without_intersection():
         local_x = np.cos(yaw)*dx + np.sin(yaw)*dy
         local_y = -np.sin(yaw)*dx + np.cos(yaw)*dy
         assert not np.any((np.abs(local_x)<.341) & (np.abs(local_y)<.266))
+
+
+def test_continuation_rechecks_new_rear_wall_and_does_not_renew_horizon():
+    core=planner();state=np.zeros((3,1))
+    controls=np.vstack((np.full(4,-.2),np.zeros(4)))
+    clear=np.vstack((np.full(11,-2.),np.linspace(-.4,.4,11)))
+    wall=np.vstack((np.full(11,-.43),np.linspace(-.4,.4,11)))
+    accepted=core.validate_remaining_trajectory(state,controls,.1,clear)
+    assert accepted is not None and np.allclose(accepted[0],[-.2,0.])
+    assert core.validate_remaining_trajectory(state,controls,.1,wall) is None
+    assert core.validate_remaining_trajectory(state,controls,1.0,clear) is None
+    assert core.validate_remaining_trajectory(state,controls,.1,None) is None
+
+
+def test_reverse_motion_near_rear_wall_recovers_without_body_crossing():
+    # The current rearward velocity cannot reverse instantaneously. Verify
+    # the actual optimized rollout, not merely its first command.
+    core=planner()
+    state=np.zeros((3,1)); measured=np.array([[-.2],[0.]])
+    wall=np.vstack((np.full(41,-.43),np.linspace(-.5,.5,41)))
+    action,info=core(state,wall,measured_velocity=measured)
+    assert not info['stop'] and np.isfinite(action).all()
+    controls=info['vel_tensor'].detach().numpy()
+    dense=core._rollout_controls(state,controls,subdivisions=3)
+    assert dense[0,-1] > 0.
+    for x,y,yaw in dense.T:
+        dx,dy=wall[0]-x,wall[1]-y
+        local_x=np.cos(yaw)*dx+np.sin(yaw)*dy
+        local_y=-np.sin(yaw)*dx+np.cos(yaw)*dy
+        assert not np.any((np.abs(local_x)<.341)&(np.abs(local_y)<.266))
+    from r1_neupan_integration.n1_15_whole_core import _planner_semantics
+    trace=_planner_semantics(core)
+    assert any(np.isclose(p[0],-.43) for p in trace['dune_selected_points_map_xy'])
+    assert any(np.isclose(p[0],-.43) for p in trace['nrmp_selected_points_map_xy'])
 
 
 def test_escape_feasibility_requires_improvement_without_new_overlap():

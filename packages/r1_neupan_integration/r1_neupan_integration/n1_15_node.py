@@ -548,6 +548,9 @@ class N115Node(Node):
         filter_input_count = 0
         retained_count = 0
         planner_input_count = 0
+        rear_input_count = 0
+        rear_retained_count = 0
+        nearest_rear_xy = None
         nearest_distance = None
         nearest_xy = None
         nearest_environment_distance = None
@@ -593,6 +596,7 @@ class N115Node(Node):
                 tf_lookup_ms = (time.perf_counter() - tf_started) * 1000.0
                 geometry_started = time.perf_counter()
                 filter_input_count = int(local_points.shape[1])
+                rear_input_count = int(np.count_nonzero(local_points[0] < 0.0))
                 if self.self_filter_enabled:
                     local_ranges = np.hypot(local_points[0], local_points[1])
                     local_angles = np.arctan2(local_points[1], local_points[0])
@@ -611,6 +615,11 @@ class N115Node(Node):
                 else:
                     filter_shape = "disabled"
                 raw_local_points = local_points.copy()
+                rear_points = local_points[:, local_points[0] < 0.0]
+                rear_retained_count = int(rear_points.shape[1])
+                if rear_retained_count:
+                    nearest_rear = rear_points[:, int(np.argmin(np.hypot(rear_points[0], rear_points[1])))]
+                    nearest_rear_xy = [float(nearest_rear[0]), float(nearest_rear[1])]
                 if local_points.shape[1]:
                     environment_index = int(np.argmin(np.hypot(local_points[0], local_points[1])))
                     nearest_environment = local_points[:, environment_index]
@@ -682,6 +691,9 @@ class N115Node(Node):
                     if valid_ranges.size else 0,
                 "retained_points": retained_count if valid_ranges.size else 0,
                 "planner_input_points": planner_input_count,
+                "rear_input_points": rear_input_count,
+                "rear_retained_points": rear_retained_count,
+                "nearest_rear_base_link": nearest_rear_xy,
                 "nearest_retained_base_link": nearest_xy if valid_ranges.size else None,
                 "nearest_retained_distance_m": nearest_distance if valid_ranges.size else None,
                 "nearest_environment_base_link": nearest_environment_xy if valid_ranges.size else None,

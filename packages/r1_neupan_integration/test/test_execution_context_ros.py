@@ -20,6 +20,7 @@ from std_msgs.msg import String
 
 from r1_neupan_integration.execution_protocol import CONTEXT_SCHEMA, SOURCE_SCHEMA
 from r1_neupan_integration.n1_16_node import N116Node
+from r1_neupan_integration.solver_status import RecoverableSolveError
 
 
 @unittest.skipUnless(os.environ.get('NEUPAN_ISOLATED_ROS_TEST') == '1', 'isolated ROS opt-in')
@@ -58,6 +59,7 @@ class ExecutionContextROS(unittest.TestCase):
                     node.robot_state = np.zeros((3, 1))
                     node.dynamic_footprint_enabled = False
                     node.scan_counter = 1
+                    node.processed_scan_counter = 1
                     node.latest_scan_receive_monotonic = time.monotonic() - .1
                     node.latest_scan_update_monotonic = node.latest_scan_receive_monotonic + .01
                     old_scan_time = node.latest_scan_receive_monotonic
@@ -91,6 +93,10 @@ class ExecutionContextROS(unittest.TestCase):
                             node.latest_scan_receive_monotonic = time.monotonic()
                             node.latest_scan_update_monotonic = time.monotonic()
                             node.scan_counter += 1
+                            if mutation == 'path-changed-during-solve':
+                                node.path_version += 1
+                        if mutation == 'retry-during-solve':
+                            raise RecoverableSolveError('injected iteration limit', 1)
                         now = time.monotonic()
                         outputs = dict(opt_state=np.array([[0., .1], [0., 0.], [0., 0.]]),
                                        ref_state=np.array([[0., .1], [0., 0.], [0., 0.]]),
@@ -108,6 +114,7 @@ class ExecutionContextROS(unittest.TestCase):
                             node.execution_context_callback(String(data=json.dumps(end)))
                             return original(*args, **kwargs)
                         node._path_message = end_before_publish
+                    node._publish_failsafe_stop = Mock()
                     node.run()
                     until = time.monotonic() + .3
                     while time.monotonic() < until:
@@ -116,8 +123,9 @@ class ExecutionContextROS(unittest.TestCase):
                     self.assertIsNone(node.client.health.fault)
                     self.assertEqual(captured['scan_callback_receive_monotonic'], old_scan_time)
                     self.assertEqual(captured['scan_update_monotonic'], old_scan_update)
-                    if mutation == 'end-during-postprocessing':
+                    if mutation in ('end-during-postprocessing', 'path-changed-during-solve', 'retry-during-solve'):
                         self.assertFalse(rows)
+                        node._publish_failsafe_stop.assert_not_called()
                     else:
                         self.assertTrue(rows)
                         self.assertEqual(rows[-1]['schema'], SOURCE_SCHEMA)
@@ -141,6 +149,12 @@ class ExecutionContextROS(unittest.TestCase):
 
     def test_end_during_postprocessing_prevents_old_source_publication(self):
         self.exercise('end-during-postprocessing')
+
+    def test_replaced_path_drops_old_result_without_injecting_zero(self):
+        self.exercise('path-changed-during-solve')
+
+    def test_retry_does_not_inject_zero_into_valid_grant(self):
+        self.exercise('retry-during-solve')
 
 
 if __name__ == '__main__':

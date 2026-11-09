@@ -863,11 +863,17 @@ class N116Node(N115Node):
                     # An old solve cannot put a replacement execution into retry.
                     if self._require_execution_context and (self._execution_store.active is None or
                             self._execution_store.active.identity != execution_context.identity):
-                        self._publish_failsafe_stop()
+                        # A result from an obsolete attempt has no authority to
+                        # inject a command into its replacement. Grant/revoke
+                        # remains responsible for cancellation and freshness.
                         return
                     exhausted = self._solve_budget.failure()
                     self.client.health.planning_failure(exc.request_id, exhausted)
-                self._publish_failsafe_stop()
+                # A retry is not a new zero-velocity plan. The authorization
+                # layer retains a previously committed, still-fresh source and
+                # stops it when that source expires; never refresh its stamps.
+                if exhausted:
+                    self._publish_failsafe_stop()
                 self._publish_worker_health()
                 self._status("solver_recovery_exhausted" if exhausted else "solver_retry",
                              str(exc), request_id=exc.request_id,
@@ -888,7 +894,8 @@ class N116Node(N115Node):
                 self.client.mark_stale_response(reason, record)
                 self._status("stale_response", reason, request_id=record["request_id"],
                              cycle_id=cycle_id, scan_counter=scan_counter)
-                self._publish_failsafe_stop()
+                # Do not publish either the old result or a zero from an old
+                # context. The active grant owns command handover and revoke.
                 return
 
             self._solve_budget.success()

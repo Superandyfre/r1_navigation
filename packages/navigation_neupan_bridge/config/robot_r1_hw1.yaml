@@ -54,7 +54,6 @@ n1_16_production_bridge:
     refresh_initial_path: false
     control_frequency: 10.0
     # Let NeuPAN low-speed corrections reach the acceleration-limited smoother.
-    # Direction reversal is still serialized by auto_gear_transition below.
     command_stabilizer_enabled: false
     command_stabilizer_angular_deadband_radps: 0.02
     latest_scan_only: true
@@ -76,8 +75,10 @@ n1_16_production_bridge:
     allow_reverse: true
     # Execution gear must not rewrite the planned path direction.
     independent_reference_direction: true
-    # Serialize actual direction changes before the velocity smoother.
-    auto_gear_transition_enabled: true
+    # NeuPAN plans signed velocity using measured velocity and acceleration
+    # bounds. The velocity smoother performs continuous reversals; an external
+    # confirmation gate would inject zeros and discard the planner result.
+    auto_gear_transition_enabled: false
     auto_gear_mismatch_deadband_mps: 0.025
     auto_gear_confirm_cycles: 5
     # A transient opposite signed NeuPAN sample must not start a base reversal.

@@ -876,6 +876,19 @@ def _planner_semantics(planner: Any) -> dict[str, Any]:
     if hasattr(dune_min_distance, "detach"):
         dune_min_distance = dune_min_distance.detach().cpu().numpy()
     dune_min_distance = np.asarray(dune_min_distance) if dune_min_distance is not None else np.empty(0)
+    nrmp = getattr(getattr(planner, "pan", None), "nrmp_layer", None)
+    def selected_points(layer):
+        value = getattr(layer, "obstacle_points", None)
+        if value is None:
+            return []
+        if hasattr(value, "detach"):
+            value = value.detach().cpu().numpy()
+        value = np.asarray(value)
+        # The selected points are in map coordinates and index-aligned with the
+        # worker input; report the actual optimized candidate, not the last seed.
+        if value.ndim != 2 or value.shape[0] != 2 or not np.isfinite(value).all():
+            return []
+        return value.T.tolist()
     return {
         "initial_path": _pack_array(path),
         "point_index": int(getattr(ipath, "point_index", -1)),
@@ -887,6 +900,8 @@ def _planner_semantics(planner: Any) -> dict[str, Any]:
             if dune_min_distance.size == 1 and np.isfinite(dune_min_distance).all()
             else None
         ),
+        "dune_selected_points_map_xy": selected_points(dune),
+        "nrmp_selected_points_map_xy": selected_points(nrmp),
         "dune_obstacle_points_count": int(
             getattr(getattr(dune, "obstacle_points", None), "shape", (0, 0))[1]
             if dune is not None else 0

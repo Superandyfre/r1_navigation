@@ -107,12 +107,13 @@ class PAN(torch.nn.Module):
         self.last_sample_indices = None
 
     @staticmethod
-    def select_obstacle_indices(nom_s, obs_points, point_velocities, max_num, dt):
+    def select_obstacle_indices(nom_s, obs_points, point_velocities, max_num, dt, robot_geometry=None):
         """Keep high-impact points near the nominal horizon and spatial coverage.
 
         The same indices are used for obstacle velocities. Ranking is based on
-        minimum predicted distance to the trajectory, without a fixed distance
-        cutoff; a quarter of the budget keeps deterministic scan coverage.
+        minimum predicted distance to the moving robot polygon, without a fixed
+        distance cutoff; a quarter of the budget keeps deterministic scan coverage.
+        The optional inequalities describe the actual planner robot geometry.
         """
         count = obs_points.shape[1]
         if count <= max_num:
@@ -125,7 +126,26 @@ class PAN(torch.nn.Module):
                              dtype=obs_points.dtype) * dt
         predicted = obs_points.unsqueeze(0) + times[:, None, None] * point_velocities.unsqueeze(0)
         delta = predicted - nom_s[:2, :].T.unsqueeze(2)
-        risk = torch.sum(delta * delta, dim=1).amin(dim=0)
+        if robot_geometry is None:
+            # Compatibility for geometry-free callers.
+            risk = torch.sum(delta * delta, dim=1).amin(dim=0)
+        else:
+            # G x <= h is the same convex body used by NeuPAN, not a
+            # separate obstacle cage. Normalize edge normals before ranking.
+            # Evaluate each obstacle in every predicted robot orientation.
+            g, h = robot_geometry
+            g = torch.as_tensor(g, dtype=obs_points.dtype, device=obs_points.device)
+            h = torch.as_tensor(h, dtype=obs_points.dtype, device=obs_points.device).reshape(-1)
+            norms = torch.linalg.vector_norm(g, dim=1)
+            if g.ndim != 2 or g.shape[1] != 2 or h.numel() != g.shape[0] or bool(torch.any(norms <= 0)):
+                raise ValueError("invalid robot geometry for obstacle sampling")
+            c = torch.cos(nom_s[2, :]).unsqueeze(1)
+            s = torch.sin(nom_s[2, :]).unsqueeze(1)
+            local_x = c * delta[:, 0, :] + s * delta[:, 1, :]
+            local_y = -s * delta[:, 0, :] + c * delta[:, 1, :]
+            local = torch.stack((local_x, local_y), dim=1)
+            signed = (torch.einsum("ed,tdn->ten", g, local) - h[None, :, None]) / norms[None, :, None]
+            risk = signed.amax(dim=1).amin(dim=0)
         risk = risk.clone()
         risk[coverage] = float("inf")
         important = torch.argsort(risk, stable=True)[:max_num - coverage.numel()]
@@ -204,7 +224,8 @@ class PAN(torch.nn.Module):
             point_velocities = torch.zeros_like(obs_points)
 
         indices = self.select_obstacle_indices(
-            nom_s, obs_points, point_velocities, self.dune_max_num, self.dt)
+            nom_s, obs_points, point_velocities, self.dune_max_num, self.dt,
+            robot_geometry=(self.robot.G, self.robot.h))
         self.last_sample_indices = indices.detach().cpu()
         obs_points = obs_points[:, indices]
         point_velocities = point_velocities[:, indices]
