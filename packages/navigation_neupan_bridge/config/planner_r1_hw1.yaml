@@ -47,6 +47,6 @@ adjust:
   p_u: 1.4
   # Distance objective and bounds are internal NeuPAN optimization terms.
   eta: 3.8
-  d_max: 0.15
-  d_min: 0.05
+  d_max: 0.30
+  d_min: 0.15
   ro_obs: 4000
