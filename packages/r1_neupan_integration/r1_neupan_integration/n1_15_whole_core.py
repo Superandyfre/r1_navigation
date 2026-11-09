@@ -241,7 +241,7 @@ def _planner_exact_state(planner: Any) -> dict[str, Any]:
     return {
         "planner": _state_attrs(
             planner,
-            ("T", "dt", "ref_speed", "collision_threshold", "cur_vel_array", "info"),
+            ("T", "dt", "ref_speed", "collision_threshold", "cur_vel_array", "info", "preferred_avoidance_side", "preferred_avoidance_mode", "candidate_search_cursor"),
         ),
         "ipath": _state_attrs(
             ipath,
@@ -259,7 +259,7 @@ def _planner_exact_state(planner: Any) -> dict[str, Any]:
         "dune": None if dune is None else _state_attrs(dune, ("obstacle_points", "min_distance")),
         "nrmp": None if nrmp is None else _state_attrs(nrmp, ("obstacle_points",)),
         "state_contract": {
-            "planner": ["cur_vel_array", "info"],
+            "planner": ["cur_vel_array", "info", "preferred_avoidance_side", "preferred_avoidance_mode", "candidate_search_cursor"],
             "initial_path": [
                 "initial_path", "curve_list", "curve_index", "point_index",
                 "waypoints", "interval", "loop", "arrive_flag",
@@ -307,6 +307,12 @@ def _restore_planner_state(planner: Any, snapshot: dict[str, Any]) -> None:
         planner.cur_vel_array = _as_numpy_tree(planner_state["cur_vel_array"])
     if planner_state.get("info") is not None:
         planner.info = _as_torch_tree(planner_state["info"])
+    if planner_state.get("preferred_avoidance_side") is not None:
+        planner.preferred_avoidance_side = planner_state["preferred_avoidance_side"]
+    if "preferred_avoidance_mode" in planner_state:
+        planner.preferred_avoidance_mode = planner_state["preferred_avoidance_mode"]
+    if planner_state.get("candidate_search_cursor") is not None:
+        planner.candidate_search_cursor = planner_state["candidate_search_cursor"]
 
     ipath_state = snapshot.get("ipath", {})
     for name in (
@@ -1057,8 +1063,15 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
             same_goal = same_terminal_pose(active_goal_pose, next_goal_pose)
             if requested_path_version > path_version:
                 next_path = normalize_path_matrix(_unpack_array(request["path"]))
+                previous_side = getattr(planner, "preferred_avoidance_side", 0) if same_goal else 0
+                previous_cursor = getattr(planner, "candidate_search_cursor", 0) if same_goal else 0
+                previous_mode = getattr(planner, "preferred_avoidance_mode", None) if same_goal else None
                 _set_path(planner, next_path)
                 planner.reset()
+                if hasattr(planner, "preferred_avoidance_side"):
+                    planner.preferred_avoidance_side = previous_side
+                    planner.preferred_avoidance_mode = previous_mode
+                    planner.candidate_search_cursor = previous_cursor
                 planner.pan.current_nom_values = [None, None, None, None]
                 path_version = requested_path_version
             elif not same_goal:
@@ -1134,6 +1147,8 @@ def _worker_main(conn: Any, spec: dict[str, Any]) -> None:
                     "stop": bool(getattr(planner, "info", {}).get("stop", False)),
                     "arrive": bool(getattr(planner, "info", {}).get("arrive", False)),
                     "stop_reason": str(getattr(planner, "info", {}).get("stop_reason", "none")),
+                    "avoidance_side": int(getattr(planner, "info", {}).get("avoidance_side", 0)),
+                    "avoidance_candidates": getattr(planner, "info", {}).get("avoidance_candidates", []),
                 },
                 "semantic": _planner_semantics(planner),
                 "worker_pid": os.getpid(),

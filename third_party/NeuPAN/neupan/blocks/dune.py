@@ -55,6 +55,11 @@ class DUNE(torch.nn.Module):
 
 
         
+    def project_dual_feasible(self, mu):
+        """Apply the dual norm bound used to train the distance model."""
+        dual_norm = torch.linalg.vector_norm(self.G.T @ mu, dim=0, keepdim=True)
+        return mu / torch.clamp(dual_norm, min=1.0)
+
     @time_it('- dune forward')
     def forward(self, point_flow: list[torch.Tensor], R_list: list[torch.Tensor], obs_points_list: list[torch.Tensor]=[]) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
 
@@ -80,7 +85,13 @@ class DUNE(torch.nn.Module):
         # map the point flow to the latent distance features mu
         with torch.no_grad():
             total_mu = self.model(total_points.T).T
-        
+            # DUNE's dual formulation requires ||G.T @ mu|| <= 1. The
+            # network's ReLU guarantees non-negativity but does not enforce
+            # this norm, so project each prediction onto the feasible cone.
+            # This restores the distance scale used by training and prevents
+            # overconfident distances for the configured robot geometry.
+            total_mu = self.project_dual_feasible(total_mu)
+
         for index in range(self.T+1):
             num_points = point_flow[index].shape[1]
             mu = total_mu[:, index*num_points : (index+1)*num_points]

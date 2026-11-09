@@ -4,9 +4,9 @@ step_time: 0.25
 ref_speed: 0.5
 device: 'cpu'
 time_print: false
-# NRMP constrains its distance slack to d_min=0.05. The collision threshold
-# must be strictly below that numerical lower bound or every finite solve is
-# falsely reported as a collision due to floating-point roundoff.
+# DUNE current-pose threshold, separate from NRMP distance variables. When
+# candidate avoidance is enabled, feasible escape trajectories are assessed
+# across the horizon instead of blocking solely on this current-pose value.
 collision_threshold: 0.005
 
 robot:
@@ -32,24 +32,20 @@ ipath:
   arrive_index_threshold: 3
 
 pan:
-  iter_num: 2
+  iter_num: 3
+  candidate_avoidance_enabled: true
   dune_max_num: 200
   nrmp_max_num: 10
   dune_checkpoint: null
   iter_threshold: 0.1
 
 adjust:
-  # Keep the optimized horizon anchored to the SMAC route.  The previous
-  # balance let a clear corridor produce an unnecessary detour, which was
-  # then rejected by the independent path-deviation guard.  Position weights
-  # now dominate the soft clearance preference; yaw remains softer so a real
-  # obstacle can still induce a controlled turn.
-  q_s: [8.0, 10.0, 2.5]
+  # Balance reference tracking against NeuPAN's obstacle cost. Candidate
+  # trajectories can deviate to pass an obstacle and then rejoin the route.
+  q_s: [4.0, 3.0, 1.0]
   # Track longitudinal reference speed more closely; this is not a slew penalty.
   p_u: 1.4
-  # This is a soft reward for extra clearance, not the collision constraint.
-  # Keep physical collision protection unchanged while avoiding a needless
-  # refusal of a corridor that the measured footprint can clear.
+  # Distance objective and bounds are internal NeuPAN optimization terms.
   eta: 3.8
   d_max: 0.15
   d_min: 0.05

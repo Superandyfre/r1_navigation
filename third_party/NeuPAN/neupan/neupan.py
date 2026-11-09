@@ -82,6 +82,10 @@ class neupan(torch.nn.Module):
         self.dune_train_kwargs = train_kwargs
 
         self.pan = PAN(receding, step_time, self.robot, **pan_kwargs)
+        self.candidate_avoidance_enabled = bool(pan_kwargs.get("candidate_avoidance_enabled", False))
+        self.preferred_avoidance_side = 0
+        self.preferred_avoidance_mode = None
+        self.candidate_search_cursor = 0
         self.info = {"stop": False, "arrive": False, "collision": False}
 
     @classmethod
@@ -111,6 +115,9 @@ class neupan(torch.nn.Module):
 
         assert state.shape[0] >= 3
         self.info["stop_reason"] = "none"
+        self.info.pop("avoidance_candidates", None)
+        self.info.pop("avoidance_side", None)
+        self.info.pop("candidate_infeasible", None)
         if self.ipath.check_arrive(state):
             self.info["arrive"] = True
             self.info["stop"] = False
@@ -129,16 +136,26 @@ class neupan(torch.nn.Module):
         measured_velocity_tensor = (
             np_to_tensor(measured_velocity) if measured_velocity is not None else None
         )
-        opt_state_tensor, opt_vel_tensor, opt_distance_tensor = self.pan(
-            *nom_input_tensor, obstacle_points_tensor, point_velocities_tensor,
-            measured_velocity_tensor,
-        )
+        if (self.candidate_avoidance_enabled and self.robot.kinematics == "diff" and
+                points is not None and points.shape[1] and not self.pan.no_obs):
+            opt_state_tensor, opt_vel_tensor, opt_distance_tensor = self._solve_candidates(
+                state, nom_input_np, points, velocities, measured_velocity)
+        else:
+            opt_state_tensor, opt_vel_tensor, opt_distance_tensor = self.pan(
+                *nom_input_tensor, obstacle_points_tensor, point_velocities_tensor,
+                measured_velocity_tensor,
+            )
 
         opt_state_np, opt_vel_np = tensor_to_np(opt_state_tensor), tensor_to_np(
             opt_vel_tensor
         )
 
-        self.cur_vel_array = opt_vel_np
+        # Shift the previous solution with the receding horizon. Reusing its
+        # first knot forever can repeatedly choose a zero first command while
+        # postponing all movement to the second knot.
+        self.cur_vel_array = (np.hstack((opt_vel_np[:, 1:], opt_vel_np[:, -1:]))
+                              if self.candidate_avoidance_enabled and opt_vel_np.shape[1] > 1
+                              else opt_vel_np)
 
         self.info["state_tensor"] = opt_state_tensor
         self.info["vel_tensor"] = opt_vel_tensor
@@ -151,9 +168,16 @@ class neupan(torch.nn.Module):
         ]
         self.info["opt_state_list"] = [state[:, np.newaxis] for state in opt_state_np.T]
 
-        if self.check_stop():
+        candidate_checked = "avoidance_candidates" in self.info
+        candidate_infeasible = self.info.get("candidate_infeasible", False)
+        # The original current-pose threshold blocks escape even when every
+        # point is outside the model and a candidate moves clear. With the
+        # internal candidate planner enabled, use its full-horizon feasibility;
+        # otherwise retain the original threshold semantics.
+        if candidate_infeasible or (self.check_stop() and not candidate_checked):
             self.info["stop"] = True
-            self.info["stop_reason"] = "collision_threshold"
+            self.info["stop_reason"] = ("candidate_infeasible" if candidate_infeasible
+                                        else "collision_threshold")
             return np.zeros((2, 1)), self.info
         self.info["stop"] = False
 
@@ -169,6 +193,245 @@ class neupan(torch.nn.Module):
             self.info['omni_orientation'] = vel[1, 0]
 
         return action, self.info
+
+    def _rollout_controls(self, state, controls, subdivisions=1):
+        states = [np.asarray(state[:3], dtype=np.float64).reshape(3, 1).copy()]
+        for t in range(self.T):
+            for _ in range(subdivisions):
+                states.append(self.ipath.motion_predict_model(
+                    states[-1], controls[:, t:t+1], self.robot.L, self.dt / subdivisions))
+        return np.hstack(states)
+
+    def _candidate_distances(self, states, points, velocities=None, sample_dt=None):
+        """Evaluate DUNE's dual distances along an actual dynamics rollout."""
+        from neupan.configuration import to_device
+        samples = np.asarray(points, dtype=np.float64)
+        times = np.arange(states.shape[1], dtype=np.float64) * (self.dt if sample_dt is None else sample_dt)
+        predicted = samples[None, :, :]
+        if velocities is not None:
+            predicted = predicted + times[:, None, None] * np.asarray(velocities)[None, :, :]
+        dx = predicted[:, 0, :] - states[0, :, None]
+        dy = predicted[:, 1, :] - states[1, :, None]
+        c = np.cos(states[2, :])[:, None]
+        s = np.sin(states[2, :])[:, None]
+        local = np.stack((c * dx + s * dy, -s * dx + c * dy), axis=1)
+        local = to_device(torch.as_tensor(local.transpose(1, 0, 2).reshape(2, -1), dtype=torch.float32))
+        dune = self.pan.dune_layer
+        with torch.no_grad():
+            mu = dune.model(local.T).T
+            mu = dune.project_dual_feasible(mu)
+            distance = dune.cal_objective_distance(mu, local).reshape(states.shape[1], -1)
+        return distance.detach().cpu().numpy()
+
+    def _candidate_cost(self, state, rollout, controls, ref, ref_speed, points, velocities):
+        # Evaluate between optimizer knots too, so small obstacles are not
+        # skipped when the robot translates or rotates over one solver step.
+        subdivisions = 3
+        dense = self._rollout_controls(state, controls, subdivisions=subdivisions)
+        point_tensor = np_to_tensor(points)
+        velocity_tensor = (torch.zeros_like(point_tensor) if velocities is None
+                           else np_to_tensor(velocities))
+        indices = self.pan.select_obstacle_indices(np_to_tensor(dense), point_tensor,
+                    velocity_tensor, self.pan.dune_max_num, self.dt / subdivisions).cpu().numpy()
+        sampled_velocities = None if velocities is None else velocities[:, indices]
+        distances = self._candidate_distances(dense, points[:, indices], sampled_velocities,
+                                               sample_dt=self.dt / subdivisions)
+        k = min(self.pan.nrmp_max_num, distances.shape[1])
+        nearest = np.partition(distances, k - 1, axis=1)[:, :k]
+        d_min = float(self.pan.nrmp_layer.d_min.detach().cpu().item())
+        violation = np.maximum(d_min - nearest, 0.0)
+        obstacle_cost = 0.5 * float(self.pan.nrmp_layer.ro_obs) * np.square(violation).sum()
+        q = self.pan.nrmp_layer.q_s.detach().cpu().numpy().reshape(-1)
+        if q.size == 1:
+            q = np.repeat(q, 3)
+        delta = rollout - ref
+        delta[2] = np.arctan2(np.sin(delta[2]), np.cos(delta[2]))
+        tangent = np.vstack((np.cos(ref[2]), np.sin(ref[2])))
+        along = np.sum(delta[:2] * tangent, axis=0)
+        across = -delta[0] * tangent[1] + delta[1] * tangent[0]
+        tracking = np.square(q[0] * along).sum() + np.square(q[1] * across).sum() + np.square(q[2] * delta[2]).sum()
+        p = float(self.pan.nrmp_layer.p_u.detach().cpu().item())
+        speed = np.square(p * (controls[0] - ref_speed)).sum()
+        return float(tracking + speed + obstacle_cost), float(np.min(distances)), float(obstacle_cost)
+
+    def _avoidance_seed(self, state, original_ref, ref_speed, side, reverse_first=True, retreat_only=False, turn_first=False):
+        # Generate an initial hypothesis inside NeuPAN, not a steering command.
+        # Its scale follows the configured robot width and optimizer distance.
+        extent = float(np.ptp(np.asarray(self.robot.vertices)[1, :]))
+        d_max = float(self.pan.nrmp_layer.d_max.detach().cpu().item())
+        amplitude = extent + d_max
+        phase = np.linspace(0.0, np.pi, self.T + 1)
+        ref = original_ref.copy()
+        ref[0] -= side * amplitude * np.sin(phase) * np.sin(original_ref[2])
+        ref[1] += side * amplitude * np.sin(phase) * np.cos(original_ref[2])
+        ref[2] += side * amplitude * np.sin(phase)
+        ref[2, 0] = original_ref[2, 0]
+        # Gear changes rewrite path metadata; infer goal direction from path
+        # geometry so a temporary reverse does not invert the bypass itself.
+        route = original_ref[:2, -1] - np.asarray(state[:2, 0])
+        heading = np.array([np.cos(state[2, 0]), np.sin(state[2, 0])])
+        alignment = float(np.dot(route, heading))
+        reference_sign = (-1.0 if alignment < 0.0 else 1.0)
+        linear = min(abs(float(self.ref_speed)), float(self.robot.max_speed[0, 0]))
+        angular = float(self.robot.max_speed[1, 0])
+        controls = np.zeros((2, self.T), dtype=np.float64)
+        controls[0, :] = reference_sign * linear * 0.7
+        if reverse_first or retreat_only:
+            controls[0, :max(1, self.T // 5)] = -reference_sign * linear * 0.4
+        controls[1, :] = side * angular
+        candidate_speed = np.full_like(ref_speed, reference_sign * linear)
+        if retreat_only:
+            controls[0, :] = -reference_sign * linear * 0.4
+            controls[1, :] = side * angular * 0.4
+            ref = self._rollout_controls(state, controls)
+            candidate_speed = np.full_like(ref_speed, -reference_sign * linear * 0.4)
+        elif turn_first:
+            controls[0, :max(1, self.T // 3)] = 0.0
+            ref = self._rollout_controls(state, controls)
+            candidate_speed = controls[0].copy()
+        return self._rollout_controls(state, controls), controls, ref, candidate_speed
+
+    def _solve_candidates(self, state, nominal, points, velocities, measured_velocity):
+        from diffcp.cone_program import SolverError
+        nom_s, nom_u, ref_s, ref_us = nominal
+        measured = None if measured_velocity is None else np_to_tensor(measured_velocity)
+        obstacle = np_to_tensor(points)
+        velocity = None if velocities is None else np_to_tensor(velocities)
+        ref_dist = self._candidate_distances(ref_s, points, velocities)
+        d_max = float(self.pan.nrmp_layer.d_max.detach().cpu().item())
+        explore = float(np.min(ref_dist)) < d_max
+        observed_v = 0.0 if measured_velocity is None else float(np.asarray(measured_velocity).reshape(-1)[0])
+        previous_side = self.preferred_avoidance_side
+        reverse_first = not (previous_side in (-1, 1) and observed_v >= 0.0)
+        queue = [(0, None, nom_s, nom_u, ref_s, ref_us)]
+        seen = set()
+
+        def enqueue(side, mode):
+            key = (side, mode)
+            if key not in seen:
+                seen.add(key)
+                seed_s, seed_u, seed_ref, seed_speed = self._avoidance_seed(
+                    state, ref_s, ref_us, side, reverse_first=(mode == "reverse"),
+                    retreat_only=(mode == "retreat"), turn_first=(mode == "turn"))
+                queue.append((side, mode, seed_s, seed_u, seed_ref, seed_speed))
+
+        initial_mode = "reverse" if reverse_first else "forward"
+        if previous_side in (-1, 1) and self.preferred_avoidance_mode is not None:
+            initial_mode = self.preferred_avoidance_mode
+        if explore:
+            sides = ((previous_side,) if previous_side in (-1, 1) else (1, -1))
+            for side in sides:
+                enqueue(side, initial_mode)
+        # Try the other seed direction or bypass side when the first choice
+        # is not feasible. These are optimization initializations only.
+        first_side = previous_side if previous_side in (-1, 1) else 1
+        alternate_mode = "forward" if initial_mode == "reverse" else "reverse"
+        fallbacks = [(first_side, alternate_mode), (first_side, "turn"),
+                     (first_side, "retreat"), (-first_side, initial_mode),
+                     (-first_side, "turn"), (-first_side, alternate_mode),
+                     (-first_side, "retreat")]
+        candidates, last_error = [], None
+        route_delta = ref_s[:2, -1] - ref_s[:2, 0]
+        route_length = float(np.linalg.norm(route_delta))
+        route_direction = (route_delta / route_length if route_length > 1e-9
+                           else np.array([np.cos(state[2, 0]), np.sin(state[2, 0])]))
+        footprint_width = float(np.ptp(np.asarray(self.robot.vertices)[1, :]))
+        useful_progress = min(footprint_width, route_length * 0.25)
+        index = 0
+        fallback_added = False
+        while index < len(queue):
+            side, mode, seed_s, seed_u, seed_ref, seed_speed = queue[index]
+            index += 1
+            try:
+                result = self.pan(np_to_tensor(seed_s), np_to_tensor(seed_u),
+                                  np_to_tensor(seed_ref), np_to_tensor(seed_speed),
+                                  obstacle, velocity, measured)
+                planned, controls, _ = result
+                control_np = tensor_to_np(controls)
+                planned_np = tensor_to_np(planned)
+                if np.isfinite(control_np).all() and np.isfinite(planned_np).all():
+                    rollout = self._rollout_controls(state, control_np)
+                    cost, minimum, obstacle_cost = self._candidate_cost(
+                        state, rollout, control_np, ref_s, ref_us, points, velocities)
+                    if np.isfinite(cost) and np.isfinite(minimum):
+                        linearization_error = float(np.max(np.linalg.norm(
+                            rollout[:2] - planned_np[:2], axis=0)))
+                        # Expose the dynamically rolled trajectory that was
+                        # evaluated, not the linearized intermediate states.
+                        evaluated_result = (np_to_tensor(rollout), controls, result[2])
+                        progress = float(np.dot(rollout[:2, -1] - rollout[:2, 0], route_direction))
+                        step_bound = np.asarray(self.robot.acce_bound).reshape(2)
+                        first_effort = float(np.max(np.abs(control_np[:, 0]) /
+                                                    np.maximum(step_bound, 1e-9)))
+                        candidates.append(dict(side=side, mode=mode, result=evaluated_result,
+                            cost=cost, minimum=minimum, obstacle_cost=obstacle_cost,
+                            progress=progress, first_effort=first_effort,
+                            linearization_error=linearization_error,
+                            dune_min=self.pan.dune_layer.min_distance,
+                            dune_points=self.pan.dune_layer.obstacle_points,
+                            nrmp_points=self.pan.nrmp_layer.obstacle_points,
+                            nom_values=self.pan.current_nom_values))
+            except SolverError as error:
+                last_error = error
+            # A reference may appear clear while its dynamically feasible
+            # rollout approaches an obstacle. Also try alternate seeds after
+            # a failed nominal solve instead of immediately aborting.
+            if not explore and index == len(queue):
+                explore = (not candidates or candidates[-1]["minimum"] < 0.0)
+            # A trajectory that merely waits in front of the obstacle is not
+            # a useful bypass. Try alternative seeds if every feasible candidate
+            # makes little progress along the original route horizon.
+            viable_progress = any(c["minimum"] >= 0.0 and c["progress"] >= useful_progress
+                                  and c["first_effort"] > 0.05 for c in candidates)
+            if explore and index == len(queue) and not viable_progress and not fallback_added:
+                # Keep planning within the command freshness window. Search
+                # one additional hypothesis per cycle and rotate alternatives
+                # across cycles rather than blocking on every possible seed.
+                for offset in range(len(fallbacks)):
+                    fallback_side, fallback_mode = fallbacks[(self.candidate_search_cursor + offset) % len(fallbacks)]
+                    if (fallback_side, fallback_mode) not in seen:
+                        enqueue(fallback_side, fallback_mode)
+                        fallback_added = True
+                        break
+        if not candidates:
+            if last_error is not None:
+                raise last_error
+            raise RuntimeError("NeuPAN candidate optimization produced no finite result")
+        nonoverlap = [candidate for candidate in candidates if candidate["minimum"] >= 0.0]
+        best_progress = max((candidate["progress"] for candidate in nonoverlap), default=0.0)
+        progress_goal = max(useful_progress, best_progress * 0.8)
+        progressing = [candidate for candidate in nonoverlap
+                       if candidate["progress"] >= progress_goal and candidate["first_effort"] > 0.05] if explore else []
+        moving = [candidate for candidate in nonoverlap if candidate["first_effort"] > 0.05]
+        pool = progressing or moving or nonoverlap or candidates
+        best = min(pool, key=lambda candidate: candidate["cost"])
+        previous = next((candidate for candidate in pool
+                         if candidate["side"] == previous_side and candidate["side"] != 0), None)
+        if previous is not None and previous["cost"] <= best["cost"] + abs(best["cost"]) * 0.1:
+            best = previous
+        if best["side"]:
+            self.preferred_avoidance_side = best["side"]
+            self.preferred_avoidance_mode = best["mode"]
+        elif not explore:
+            self.preferred_avoidance_side = 0
+            self.preferred_avoidance_mode = None
+        self.info["candidate_infeasible"] = not bool(nonoverlap)
+        if explore and not progressing:
+            self.candidate_search_cursor += 1
+        else:
+            self.candidate_search_cursor = 0
+        self.pan.dune_layer.min_distance = best["dune_min"]
+        self.pan.dune_layer.obstacle_points = best["dune_points"]
+        self.pan.nrmp_layer.obstacle_points = best["nrmp_points"]
+        self.pan.current_nom_values = best["nom_values"]
+        self.info["avoidance_candidates"] = [
+            dict(side=c["side"], seed_mode=c["mode"], cost=c["cost"],
+                 min_distance=c["minimum"], obstacle_cost=c["obstacle_cost"],
+                 progress=c["progress"], first_effort=c["first_effort"],
+                 linearization_error=c["linearization_error"], selected=c is best)
+            for c in candidates]
+        self.info["avoidance_side"] = best["side"]
+        return best["result"]
 
     def check_stop(self):
         return self.min_distance < self.collision_threshold
@@ -296,6 +559,9 @@ class neupan(torch.nn.Module):
         self.info["stop"] = False
         self.info["arrive"] = False
         self.cur_vel_array = np.zeros_like(self.cur_vel_array)
+        self.preferred_avoidance_side = 0
+        self.preferred_avoidance_mode = None
+        self.candidate_search_cursor = 0
 
     def set_initial_path(self, path):
 

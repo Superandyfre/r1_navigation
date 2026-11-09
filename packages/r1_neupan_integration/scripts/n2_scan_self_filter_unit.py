@@ -7,6 +7,7 @@ from r1_neupan_integration.scan_self_filter import (
     _lateral_support_in_longitudinal_strip,
     inflate_obstacles_for_dynamic_footprint,
     inflate_obstacles_for_mesh_components,
+    combine_environment_and_projection,
     mesh_component_overlap_mask,
     mesh_components_from_flat,
     outside_polygon_footprint,
@@ -91,6 +92,11 @@ def main() -> None:
           "a centreline obstacle must not inherit side-arm clearance")
     check(component_displacement[2] > 0.40 and component_adjusted[1, 2] < mesh_points[1, 2],
           "an obstacle beside a real arm projection must retain conservative lateral clearance")
+    combined = combine_environment_and_projection(mesh_points, component_adjusted)
+    check(np.array_equal(combined[:, :mesh_points.shape[1]], mesh_points),
+          "arm projection must preserve every real environment return")
+    check(combined.shape[1] > mesh_points.shape[1],
+          "changed arm projections must be retained alongside actual returns")
     # A component that widens only distally must not pull a base-side wall
     # into the path, but its distal cross section must still be expanded.
     tapered_components = mesh_components_from_flat([

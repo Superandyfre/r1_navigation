@@ -23,7 +23,6 @@ from neupan.blocks import NRMP, DUNE
 from math import inf
 from typing import Optional
 from neupan.configuration import to_device, tensor_to_np
-from neupan.util import downsample_decimation
 
 class PAN(torch.nn.Module):
     """
@@ -105,6 +104,32 @@ class PAN(torch.nn.Module):
         ]  # nom_s, nom_u, nom_lam, nom_mu
 
         self.printed = False
+        self.last_sample_indices = None
+
+    @staticmethod
+    def select_obstacle_indices(nom_s, obs_points, point_velocities, max_num, dt):
+        """Keep high-impact points near the nominal horizon and spatial coverage.
+
+        The same indices are used for obstacle velocities. Ranking is based on
+        minimum predicted distance to the trajectory, without a fixed distance
+        cutoff; a quarter of the budget keeps deterministic scan coverage.
+        """
+        count = obs_points.shape[1]
+        if count <= max_num:
+            return torch.arange(count, device=obs_points.device)
+        coverage_count = max(1, max_num // 4)
+        coverage = torch.linspace(0, count - 1, coverage_count,
+                                  device=obs_points.device).long().unique()
+        # Account for point motion at each horizon state before ranking.
+        times = torch.arange(nom_s.shape[1], device=obs_points.device,
+                             dtype=obs_points.dtype) * dt
+        predicted = obs_points.unsqueeze(0) + times[:, None, None] * point_velocities.unsqueeze(0)
+        delta = predicted - nom_s[:2, :].T.unsqueeze(2)
+        risk = torch.sum(delta * delta, dim=1).amin(dim=0)
+        risk = risk.clone()
+        risk[coverage] = float("inf")
+        important = torch.argsort(risk, stable=True)[:max_num - coverage.numel()]
+        return torch.cat((coverage, important)).sort().values
 
     def forward(
         self, nom_s: torch.Tensor, nom_u: torch.Tensor, ref_s: torch.Tensor, ref_us: torch.Tensor,
@@ -132,6 +157,8 @@ class PAN(torch.nn.Module):
             self.dune_layer.min_distance = inf
             self.dune_layer.obstacle_points = None
 
+        # Convergence history belongs to this solve, not a previous scan.
+        self.current_nom_values = [None, None, None, None]
         for i in range(self.iter_num):
 
             if has_obstacles and not self.no_obs:
@@ -176,10 +203,11 @@ class PAN(torch.nn.Module):
         if point_velocities is None:
             point_velocities = torch.zeros_like(obs_points)
 
-        if obs_points.shape[1] > self.dune_max_num:
-            self.print_once(f"down sample the obs points from {obs_points.shape[1]} to {self.dune_max_num}") 
-            obs_points = downsample_decimation(obs_points, self.dune_max_num)
-            point_velocities = downsample_decimation(point_velocities, self.dune_max_num)
+        indices = self.select_obstacle_indices(
+            nom_s, obs_points, point_velocities, self.dune_max_num, self.dt)
+        self.last_sample_indices = indices.detach().cpu()
+        obs_points = obs_points[:, indices]
+        point_velocities = point_velocities[:, indices]
 
 
         obs_points_list = []

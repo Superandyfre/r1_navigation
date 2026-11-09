@@ -236,6 +236,20 @@ def _lateral_support_in_longitudinal_strip(
     return positive, negative, np.isfinite(positive) | np.isfinite(negative)
 
 
+def combine_environment_and_projection(environment_points, projected_points):
+    """Keep actual sensor returns alongside displaced arm-geometry points.
+
+    A displaced point encodes arm clearance for one path orientation; it is
+    not a replacement for the original return as the chassis turns.
+    """
+    raw = np.asarray(environment_points, dtype=np.float64)
+    projected = np.asarray(projected_points, dtype=np.float64)
+    if raw.ndim != 2 or raw.shape[0] != 2 or raw.shape != projected.shape:
+        raise ValueError("environment and projected points must have identical 2xN shape")
+    changed = np.any(projected != raw, axis=0)
+    return np.hstack((raw, projected[:, changed]))
+
+
 def inflate_obstacles_for_mesh_components(
     points: np.ndarray,
     components: list[np.ndarray],

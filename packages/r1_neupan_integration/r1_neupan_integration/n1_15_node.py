@@ -43,6 +43,7 @@ from r1_neupan_integration.scan_self_filter import (
     outside_rectangular_footprint,
     inflate_obstacles_for_dynamic_footprint,
     inflate_obstacles_for_mesh_components,
+    combine_environment_and_projection,
     mesh_component_overlap_mask,
     mesh_components_from_flat,
     polygon_vertices_from_flat_xy,
@@ -547,6 +548,7 @@ class N115Node(Node):
         filter_shape = "no_valid_points"
         filter_input_count = 0
         retained_count = 0
+        planner_input_count = 0
         nearest_distance = None
         nearest_xy = None
         nearest_environment_distance = None
@@ -673,6 +675,10 @@ class N115Node(Node):
                 else:
                     nearest_distance = None
                     nearest_xy = None
+                # Projection is useful for arm clearance but may move a real
+                # return outside the chassis after a turn. Retain both.
+                local_points = combine_environment_and_projection(raw_local_points, local_points)
+                planner_input_count = int(local_points.shape[1])
                 # ``state`` was obtained from the current map->base_link
                 # transform before this scan callback. A second lookup here
                 # can be delayed for seconds under a busy TF executor, which
@@ -708,6 +714,7 @@ class N115Node(Node):
                 "self_rejected_points": int(filter_input_count - retained_count)
                     if valid_ranges.size else 0,
                 "retained_points": retained_count if valid_ranges.size else 0,
+                "planner_input_points": planner_input_count,
                 "nearest_retained_base_link": nearest_xy if valid_ranges.size else None,
                 "nearest_retained_distance_m": nearest_distance if valid_ranges.size else None,
                 "nearest_environment_base_link": nearest_environment_xy if valid_ranges.size else None,
