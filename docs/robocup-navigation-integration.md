@@ -117,7 +117,7 @@ if __name__ == '__main__':
 
 ## 五、代码与启动脚本
 
-以下路径均位于机器人，不是开发电脑的本地路径：
+以下路径均为机器人本地路径，命令均在机器人本地终端执行：
 
 | 位置 | 用途 |
 | --- | --- |
@@ -134,7 +134,6 @@ if __name__ == '__main__':
 推荐通过操作界面启动。以下命令是在机器人终端直接启动**固定发布包**的方法，会启动真实导航进程；该方式绕过按钮入口的版本指针和清单校验，不能替代日常入口。启动前确认没有冲突进程：
 
 ```bash
-ssh rpp@192.168.31.121
 bash /home/rpp/neupan_failstop_ws/robustness/bundle-motion-c0913d8/tools/starterbutton/start_navigation_high_sampling_neupan.sh
 ```
 
@@ -143,7 +142,6 @@ bash /home/rpp/neupan_failstop_ws/robustness/bundle-motion-c0913d8/tools/starter
 查看源码和发布包参数：
 
 ```bash
-ssh rpp@192.168.31.121
 cd /home/rpp/r1_navigation
 git status -sb
 git log -1 --oneline
