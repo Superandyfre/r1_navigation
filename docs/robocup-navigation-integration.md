@@ -21,7 +21,7 @@
 3. 定位重启后按现场流程设置初始位姿，在地图中核对机器人位置和朝向。进程启动成功不代表定位已经可用。
 4. 确认 `/navigate_to_pose` action 可用，再下发经过现场确认的目标。
 
-机器人终端中可执行以下只读检查：
+可执行以下只读检查：
 
 ```bash
 ros2 action list -t
@@ -57,7 +57,7 @@ ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose \
 
 ### Python 调用示例
 
-将以下代码保存为 `send_nav_goal.py`，在已配置机器人 ROS 2 环境的终端执行 `python3 send_nav_goal.py`。代码会发送真实目标，运行前应先修改坐标。比赛程序还应加入符合任务需求的反馈、取消和超时处理。
+将以下代码保存为 `send_nav_goal.py`，在已配置 ROS 2 环境的终端执行 `python3 send_nav_goal.py`。代码会发送真实目标，运行前应先修改坐标。比赛程序还应加入符合任务需求的反馈、取消和超时处理。
 
 ```python
 import math
@@ -117,7 +117,7 @@ if __name__ == '__main__':
 
 ## 五、代码与启动脚本
 
-以下路径均为机器人本地路径，命令均在机器人本地终端执行：
+主要代码和脚本位置：
 
 | 位置 | 用途 |
 | --- | --- |
@@ -131,7 +131,7 @@ if __name__ == '__main__':
 | 发布包 `third_party/NeuPAN/neupan/` | 当前发布版使用的 NeuPAN 代码。源码仓库下同名目录可能属于不同版本。 |
 | 源码 `packages/navigation_neupan_bridge/src/r1_arm_self_filter_3d_shadow.cpp` | 3D 机械臂回波过滤实现；发布包运行对应的已编译程序。 |
 
-推荐通过操作界面启动。以下命令是在机器人终端直接启动**固定发布包**的方法，会启动真实导航进程；该方式绕过按钮入口的版本指针和清单校验，不能替代日常入口。启动前确认没有冲突进程：
+推荐通过操作界面启动。以下命令用于直接启动**固定发布包**的方法，会启动真实导航进程；该方式绕过按钮入口的版本指针和清单校验，不能替代日常入口。启动前确认没有冲突进程：
 
 ```bash
 bash /home/rpp/neupan_failstop_ws/robustness/bundle-motion-c0913d8/tools/starterbutton/start_navigation_high_sampling_neupan.sh
